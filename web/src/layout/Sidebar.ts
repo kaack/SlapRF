@@ -33,6 +33,7 @@ export class Sidebar extends Component {
   private moreDrawerOpen = false;
   private moreDrawerClosing = false;
   private moreDrawerCloseTimer: ReturnType<typeof setTimeout> | null = null;
+  private moreDrawerPendingAction: (() => void) | null = null;
   private moreDrawerDragStartY: number | null = null;
 
   constructor(el: HTMLElement, store: AppStore, router: Router) {
@@ -182,7 +183,11 @@ export class Sidebar extends Component {
       }
       if (target?.closest("[data-demo-disclaimer]")) {
         e.preventDefault();
-        openDatasourceSettings("inspect");
+        if (this.moreDrawerOpen || this.moreDrawerClosing) {
+          this.closeMoreDrawer(false, () => openDatasourceSettings("inspect"));
+        } else {
+          openDatasourceSettings("inspect");
+        }
         return;
       }
       const navLink = target?.closest<HTMLAnchorElement>("a[data-route]");
@@ -192,7 +197,19 @@ export class Sidebar extends Component {
       if (isServerDisconnectedLockout() && routeId !== "setup") {
         return;
       }
-      this.closeMoreDrawer(true);
+      if (this.moreDrawerOpen || this.moreDrawerClosing) {
+        this.closeMoreDrawer(false, () => {
+          if (routeId) {
+            this.router.navigateSection(routeId);
+          }
+        });
+        if (routeId) {
+          this.el
+            .querySelectorAll<HTMLElement>(".mobile-more-tile[data-route]")
+            .forEach((tile) => tile.classList.toggle("is-active", tile.dataset.route === routeId));
+        }
+        return;
+      }
       if (routeId) {
         this.router.navigateSection(routeId);
       }
@@ -217,7 +234,9 @@ export class Sidebar extends Component {
     this.onDispose(subscribeAppTheme(() => this.syncThemeToggler()));
     this.onDispose(
       router.subscribe((route) => {
-        this.closeMoreDrawer(true);
+        if (this.moreDrawerOpen && !this.moreDrawerClosing) {
+          this.closeMoreDrawer(false);
+        }
         this.highlight(route);
         this.syncRememberedHrefs();
         this.syncMobileSubPageState();
@@ -226,19 +245,25 @@ export class Sidebar extends Component {
     this.onDispose(onRememberedRouteHashChange(() => this.syncRememberedHrefs()));
     this.onDispose(
       onRacesTopBarContextChange(() => {
-        this.closeMoreDrawer(true);
+        if (this.moreDrawerOpen && !this.moreDrawerClosing) {
+          this.closeMoreDrawer(false);
+        }
         this.syncMobileSubPageState();
       })
     );
     this.onDispose(
       onPracticeTopBarContextChange(() => {
-        this.closeMoreDrawer(true);
+        if (this.moreDrawerOpen && !this.moreDrawerClosing) {
+          this.closeMoreDrawer(false);
+        }
         this.syncMobileSubPageState();
       })
     );
     this.onDispose(
       onAnalyticsTopBarContextChange(() => {
-        this.closeMoreDrawer(true);
+        if (this.moreDrawerOpen && !this.moreDrawerClosing) {
+          this.closeMoreDrawer(false);
+        }
         this.syncMobileSubPageState();
       })
     );
@@ -266,6 +291,7 @@ export class Sidebar extends Component {
       clearTimeout(this.moreDrawerCloseTimer);
       this.moreDrawerCloseTimer = null;
     }
+    this.moreDrawerPendingAction = null;
     this.moreDrawerClosing = false;
     this.moreDrawerOpen = true;
     const overlay = this.el.querySelector<HTMLElement>("[data-mobile-more-overlay]");
@@ -290,8 +316,16 @@ export class Sidebar extends Component {
     this.highlight(this.router.route);
   }
 
-  private closeMoreDrawer(immediate = false): void {
-    if (!this.moreDrawerOpen && !this.moreDrawerClosing) return;
+  private closeMoreDrawer(immediate = false, onClosed?: () => void): void {
+    if (onClosed) {
+      this.moreDrawerPendingAction = onClosed;
+    }
+    if (!this.moreDrawerOpen && !this.moreDrawerClosing) {
+      const pending = this.moreDrawerPendingAction;
+      this.moreDrawerPendingAction = null;
+      pending?.();
+      return;
+    }
     const overlay = this.el.querySelector<HTMLElement>("[data-mobile-more-overlay]");
     const moreBtn = this.el.querySelector<HTMLButtonElement>('[data-action="toggle-mobile-more"]');
     moreBtn?.setAttribute("aria-expanded", "false");
@@ -307,6 +341,9 @@ export class Sidebar extends Component {
         overlay.classList.remove("is-closing");
       }
       this.highlight(this.router.route);
+      const pending = this.moreDrawerPendingAction;
+      this.moreDrawerPendingAction = null;
+      pending?.();
       return;
     }
     if (this.moreDrawerClosing) return;
@@ -322,6 +359,9 @@ export class Sidebar extends Component {
       this.moreDrawerClosing = false;
       overlay.hidden = true;
       overlay.classList.remove("is-closing");
+      const pending = this.moreDrawerPendingAction;
+      this.moreDrawerPendingAction = null;
+      pending?.();
     }, 305);
   }
 
