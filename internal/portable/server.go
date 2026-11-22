@@ -537,8 +537,8 @@ func (s *Server) RegisterAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/slaprf/usb:command", s.handleUSBCommand)
 	mux.HandleFunc("GET /v1/slaprf/usb/survey", s.handleUSBSurvey)
 	mux.HandleFunc("PUT /v1/slaprf/usb/survey", s.handleUSBSurvey)
-	mux.HandleFunc("GET /v1/sim/hub-usb", s.handleSimHubUSB)
-	mux.HandleFunc("PUT /v1/sim/hub-usb", s.handleSimHubUSB)
+	mux.HandleFunc("GET /v1/sim/slaprf/hub-usb", s.handleSimHubUSB)
+	mux.HandleFunc("PUT /v1/sim/slaprf/hub-usb", s.handleSimHubUSB)
 	mux.HandleFunc("GET /v1/ws/slaprf/usb", s.handleUSBWS)
 	mux.HandleFunc("GET /v1/ws/slaprf/usb-raw", s.handleUSBRawWS)
 

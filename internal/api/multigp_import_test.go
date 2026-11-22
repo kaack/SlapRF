@@ -33,7 +33,7 @@ func TestMultiGPImportAndLapRFSimE2E(t *testing.T) {
 
 	// 2. Fetch race #501 from simulated MultiGP WebService
 	recView := httptest.NewRecorder()
-	handler.ServeHTTP(recView, httptest.NewRequest(http.MethodPost, "/v1/sim/mgp/race/view?id=501", bytes.NewBufferString(`{"apiKey":"MGP-SIM-BAYAREA-2026"}`)))
+	handler.ServeHTTP(recView, httptest.NewRequest(http.MethodPost, "/v1/sim/multigp/race/view?id=501", bytes.NewBufferString(`{"apiKey":"MGP-SIM-BAYAREA-2026"}`)))
 	if recView.Code != http.StatusOK {
 		t.Fatalf("sim mgp race/view failed: %d %s", recView.Code, recView.Body.String())
 	}
@@ -121,7 +121,7 @@ func TestMultiGPImportAndLapRFSimE2E(t *testing.T) {
 			"data":   op.Data,
 		})
 		recAssign := httptest.NewRecorder()
-		url := fmt.Sprintf("/v1/sim/mgp/race/assignSlot?id=%d&cycle=%d&heat=%d&slot=%d", plan.MGPRaceID, op.Cycle, op.Heat, op.Slot)
+		url := fmt.Sprintf("/v1/sim/multigp/race/assignSlot?id=%d&cycle=%d&heat=%d&slot=%d", plan.MGPRaceID, op.Cycle, op.Heat, op.Slot)
 		handler.ServeHTTP(recAssign, httptest.NewRequest(http.MethodPost, url, bytes.NewReader(assignBody)))
 		if recAssign.Code != http.StatusOK {
 			t.Fatalf("assignSlot failed: %d %s", recAssign.Code, recAssign.Body.String())

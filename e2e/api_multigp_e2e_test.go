@@ -17,27 +17,27 @@ func TestAPI_MultiGPSimAdminAndWebServiceProtocol(t *testing.T) {
 	h := NewHarness(t)
 	h.BootClean("#/sim")
 
-	// 1. GET /v1/sim/mgp-admin returns default Bay Area FPV chapter & 3 sample races (#501, #502, #503).
+	// 1. GET /v1/sim/multigp/admin returns default Bay Area FPV chapter & 3 sample races (#501, #502, #503).
 	var admin multigp.SimPersistedState
-	h.APIGet("/v1/sim/mgp-admin", &admin)
+	h.APIGet("/v1/sim/multigp/admin", &admin)
 	if admin.ChapterName != "Bay Area FPV" || admin.APIKey != multigp.DefaultSimAPIKey || len(admin.Races) != 3 {
-		t.Fatalf("unexpected default /v1/sim/mgp-admin state: %+v", admin)
+		t.Fatalf("unexpected default /v1/sim/multigp/admin state: %+v", admin)
 	}
 
 	// 2. Test HTTP 401 Unauthorized on wrong API key & HTTP 404 Not Found on missing race/endpoint.
-	h.APIExpectStatus("POST", "/v1/sim/mgp/chapter/findChapterFromApiKey", map[string]any{
+	h.APIExpectStatus("POST", "/v1/sim/multigp/chapter/findChapterFromApiKey", map[string]any{
 		"apiKey": "WRONG-KEY",
 	}, 401)
-	h.APIExpectStatus("POST", "/v1/sim/mgp/race/view?id=999999", map[string]any{
+	h.APIExpectStatus("POST", "/v1/sim/multigp/race/view?id=999999", map[string]any{
 		"apiKey": admin.APIKey,
 	}, 404)
-	h.APIExpectStatus("POST", "/v1/sim/mgp/unknown/endpoint", map[string]any{
+	h.APIExpectStatus("POST", "/v1/sim/multigp/unknown/endpoint", map[string]any{
 		"apiKey": admin.APIKey,
 	}, 404)
 
 	// 3. Verify `findChapterFromApiKey`, `race/listForChapter`, and `race/view?id=501`.
 	var chap multigp.FindChapterResponse
-	h.APIPost("/v1/sim/mgp/chapter/findChapterFromApiKey", map[string]any{
+	h.APIPost("/v1/sim/multigp/chapter/findChapterFromApiKey", map[string]any{
 		"apiKey": admin.APIKey,
 	}, &chap)
 	if !chap.Status || chap.ChapterID != 1042 || chap.ChapterName != "Bay Area FPV" {
@@ -45,15 +45,15 @@ func TestAPI_MultiGPSimAdminAndWebServiceProtocol(t *testing.T) {
 	}
 
 	var list multigp.ListForChapterResponse
-	h.APIPost("/v1/sim/mgp/race/listForChapter", map[string]any{
+	h.APIPost("/v1/sim/multigp/race/listForChapter", map[string]any{
 		"apiKey": admin.APIKey,
 	}, &list)
 	if !list.Status || len(list.Data) != 3 {
 		t.Fatalf("expected 3 MultiGP chapter races, got %+v", list)
 	}
 
-	// 4. Exercise POST /v1/sim/mgp-admin:action mutations: rename chapter, add race, add pool pilot, add heat, regen key, reset.
-	h.APIPost("/v1/sim/mgp-admin:action", map[string]any{
+	// 4. Exercise POST /v1/sim/multigp/admin:action mutations: rename chapter, add race, add pool pilot, add heat, regen key, reset.
+	h.APIPost("/v1/sim/multigp/admin:action", map[string]any{
 		"action":      "set-chapter",
 		"chapterName": "Silicon Valley FPV",
 	}, &admin)
@@ -61,7 +61,7 @@ func TestAPI_MultiGPSimAdminAndWebServiceProtocol(t *testing.T) {
 		t.Fatalf("expected chapter renamed to Silicon Valley FPV, got %q", admin.ChapterName)
 	}
 
-	h.APIPost("/v1/sim/mgp-admin:action", map[string]any{
+	h.APIPost("/v1/sim/multigp/admin:action", map[string]any{
 		"action":        "add-race",
 		"name":          "API Created Spec Shootout",
 		"isZippyQ":      false,
@@ -73,17 +73,17 @@ func TestAPI_MultiGPSimAdminAndWebServiceProtocol(t *testing.T) {
 	}
 	newRaceID := admin.Races[len(admin.Races)-1].ID
 
-	h.APIPost("/v1/sim/mgp-admin:action", map[string]any{
+	h.APIPost("/v1/sim/multigp/admin:action", map[string]any{
 		"action": "add-pool-pilot",
 		"raceId": newRaceID,
 		"name":   "AeroBlade",
 	}, &admin)
-	h.APIPost("/v1/sim/mgp-admin:action", map[string]any{
+	h.APIPost("/v1/sim/multigp/admin:action", map[string]any{
 		"action":      "add-heat",
 		"raceId":      newRaceID,
 		"roundNumber": 1,
 	}, &admin)
-	h.APIPost("/v1/sim/mgp-admin:action", map[string]any{
+	h.APIPost("/v1/sim/multigp/admin:action", map[string]any{
 		"action": "regen-key",
 	}, &admin)
 	if admin.APIKey == multigp.DefaultSimAPIKey || admin.APIKey == "" {
@@ -91,10 +91,10 @@ func TestAPI_MultiGPSimAdminAndWebServiceProtocol(t *testing.T) {
 	}
 
 	// Verify old default key now returns 401 while new regenerated key succeeds!
-	h.APIExpectStatus("POST", "/v1/sim/mgp/chapter/findChapterFromApiKey", map[string]any{
+	h.APIExpectStatus("POST", "/v1/sim/multigp/chapter/findChapterFromApiKey", map[string]any{
 		"apiKey": multigp.DefaultSimAPIKey,
 	}, 401)
-	h.APIPost("/v1/sim/mgp/chapter/findChapterFromApiKey", map[string]any{
+	h.APIPost("/v1/sim/multigp/chapter/findChapterFromApiKey", map[string]any{
 		"apiKey": admin.APIKey,
 	}, &chap)
 	if chap.ChapterName != "Silicon Valley FPV" {
@@ -102,9 +102,9 @@ func TestAPI_MultiGPSimAdminAndWebServiceProtocol(t *testing.T) {
 	}
 
 	// Reset MultiGP sim backend to clean defaults.
-	h.APIPost("/v1/sim/mgp-admin:action", map[string]any{"action": "reset"}, &admin)
+	h.APIPost("/v1/sim/multigp/admin:action", map[string]any{"action": "reset"}, &admin)
 	if admin.APIKey != multigp.DefaultSimAPIKey || len(admin.Races) != 3 {
-		t.Fatalf("expected /v1/sim/mgp-admin:action reset to restore defaults, got %+v", admin)
+		t.Fatalf("expected /v1/sim/multigp/admin:action reset to restore defaults, got %+v", admin)
 	}
 
 	h.MilestoneScreenshot("api-multigp-admin-and-webservice")
@@ -115,14 +115,14 @@ func TestAPI_MultiGPE2E_ControlledScheduleImportScoreSyncPlanCaptureAndMarkSynce
 	h := NewHarness(t)
 	h.BootClean("#/races")
 
-	// Trim race #501 down to 1 round in /v1/sim/mgp-admin:action so our E2E confirms every heat in the race cleanly!
+	// Trim race #501 down to 1 round in /v1/sim/multigp/admin:action so our E2E confirms every heat in the race cleanly!
 	var admin multigp.SimPersistedState
-	h.APIPost("/v1/sim/mgp-admin:action", map[string]any{"action": "delete-round", "raceId": 501, "roundNumber": 3}, &admin)
-	h.APIPost("/v1/sim/mgp-admin:action", map[string]any{"action": "delete-round", "raceId": 501, "roundNumber": 2}, &admin)
+	h.APIPost("/v1/sim/multigp/admin:action", map[string]any{"action": "delete-round", "raceId": 501, "roundNumber": 3}, &admin)
+	h.APIPost("/v1/sim/multigp/admin:action", map[string]any{"action": "delete-round", "raceId": 501, "roundNumber": 2}, &admin)
 
 	// 1. Fetch `race/view?id=501` via MultiGP WebService API.
 	var view multigp.RaceViewResponse
-	h.APIPost("/v1/sim/mgp/race/view?id=501", map[string]any{
+	h.APIPost("/v1/sim/multigp/race/view?id=501", map[string]any{
 		"apiKey": multigp.DefaultSimAPIKey,
 	}, &view)
 	if !view.Status || view.Data.ID != 501 || len(view.Data.Schedule.Rounds) != 1 {
@@ -164,10 +164,10 @@ func TestAPI_MultiGPE2E_ControlledScheduleImportScoreSyncPlanCaptureAndMarkSynce
 			len(plan.Operations), len(plan.OverallResults))
 	}
 
-	// 5. Push each `assignSlot` op and `captureOverallRaceResult` to `/v1/sim/mgp/*` via `window.slaprfCurl`!
+	// 5. Push each `assignSlot` op and `captureOverallRaceResult` to `/v1/sim/multigp/*` via `window.slaprfCurl`!
 	syncedHeatSet := make(map[string]bool)
 	for _, op := range plan.Operations {
-		url := fmt.Sprintf("/v1/sim/mgp/race/assignSlot?id=%d&cycle=%d&heat=%d&slot=%d",
+		url := fmt.Sprintf("/v1/sim/multigp/race/assignSlot?id=%d&cycle=%d&heat=%d&slot=%d",
 			plan.MGPRaceID, op.Cycle, op.Heat, op.Slot)
 		var slotRes multigp.GenericStatusResponse
 		h.APIPost(url, map[string]any{
@@ -181,7 +181,7 @@ func TestAPI_MultiGPE2E_ControlledScheduleImportScoreSyncPlanCaptureAndMarkSynce
 	}
 
 	var capRes multigp.GenericStatusResponse
-	h.APIPost(fmt.Sprintf("/v1/sim/mgp/race/captureOverallRaceResult?id=%d", plan.MGPRaceID), map[string]any{
+	h.APIPost(fmt.Sprintf("/v1/sim/multigp/race/captureOverallRaceResult?id=%d", plan.MGPRaceID), map[string]any{
 		"apiKey": multigp.DefaultSimAPIKey,
 		"data": map[string]any{
 			"raceId":         plan.MGPRaceID,
@@ -209,7 +209,7 @@ func TestAPI_MultiGPE2E_ControlledScheduleImportScoreSyncPlanCaptureAndMarkSynce
 	}
 
 	// Verify simulated MultiGP backend recorded the uploaded lap times & overall podium!
-	h.APIPost("/v1/sim/mgp/race/view?id=501", map[string]any{
+	h.APIPost("/v1/sim/multigp/race/view?id=501", map[string]any{
 		"apiKey": multigp.DefaultSimAPIKey,
 	}, &view)
 	if view.Data.OverallSyncedAt == "" || len(view.Data.OverallResults) != len(plan.OverallResults) {
@@ -230,14 +230,14 @@ func TestAPI_MultiGPE2E_ZippyQDynamicRoundsAppendAndSync(t *testing.T) {
 
 	// Pause background auto-ZippyQ on #502 so round counts are 100% deterministic during our test assertions.
 	var admin multigp.SimPersistedState
-	h.APIPost("/v1/sim/mgp-admin:action", map[string]any{
+	h.APIPost("/v1/sim/multigp/admin:action", map[string]any{
 		"action":  "set-auto-zippyq",
 		"raceId":  502,
 		"enabled": false,
 	}, &admin)
 
 	var view multigp.RaceViewResponse
-	h.APIPost("/v1/sim/mgp/race/view?id=502", map[string]any{
+	h.APIPost("/v1/sim/multigp/race/view?id=502", map[string]any{
 		"apiKey": multigp.DefaultSimAPIKey,
 	}, &view)
 	initialRounds := len(view.Data.Schedule.Rounds)
@@ -261,13 +261,13 @@ func TestAPI_MultiGPE2E_ZippyQDynamicRoundsAppendAndSync(t *testing.T) {
 	_, _ = h.Page.Evaluate(`(hash) => { window.location.hash = hash; }`, fmt.Sprintf("#/races/%s/control", slug))
 
 	// 2. Simulate a new walk-up ZippyQ round queued in MultiGP (`queue-zippyq`) and fetch via `race/getAdditionalRounds`!
-	h.APIPost("/v1/sim/mgp-admin:action", map[string]any{
+	h.APIPost("/v1/sim/multigp/admin:action", map[string]any{
 		"action": "queue-zippyq",
 		"raceId": 502,
 	}, &admin)
 
 	var addRounds multigp.AdditionalRoundsResponse
-	h.APIPost(fmt.Sprintf("/v1/sim/mgp/race/getAdditionalRounds?id=502&cycle=%d", initialRounds+1), map[string]any{
+	h.APIPost(fmt.Sprintf("/v1/sim/multigp/race/getAdditionalRounds?id=502&cycle=%d", initialRounds+1), map[string]any{
 		"apiKey": multigp.DefaultSimAPIKey,
 	}, &addRounds)
 	if !addRounds.Status || len(addRounds.Data.Rounds) != 1 {

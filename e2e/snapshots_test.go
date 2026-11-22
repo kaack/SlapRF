@@ -900,7 +900,7 @@ func buildSnapshotMultiGPSeeded() (SimSnapshotBundle, error) {
 	recView := httptest.NewRecorder()
 	handler.ServeHTTP(recView, httptest.NewRequest(
 		http.MethodPost,
-		"/v1/sim/mgp/race/view?id=501",
+		"/v1/sim/multigp/race/view?id=501",
 		bytes.NewBufferString(fmt.Sprintf(`{"apiKey":%q}`, multigp.DefaultSimAPIKey)),
 	))
 	if recView.Code != http.StatusOK {

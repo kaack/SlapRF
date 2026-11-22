@@ -27,7 +27,7 @@ go run .agents/skills/doc-screenshots/scripts/capture_retina.go
 ```
 What this script automates:
 1. Builds the latest web UI into a temporary directory (and resets `internal/api/generated/version.json`).
-2. Starts an isolated `portable.NewServer`, restores the showcase dataset (`POST /v1/storage:restoreDemo`), connects simulated USB Hub `H1` (`PUT /v1/sim/hub-usb`), and starts live 50 Hz telemetry (`PATCH /v1/sim`).
+2. Starts an isolated `portable.NewServer`, restores the showcase dataset (`POST /v1/storage:restoreDemo`), connects simulated USB Hub `H1` (`PUT /v1/sim/slaprf/hub-usb`), and starts live 50 Hz telemetry (`PATCH /v1/sim`).
 3. Opens Chromium at `1440px` CSS width with `DeviceScaleFactor: 2.0` (`2880 px` Retina output), waits for `document.fonts.ready` + live lap sparklines/RSSI bars, blurs active focus rings, and parks the cursor at `(5, 5)` so no hover tooltips appear.
 4. Captures matched `-dark.png` and `-light.png` pairs with identical clip heights:
    - `docs/slaprf-practice-2x-{dark,light}.png` (`#/practice/open-track-practice`, tight bottom clip)

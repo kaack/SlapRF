@@ -19,6 +19,7 @@ Whenever you add, rename, or modify an endpoint, request/response field, stream 
 - **Physical Hardware Transport Routes (`internal/portable/`)**:
   - SlapRF USB & Bluetooth: `/v1/slaprf/usb/*`, `/v1/ws/slaprf/usb`, `/v1/ws/slaprf/usb-raw`, `/v1/slaprf/bluetooth/*`, `/v1/ws/slaprf/bluetooth`, and `/v1/slaprf/known-timers/{fp}` (`internal/portable/{usb_handlers.go,bluetooth_handlers.go}`, backed by `internal/slaprf/{usb,bluetooth}`).
   - External Timers: `/v1/laprf/{network/devices,usb/ports,connections}` + `/v1/laprf:sync` (`internal/portable/laprf_manager.go`) and `/v1/rotorhazard/{network/devices,usb/ports,connections}` + `/v1/rotorhazard:sync` (`internal/portable/rh_manager.go`).
+- **Simulator Routes (`internal/api/` & `internal/portable/`)**: Keep virtual hardware and MultiGP routes symmetric with physical endpoints under `/v1/sim` (flight/pilots), `/v1/sim/slaprf/{hub-usb,usb-hellos,timers*}`, `/v1/sim/laprf/{devices,timers*}`, `/v1/sim/rotorhazard/{devices,timers*}`, and `/v1/sim/multigp/{admin,admin:action,{subPath}}`.
 - **Binary Telemetry Encoding**: If `TimerTelemetryFrame` wire fields change, update both `api.EncodeTelemetryBatch` (`internal/api/`) and `decodeTelemetryBatch` (`web/src/services/wasm_transport.ts`).
 
 ## Layer 2: Browser WASM Bridge & IndexedDB Persistence

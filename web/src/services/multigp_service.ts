@@ -2,7 +2,7 @@
  * MultiGP WebService (`v1.0.4`) client for SlapRF.
  *
  * - When `store.simulatorRunning === true` (both Hosted Browser & SlapRF Portable):
- *   routes all MultiGP WebService calls to the in-memory `SimBackend` (`/v1/sim/mgp/*`),
+ *   routes all MultiGP WebService calls to the in-memory `SimBackend` (`/v1/sim/multigp/*`),
  *   keeping simulated credentials isolated from real chapter credentials.
  * - When `store.simulatorRunning === false` in SlapRF Portable:
  *   routes calls through the local Go reverse proxy (`/v1/race/multigp/proxy/*`) to

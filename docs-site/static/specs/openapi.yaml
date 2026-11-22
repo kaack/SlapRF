@@ -96,11 +96,23 @@ tags:
       Built-in ImmersionRC LapRF 8-Way TCP `:5403` server singleton (`/v1/laprf-emulator`).
       - **External Client Relay**: Streams SlapRF gate crossings over the binary LapRF TCP `:5403` protocol so third-party race control software (such as LiveTime) or broadcast overlays can ingest live passes in real time.
 
-  - name: Simulator
+  - name: Simulator (Flight & Pilots)
     description: |
-      Full-fidelity physics, RF RSSI, hardware, and MultiGP RaceSync simulation engine for offline testing, demos, and marshal training.
-      - **Flight & Pit Simulation (`/v1/sim`, `/v1/sim/pilots/{slotIndex}:action`)**: Control simulator speed, track-walker marshals, synchronized 6S pack bursts (`:packBurst`), and individual pilot events (`crash`, `recover`, `pit`, `break`, `refill-launch`).
-      - **Virtual Hardware & MultiGP (`/v1/sim/timers`, `/v1/sim/laprf/*`, `/v1/sim/rh/*`, `/v1/sim/mgp*`)**: Hot-plug virtual Hub USB cables, flash/erase simulated ESP32-C5 boards, scan simulated spectrum sweeps, and test full MultiGP WebService `v1.0.4` workflows offline.
+      Flight physics, RF signal propagation, speed multiplier, and pilot event controls for offline testing and marshal training (`/v1/sim`, `/v1/sim:packBurst`, `/v1/sim/pilots/{slotIndex}:action`).
+      - **Engine & Speed Controls (`/v1/sim`)**: Read or update simulator execution (`running`), playback speed (`speedMultiplier`), and automatic track-walker recovery (`trackWalker`).
+      - **Pack Bursts & Pilot Events (`:packBurst`, `pilots/{slotIndex}:action`)**: Trigger synchronized 6S launch bursts or individual pilot flight events (`crash`, `recover`, `walk-recover`, `pit`, `pause`, `break`, `launch`, `resume`, `refill-launch`).
+
+  - name: Simulator (Virtual Hardware)
+    description: |
+      Simulated SlapRF, ImmersionRC LapRF 8-Way, and RotorHazard hardware nodes (`/v1/sim/slaprf/*`, `/v1/sim/laprf/*`, `/v1/sim/rotorhazard/*`).
+      - **Simulated SlapRF Nodes (`/v1/sim/slaprf/*`)**: Plug or unplug the virtual Hub `H1` USB cable (`hub-usb`), read raw `0x1E`-framed `HELLO` streams (`usb-hellos`), add or reset simulated ESP32-C5 timers (`timers`), flash or erase virtual boards, and inspect per-slot RSSI.
+      - **Simulated LapRF & RotorHazard Timers (`/v1/sim/laprf/*`, `/v1/sim/rotorhazard/*`)**: Discover virtual LAN/USB devices (`devices`), add or configure simulated timing units (`timers`), and run simulated `5.8 GHz` spectrum sweeps (`:scan`).
+
+  - name: Simulator (MultiGP)
+    description: |
+      In-memory MultiGP RaceSync `v1.0.4` chapter server and admin controls for offline schedule import, ZippyQ walk-up rounds, and result upload testing (`/v1/sim/multigp/*`).
+      - **Chapter & Schedule Admin (`/v1/sim/multigp/admin`, `admin:action`)**: Inspect or mutate the simulated chapter name, API key, pilot pool, controlled-schedule rounds, and dynamic ZippyQ queues.
+      - **WebService `v1.0.4` Endpoints (`/v1/sim/multigp/{subPath}`)**: Execute `chapter/findChapterFromApiKey`, `race/listForChapter`, `race/view`, `race/getAdditionalRounds`, `race/assignSlot`, and `race/captureOverallRaceResult` against the in-memory chapter store.
 
   - name: Storage
     description: |
@@ -4100,7 +4112,7 @@ paths:
 
   /v1/sim:
     get:
-      tags: [Simulator]
+      tags: ["Simulator (Flight & Pilots)"]
       summary: Read simulator singleton state (running flag, simulated pilots, timers, LapRF, and RotorHazard units)
       operationId: getSim
       responses:
@@ -4119,7 +4131,7 @@ paths:
                     $ref: "#/components/schemas/SimState"
 
     patch:
-      tags: [Simulator]
+      tags: ["Simulator (Flight & Pilots)"]
       summary: Update simulator singleton settings (`running`, `speedMultiplier`, `trackWalker`)
       operationId: patchSim
       requestBody:
@@ -4156,7 +4168,7 @@ paths:
 
   "/v1/sim:packBurst":
     post:
-      tags: [Simulator]
+      tags: ["Simulator (Flight & Pilots)"]
       summary: Trigger a synchronized 6S pack launch burst across simulated pilots
       operationId: triggerSimPackBurst
       responses:
@@ -4177,7 +4189,7 @@ paths:
           minimum: 1
           maximum: 16
     post:
-      tags: [Simulator]
+      tags: ["Simulator (Flight & Pilots)"]
       summary: Trigger a flight or pit action on a simulated pilot (`crash`, `recover`, `walk-recover`, `pit`, `pause`, `break`, `launch`, `resume`, `refill-launch`)
       operationId: triggerSimPilotAction
       requestBody:
@@ -4217,9 +4229,9 @@ paths:
               example:
                 error: "invalid slotIndex"
 
-  /v1/sim/hub-usb:
+  /v1/sim/slaprf/hub-usb:
     get:
-      tags: [Simulator]
+      tags: ["Simulator (Virtual Hardware)"]
       summary: Read simulated Hub H1 virtual USB cable connection state
       operationId: getSimHubUsb
       responses:
@@ -4235,7 +4247,7 @@ paths:
                     type: boolean
                     example: true
     put:
-      tags: [Simulator]
+      tags: ["Simulator (Virtual Hardware)"]
       summary: Plug or unplug the simulated Hub H1 virtual USB cable
       operationId: putSimHubUsb
       requestBody:
@@ -4270,9 +4282,9 @@ paths:
               example:
                 error: "invalid JSON body"
 
-  /v1/sim/usb-hellos:
+  /v1/sim/slaprf/usb-hellos:
     get:
-      tags: [Simulator]
+      tags: ["Simulator (Virtual Hardware)"]
       summary: Read raw binary `0x1E`-framed `HELLO` stream for simulated Hub `H1` and active Spokes
       operationId: getSimUsbHellos
       responses:
@@ -4284,9 +4296,9 @@ paths:
                 type: string
                 format: binary
 
-  /v1/sim/timers:
+  /v1/sim/slaprf/timers:
     post:
-      tags: [Simulator]
+      tags: ["Simulator (Virtual Hardware)"]
       summary: Add a simulated XIAO ESP32-C5 SlapRF timer node (Hub or Spoke)
       operationId: createSimTimer
       requestBody:
@@ -4311,7 +4323,7 @@ paths:
               description: URI of the created simulated timer
               schema:
                 type: string
-                example: "/v1/sim/timers/4"
+                example: "/v1/sim/slaprf/timers/4"
           content:
             application/json:
               schema:
@@ -4325,9 +4337,9 @@ paths:
               example:
                 error: "maximum simulated timer count reached"
 
-  "/v1/sim/timers:reset":
+  "/v1/sim/slaprf/timers:reset":
     post:
-      tags: [Simulator]
+      tags: ["Simulator (Virtual Hardware)"]
       summary: Reset simulated SlapRF Hub/Spoke timers and course gates to defaults
       operationId: resetSimTimers
       responses:
@@ -4338,7 +4350,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
 
-  /v1/sim/timers/{timerId}:
+  /v1/sim/slaprf/timers/{timerId}:
     parameters:
       - name: timerId
         in: path
@@ -4348,7 +4360,7 @@ paths:
           minimum: 1
           maximum: 255
     patch:
-      tags: [Simulator]
+      tags: ["Simulator (Virtual Hardware)"]
       summary: Update RF diagnostic flags (`rfEnabled`, `emergencyMode`, `scanLive`, `chanMask`) on a simulated timer
       operationId: patchSimTimer
       requestBody:
@@ -4384,9 +4396,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
-                error: "PATCH /v1/sim/timers/{timerId} expects diagnostic fields; use POST /v1/sim/timers/{timerId}:action for imperative board actions"
+                error: "PATCH /v1/sim/slaprf/timers/{timerId} expects diagnostic fields; use POST /v1/sim/slaprf/timers/{timerId}:action for imperative board actions"
     delete:
-      tags: [Simulator]
+      tags: ["Simulator (Virtual Hardware)"]
       summary: Delete a simulated XIAO ESP32-C5 timer node
       operationId: deleteSimTimer
       responses:
@@ -4405,7 +4417,7 @@ paths:
               example:
                 error: "simulated timer not found"
 
-  "/v1/sim/timers/{timerId}:action":
+  "/v1/sim/slaprf/timers/{timerId}:action":
     parameters:
       - name: timerId
         in: path
@@ -4413,7 +4425,7 @@ paths:
         schema:
           type: integer
     post:
-      tags: [Simulator]
+      tags: ["Simulator (Virtual Hardware)"]
       summary: Execute a board lifecycle action (`toggle-power`, `erase`, `flash`) on a simulated SlapRF timer
       operationId: runSimTimerAction
       requestBody:
@@ -4464,7 +4476,7 @@ paths:
               example:
                 error: "simulated timer not found"
 
-  "/v1/sim/timers/{timerId}:togglePower":
+  "/v1/sim/slaprf/timers/{timerId}:togglePower":
     parameters:
       - name: timerId
         in: path
@@ -4472,7 +4484,7 @@ paths:
         schema:
           type: integer
     post:
-      tags: [Simulator]
+      tags: ["Simulator (Virtual Hardware)"]
       summary: Toggle simulated power on or off for a simulated SlapRF timer
       operationId: toggleSimTimerPower
       responses:
@@ -4483,7 +4495,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
 
-  "/v1/sim/timers/{timerId}:erase":
+  "/v1/sim/slaprf/timers/{timerId}:erase":
     parameters:
       - name: timerId
         in: path
@@ -4491,7 +4503,7 @@ paths:
         schema:
           type: integer
     post:
-      tags: [Simulator]
+      tags: ["Simulator (Virtual Hardware)"]
       summary: Erase simulated flash on a simulated XIAO ESP32-C5 board back to unflashed ROM state
       operationId: eraseSimTimer
       responses:
@@ -4510,7 +4522,7 @@ paths:
               example:
                 error: "simulated timer not found"
 
-  "/v1/sim/timers/{timerId}:flash":
+  "/v1/sim/slaprf/timers/{timerId}:flash":
     parameters:
       - name: timerId
         in: path
@@ -4518,7 +4530,7 @@ paths:
         schema:
           type: integer
     post:
-      tags: [Simulator]
+      tags: ["Simulator (Virtual Hardware)"]
       summary: Flash simulated SlapRF firmware onto a simulated XIAO ESP32-C5 board
       operationId: flashSimTimer
       requestBody:
@@ -4556,7 +4568,7 @@ paths:
               example:
                 error: "simulated timer not found"
 
-  /v1/sim/timers/{timerId}/rssi:
+  /v1/sim/slaprf/timers/{timerId}/rssi:
     parameters:
       - name: timerId
         in: path
@@ -4564,7 +4576,7 @@ paths:
         schema:
           type: integer
     get:
-      tags: [Simulator]
+      tags: ["Simulator (Virtual Hardware)"]
       summary: Read live per-slot simulated RSSI values (dBm) for a simulated SlapRF timer
       operationId: getSimTimerRssi
       responses:
@@ -4583,7 +4595,7 @@ paths:
 
   /v1/sim/laprf/devices:
     get:
-      tags: [Simulator]
+      tags: ["Simulator (Virtual Hardware)"]
       summary: Discover simulated ImmersionRC LapRF 8-Way pucks on the virtual LAN (`192.168.1.0/24`)
       operationId: discoverSimLapRFDevices
       responses:
@@ -4621,10 +4633,10 @@ paths:
                           type: integer
                           example: 12200
 
-  /v1/sim/laprf/units:
+  /v1/sim/laprf/timers:
     post:
-      tags: [Simulator]
-      summary: Add or connect a simulated ImmersionRC LapRF 8-Way unit
+      tags: ["Simulator (Virtual Hardware)"]
+      summary: Add or connect a simulated ImmersionRC LapRF 8-Way timer
       operationId: createSimLapRFUnit
       requestBody:
         required: false
@@ -4634,19 +4646,19 @@ paths:
               $ref: "#/components/schemas/SimLapRFActionRequest"
       responses:
         "201":
-          description: Added or connected simulated LapRF unit and updated full state
+          description: Added or connected simulated LapRF timer and updated full state
           headers:
             Location:
-              description: Simulated LapRF units collection URI
+              description: Simulated LapRF timers collection URI
               schema:
                 type: string
-                example: "/v1/sim/laprf/units"
+                example: "/v1/sim/laprf/timers"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
         "400":
-          description: Invalid simulated LapRF unit parameters
+          description: Invalid simulated LapRF timer parameters
           content:
             application/json:
               schema:
@@ -4654,10 +4666,10 @@ paths:
               example:
                 error: "invalid host address"
 
-  "/v1/sim/laprf/units:reset":
+  "/v1/sim/laprf/timers:reset":
     post:
-      tags: [Simulator]
-      summary: Reset simulated ImmersionRC LapRF 8-Way units back to defaults
+      tags: ["Simulator (Virtual Hardware)"]
+      summary: Reset simulated ImmersionRC LapRF 8-Way timers back to defaults
       operationId: resetSimLapRFUnits
       responses:
         "200":
@@ -4667,7 +4679,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
 
-  /v1/sim/laprf/units/{timerId}:
+  /v1/sim/laprf/timers/{timerId}:
     parameters:
       - name: timerId
         in: path
@@ -4675,8 +4687,8 @@ paths:
         schema:
           type: integer
     patch:
-      tags: [Simulator]
-      summary: Update label, host, TCP port, or supply voltage on a simulated LapRF 8-Way unit
+      tags: ["Simulator (Virtual Hardware)"]
+      summary: Update label, host, TCP port, or supply voltage on a simulated LapRF 8-Way timer
       operationId: patchSimLapRFUnit
       requestBody:
         required: true
@@ -4692,7 +4704,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
         "400":
-          description: Invalid LapRF unit update parameters
+          description: Invalid LapRF timer update parameters
           content:
             application/json:
               schema:
@@ -4700,7 +4712,7 @@ paths:
               example:
                 error: "invalid port number"
         "404":
-          description: Simulated LapRF unit not found
+          description: Simulated LapRF timer not found
           content:
             application/json:
               schema:
@@ -4708,8 +4720,8 @@ paths:
               example:
                 error: "simulated LapRF unit not found"
     delete:
-      tags: [Simulator]
-      summary: Remove a simulated LapRF 8-Way unit
+      tags: ["Simulator (Virtual Hardware)"]
+      summary: Remove a simulated LapRF 8-Way timer
       operationId: deleteSimLapRFUnit
       responses:
         "200":
@@ -4719,7 +4731,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
         "404":
-          description: Simulated LapRF unit not found
+          description: Simulated LapRF timer not found
           content:
             application/json:
               schema:
@@ -4727,7 +4739,7 @@ paths:
               example:
                 error: "simulated LapRF unit not found"
 
-  "/v1/sim/laprf/units/{timerId}:action":
+  "/v1/sim/laprf/timers/{timerId}:action":
     parameters:
       - name: timerId
         in: path
@@ -4735,8 +4747,8 @@ paths:
         schema:
           type: integer
     post:
-      tags: [Simulator]
-      summary: Execute a control action (`toggle-power`, `toggle-connect`, `connect-host`, `disconnect`, `update`, `delete`) on a simulated LapRF unit
+      tags: ["Simulator (Virtual Hardware)"]
+      summary: Execute a control action (`toggle-power`, `toggle-connect`, `connect-host`, `disconnect`, `update`, `delete`) on a simulated LapRF timer
       operationId: runSimLapRFUnitAction
       requestBody:
         required: true
@@ -4760,7 +4772,7 @@ paths:
               example:
                 error: "unknown simulated LapRF action"
         "404":
-          description: Simulated LapRF unit not found
+          description: Simulated LapRF timer not found
           content:
             application/json:
               schema:
@@ -4768,9 +4780,9 @@ paths:
               example:
                 error: "simulated LapRF unit not found"
 
-  /v1/sim/rh/devices:
+  /v1/sim/rotorhazard/devices:
     get:
-      tags: [Simulator]
+      tags: ["Simulator (Virtual Hardware)"]
       summary: Discover simulated RotorHazard network servers and USB serial nodes
       operationId: discoverSimRotorHazardDevices
       responses:
@@ -4817,9 +4829,9 @@ paths:
                           type: boolean
                           example: true
 
-  /v1/sim/rh/units:
+  /v1/sim/rotorhazard/timers:
     post:
-      tags: [Simulator]
+      tags: ["Simulator (Virtual Hardware)"]
       summary: Add or connect a simulated RotorHazard network server or USB serial node
       operationId: createSimRotorHazardUnit
       requestBody:
@@ -4830,19 +4842,19 @@ paths:
               $ref: "#/components/schemas/SimRotorHazardActionRequest"
       responses:
         "201":
-          description: Added or connected simulated RotorHazard unit and updated full state
+          description: Added or connected simulated RotorHazard timer and updated full state
           headers:
             Location:
-              description: Simulated RotorHazard units collection URI
+              description: Simulated RotorHazard timers collection URI
               schema:
                 type: string
-                example: "/v1/sim/rh/units"
+                example: "/v1/sim/rotorhazard/timers"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
         "400":
-          description: Invalid simulated RotorHazard unit parameters
+          description: Invalid simulated RotorHazard timer parameters
           content:
             application/json:
               schema:
@@ -4850,10 +4862,10 @@ paths:
               example:
                 error: "invalid RotorHazard host or port"
 
-  "/v1/sim/rh/units:reset":
+  "/v1/sim/rotorhazard/timers:reset":
     post:
-      tags: [Simulator]
-      summary: Reset simulated RotorHazard units back to defaults
+      tags: ["Simulator (Virtual Hardware)"]
+      summary: Reset simulated RotorHazard timers back to defaults
       operationId: resetSimRotorHazardUnits
       responses:
         "200":
@@ -4863,7 +4875,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
 
-  /v1/sim/rh/units/{timerId}:
+  /v1/sim/rotorhazard/timers/{timerId}:
     parameters:
       - name: timerId
         in: path
@@ -4871,8 +4883,8 @@ paths:
         schema:
           type: integer
     patch:
-      tags: [Simulator]
-      summary: Update configuration on a simulated RotorHazard unit
+      tags: ["Simulator (Virtual Hardware)"]
+      summary: Update configuration on a simulated RotorHazard timer
       operationId: patchSimRotorHazardUnit
       requestBody:
         required: true
@@ -4888,7 +4900,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
         "400":
-          description: Invalid RotorHazard unit parameters
+          description: Invalid RotorHazard timer parameters
           content:
             application/json:
               schema:
@@ -4896,7 +4908,7 @@ paths:
               example:
                 error: "invalid nodeCount"
         "404":
-          description: Simulated RotorHazard unit not found
+          description: Simulated RotorHazard timer not found
           content:
             application/json:
               schema:
@@ -4904,8 +4916,8 @@ paths:
               example:
                 error: "simulated RotorHazard unit not found"
     delete:
-      tags: [Simulator]
-      summary: Remove a simulated RotorHazard unit
+      tags: ["Simulator (Virtual Hardware)"]
+      summary: Remove a simulated RotorHazard timer
       operationId: deleteSimRotorHazardUnit
       responses:
         "200":
@@ -4915,7 +4927,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
         "404":
-          description: Simulated RotorHazard unit not found
+          description: Simulated RotorHazard timer not found
           content:
             application/json:
               schema:
@@ -4923,7 +4935,7 @@ paths:
               example:
                 error: "simulated RotorHazard unit not found"
 
-  "/v1/sim/rh/units/{timerId}:action":
+  "/v1/sim/rotorhazard/timers/{timerId}:action":
     parameters:
       - name: timerId
         in: path
@@ -4931,8 +4943,8 @@ paths:
         schema:
           type: integer
     post:
-      tags: [Simulator]
-      summary: Execute a control action (`toggle-power`, `toggle-connect`, `connect-host`, `connect-port`, `disconnect`, `update`, `delete`) on a simulated RotorHazard unit
+      tags: ["Simulator (Virtual Hardware)"]
+      summary: Execute a control action (`toggle-power`, `toggle-connect`, `connect-host`, `connect-port`, `disconnect`, `update`, `delete`) on a simulated RotorHazard timer
       operationId: runSimRotorHazardUnitAction
       requestBody:
         required: true
@@ -4956,7 +4968,7 @@ paths:
               example:
                 error: "unknown simulated RotorHazard action"
         "404":
-          description: Simulated RotorHazard unit not found
+          description: Simulated RotorHazard timer not found
           content:
             application/json:
               schema:
@@ -4964,7 +4976,7 @@ paths:
               example:
                 error: "simulated RotorHazard unit not found"
 
-  "/v1/sim/rh/units/{timerId}:scan":
+  "/v1/sim/rotorhazard/timers/{timerId}:scan":
     parameters:
       - name: timerId
         in: path
@@ -4972,7 +4984,7 @@ paths:
         schema:
           type: integer
     post:
-      tags: [Simulator]
+      tags: ["Simulator (Virtual Hardware)"]
       summary: Run or toggle a simulated 5.8 GHz spectrum sweep (`once`, `live`, `stop`) on a simulated RotorHazard USB node
       operationId: scanSimRotorHazardUnit
       requestBody:
@@ -5021,7 +5033,7 @@ paths:
               example:
                 error: "invalid scan mode (expected once, live, or stop)"
         "404":
-          description: Simulated RotorHazard unit not found
+          description: Simulated RotorHazard timer not found
           content:
             application/json:
               schema:
@@ -5037,9 +5049,9 @@ paths:
               example:
                 error: "simulator is not running"
 
-  /v1/sim/mgp-admin:
+  /v1/sim/multigp/admin:
     get:
-      tags: [Simulator]
+      tags: ["Simulator (MultiGP)"]
       summary: Export in-memory simulated MultiGP chapter, API key, pilot pool, and scheduled races
       operationId: getSimMultiGPAdmin
       responses:
@@ -5050,9 +5062,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/SimMultiGPState"
 
-  "/v1/sim/mgp-admin:action":
+  "/v1/sim/multigp/admin:action":
     post:
-      tags: [Simulator]
+      tags: ["Simulator (MultiGP)"]
       summary: Mutate the simulated MultiGP chapter, API key, pilot pool, races, ZippyQ rounds, heats, or seats
       operationId: runSimMultiGPAdminAction
       requestBody:
@@ -5077,7 +5089,7 @@ paths:
               example:
                 error: "pilot callsign is required"
 
-  /v1/sim/mgp/{subPath}:
+  /v1/sim/multigp/{subPath}:
     parameters:
       - name: subPath
         in: path
@@ -5086,7 +5098,7 @@ paths:
         schema:
           type: string
     post:
-      tags: [Simulator]
+      tags: ["Simulator (MultiGP)"]
       summary: Invoke an in-memory simulated MultiGP WebService v1.0.4 POST endpoint
       operationId: postSimMultiGPWebService
       requestBody:
@@ -5147,7 +5159,7 @@ paths:
                     type: string
                     example: "Invalid MultiGP Chapter API key"
     put:
-      tags: [Simulator]
+      tags: ["Simulator (MultiGP)"]
       summary: Invoke an in-memory simulated MultiGP WebService v1.0.4 PUT endpoint
       operationId: putSimMultiGPWebService
       requestBody:

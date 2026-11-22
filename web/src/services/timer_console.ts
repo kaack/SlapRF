@@ -2310,7 +2310,7 @@ export class UsbConnectionPool {
     }
     if (this.savedSimSlots.length === 0 && capabilitiesSnapshot().portable && !window.slaprfWasm) {
       try {
-        const res = await fetch(resolveBackendUrl("/v1/sim/hub-usb"), { cache: "no-store" });
+        const res = await fetch(resolveBackendUrl("/v1/sim/slaprf/hub-usb"), { cache: "no-store" });
         if (res.ok) {
           const data = (await res.json()) as { connected?: boolean };
           if (data.connected) {

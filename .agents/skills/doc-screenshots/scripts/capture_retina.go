@@ -110,7 +110,7 @@ func main() {
 	}
 	_, err = page.Evaluate(`async () => {
 		await fetch("/v1/storage:restoreDemo", { method: "POST" });
-		await fetch("/v1/sim/hub-usb", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ connected: true }) });
+		await fetch("/v1/sim/slaprf/hub-usb", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ connected: true }) });
 		await fetch("/v1/sim", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ running: true, speedMultiplier: 1 }) });
 	}`)
 	if err != nil {

@@ -195,9 +195,9 @@ func TestNativeStreamWebSocketAndBboltRestartPersistence(t *testing.T) {
 	}
 	modeResp.Body.Close()
 
-	hubResp := doJSONReq(t, http.MethodPut, ts1.URL+"/v1/sim/hub-usb", "", map[string]any{"connected": true})
+	hubResp := doJSONReq(t, http.MethodPut, ts1.URL+"/v1/sim/slaprf/hub-usb", "", map[string]any{"connected": true})
 	if hubResp.StatusCode != http.StatusOK {
-		t.Fatalf("PUT /v1/sim/hub-usb failed: %d", hubResp.StatusCode)
+		t.Fatalf("PUT /v1/sim/slaprf/hub-usb failed: %d", hubResp.StatusCode)
 	}
 	hubResp.Body.Close()
 

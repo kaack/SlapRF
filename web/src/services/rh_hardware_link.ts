@@ -8,7 +8,7 @@
  *
  * - Simulation Mode (both Standalone Browser Demo & SlapRF Server):
  *   Delegates LAN discovery and multi-device connect/disconnect to `TrackSimulator`
- *   (`/v1/sim/rh/*`), where each virtual RotorHazard device runs
+ *   (`/v1/sim/rotorhazard/*`), where each virtual RotorHazard device runs
  *   `rotorhazard.SimServer` <-> `Client`.
  */
 

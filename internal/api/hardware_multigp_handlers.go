@@ -245,7 +245,7 @@ func (s *Server) handleCreateSimTimer(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
-	w.Header().Set("Location", fmt.Sprintf("/v1/sim/timers/%d", createdID))
+	w.Header().Set("Location", fmt.Sprintf("/v1/sim/slaprf/timers/%d", createdID))
 	writeJSON(w, http.StatusCreated, s.buildFullStateResponse())
 }
 
@@ -258,7 +258,7 @@ func (s *Server) handleResetSimTimers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
-// handlePatchSimTimer updates stored diagnostic state on a simulated timer (`PATCH /v1/sim/timers/{timerId}`).
+// handlePatchSimTimer updates stored diagnostic state on a simulated timer (`PATCH /v1/sim/slaprf/timers/{timerId}`).
 func (s *Server) handlePatchSimTimer(w http.ResponseWriter, r *http.Request) {
 	timerID, ok := parseUint8PathValue(w, r, "timerId")
 	if !ok {
@@ -290,10 +290,10 @@ func (s *Server) handlePatchSimTimer(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
 	}
-	writeErrorJSON(w, http.StatusBadRequest, "PATCH /v1/sim/timers/{timerId} expects diagnostic fields; use POST /v1/sim/timers/{timerId}:action for imperative board actions")
+	writeErrorJSON(w, http.StatusBadRequest, "PATCH /v1/sim/slaprf/timers/{timerId} expects diagnostic fields; use POST /v1/sim/slaprf/timers/{timerId}:action for imperative board actions")
 }
 
-// handleSimTimerCustomAction serves `POST /v1/sim/timers/{timerId}:action` (or `:togglePower`, `:erase`, `:flash`).
+// handleSimTimerCustomAction serves `POST /v1/sim/slaprf/timers/{timerId}:action` (or `:togglePower`, `:erase`, `:flash`).
 func (s *Server) handleSimTimerCustomAction(w http.ResponseWriter, r *http.Request) {
 	rawTimerID, customVerb, ok := cutCustomActionPathValue(w, r, "timerId", "PATCH, DELETE")
 	if !ok {
@@ -427,7 +427,7 @@ func (s *Server) handleCreateSimLapRFUnit(w http.ResponseWriter, r *http.Request
 		writeEngineError(w, err)
 		return
 	}
-	w.Header().Set("Location", "/v1/sim/laprf/units")
+	w.Header().Set("Location", "/v1/sim/laprf/timers")
 	writeJSON(w, http.StatusCreated, s.buildFullStateResponse())
 }
 
@@ -561,7 +561,7 @@ func (s *Server) handleCreateSimRHUnit(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
-	w.Header().Set("Location", "/v1/sim/rh/units")
+	w.Header().Set("Location", "/v1/sim/rotorhazard/timers")
 	writeJSON(w, http.StatusCreated, s.buildFullStateResponse())
 }
 
@@ -596,7 +596,7 @@ func (s *Server) handlePatchSimRHUnit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
-// handleSimRHUnitCustomAction serves `POST /v1/sim/rh/units/{timerId}:{action|scan}`.
+// handleSimRHUnitCustomAction serves `POST /v1/sim/rotorhazard/timers/{timerId}:{action|scan}`.
 func (s *Server) handleSimRHUnitCustomAction(w http.ResponseWriter, r *http.Request) {
 	rawTimerID, customVerb, ok := cutCustomActionPathValue(w, r, "timerId", "PATCH, DELETE")
 	if !ok {
@@ -686,7 +686,7 @@ func (s *Server) handleSimMultiGPWebService(w http.ResponseWriter, r *http.Reque
 	s.simulator.SyncMultiGPPilotPool()
 	subPath := r.PathValue("subPath")
 	if subPath == "" {
-		subPath = strings.TrimPrefix(r.URL.Path, "/v1/sim/mgp/")
+		subPath = strings.TrimPrefix(r.URL.Path, "/v1/sim/multigp/")
 	}
 	s.simulator.MultiGPBackend().ServeWebServiceHTTP(w, r, subPath)
 }

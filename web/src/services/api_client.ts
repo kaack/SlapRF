@@ -475,24 +475,24 @@ export class ApiClient {
     let state: FullStateResponse;
     switch (payload.action) {
       case "add":
-        state = await this.transport.request<FullStateResponse>("POST", "/v1/sim/timers", {
+        state = await this.transport.request<FullStateResponse>("POST", "/v1/sim/slaprf/timers", {
           role: payload.role,
           label: payload.label,
         });
         break;
       case "reset-timers":
-        state = await this.transport.request<FullStateResponse>("POST", "/v1/sim/timers:reset", {});
+        state = await this.transport.request<FullStateResponse>("POST", "/v1/sim/slaprf/timers:reset", {});
         break;
       case "delete":
         state = await this.transport.request<FullStateResponse>(
           "DELETE",
-          `/v1/sim/timers/${payload.timerId ?? 0}`
+          `/v1/sim/slaprf/timers/${payload.timerId ?? 0}`
         );
         break;
       default:
         state = await this.transport.request<FullStateResponse>(
           "POST",
-          `/v1/sim/timers/${payload.timerId ?? 0}:action`,
+          `/v1/sim/slaprf/timers/${payload.timerId ?? 0}:action`,
           payload
         );
         break;
@@ -1340,28 +1340,28 @@ export class ApiClient {
     switch (payload.action) {
       case "add":
       case "connect-host":
-        state = await this.transport.request<FullStateResponse>("POST", "/v1/sim/laprf/units", payload);
+        state = await this.transport.request<FullStateResponse>("POST", "/v1/sim/laprf/timers", payload);
         break;
       case "reset":
-        state = await this.transport.request<FullStateResponse>("POST", "/v1/sim/laprf/units:reset", {});
+        state = await this.transport.request<FullStateResponse>("POST", "/v1/sim/laprf/timers:reset", {});
         break;
       case "delete":
         state = await this.transport.request<FullStateResponse>(
           "DELETE",
-          `/v1/sim/laprf/units/${payload.timerId ?? 0}`
+          `/v1/sim/laprf/timers/${payload.timerId ?? 0}`
         );
         break;
       case "update":
         state = await this.transport.request<FullStateResponse>(
           "PATCH",
-          `/v1/sim/laprf/units/${payload.timerId ?? 0}`,
+          `/v1/sim/laprf/timers/${payload.timerId ?? 0}`,
           payload
         );
         break;
       default:
         state = await this.transport.request<FullStateResponse>(
           "POST",
-          `/v1/sim/laprf/units/${payload.timerId ?? 0}:action`,
+          `/v1/sim/laprf/timers/${payload.timerId ?? 0}:action`,
           payload
         );
         break;
@@ -1396,28 +1396,28 @@ export class ApiClient {
       case "add":
       case "connect-host":
       case "connect-port":
-        state = await this.transport.request<FullStateResponse>("POST", "/v1/sim/rh/units", payload);
+        state = await this.transport.request<FullStateResponse>("POST", "/v1/sim/rotorhazard/timers", payload);
         break;
       case "reset":
-        state = await this.transport.request<FullStateResponse>("POST", "/v1/sim/rh/units:reset", {});
+        state = await this.transport.request<FullStateResponse>("POST", "/v1/sim/rotorhazard/timers:reset", {});
         break;
       case "delete":
         state = await this.transport.request<FullStateResponse>(
           "DELETE",
-          `/v1/sim/rh/units/${payload.timerId ?? 0}`
+          `/v1/sim/rotorhazard/timers/${payload.timerId ?? 0}`
         );
         break;
       case "update":
         state = await this.transport.request<FullStateResponse>(
           "PATCH",
-          `/v1/sim/rh/units/${payload.timerId ?? 0}`,
+          `/v1/sim/rotorhazard/timers/${payload.timerId ?? 0}`,
           payload
         );
         break;
       default:
         state = await this.transport.request<FullStateResponse>(
           "POST",
-          `/v1/sim/rh/units/${payload.timerId ?? 0}:action`,
+          `/v1/sim/rotorhazard/timers/${payload.timerId ?? 0}:action`,
           payload
         );
         break;
@@ -1452,7 +1452,7 @@ export class ApiClient {
       values: number[];
     };
   }> {
-    return await this.transport.request("POST", `/v1/sim/rh/units/${payload.timerId}:scan`, {
+    return await this.transport.request("POST", `/v1/sim/rotorhazard/timers/${payload.timerId}:scan`, {
       mode: payload.mode,
       start: payload.start,
       stop: payload.stop,
@@ -1477,19 +1477,19 @@ export class ApiClient {
       connected: boolean;
     }>;
   }> {
-    return await this.transport.request("GET", "/v1/sim/rh/devices");
+    return await this.transport.request("GET", "/v1/sim/rotorhazard/devices");
   }
 
   /** Calls a MultiGP WebService v1.0.4 endpoint against the in-memory Simulated MultiGP server. */
   public async simMultiGPWebService<T = unknown>(subPath: string, body: unknown): Promise<T> {
-    return await this.transport.request<T>("POST", `/v1/sim/mgp/${subPath}`, body);
+    return await this.transport.request<T>("POST", `/v1/sim/multigp/${subPath}`, body);
   }
 
   /** Reads or mutates the Simulated MultiGP chapter, API key, races, and ZippyQ queue (`#/sim`). */
   public async simMultiGPAdmin(payload?: SimMultiGPAdminAction): Promise<SimMultiGPState> {
     const next = payload
-      ? await this.transport.request<SimMultiGPState>("POST", "/v1/sim/mgp-admin:action", payload)
-      : await this.transport.request<SimMultiGPState>("GET", "/v1/sim/mgp-admin");
+      ? await this.transport.request<SimMultiGPState>("POST", "/v1/sim/multigp/admin:action", payload)
+      : await this.transport.request<SimMultiGPState>("GET", "/v1/sim/multigp/admin");
     await this.pollStatus();
     await this.persistBrowserEnginesIfDemo();
     return next;

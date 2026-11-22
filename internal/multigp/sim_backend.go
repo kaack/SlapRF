@@ -1083,7 +1083,7 @@ func (b *SimBackend) SyncPoolWithEnginePilots(pilots []domain.PilotSlot) {
 	}
 }
 
-// ServeWebServiceHTTP serves simulated MultiGP WebService v1.0.4 endpoints under `/v1/sim/mgp/*`.
+// ServeWebServiceHTTP serves simulated MultiGP WebService v1.0.4 endpoints under `/v1/sim/multigp/*`.
 func (b *SimBackend) ServeWebServiceHTTP(w http.ResponseWriter, r *http.Request, subPath string) {
 	if r.Method != http.MethodPost && r.Method != http.MethodPut {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

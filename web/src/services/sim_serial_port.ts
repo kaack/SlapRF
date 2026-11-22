@@ -210,7 +210,7 @@ function syncDiagStateToWasm(
     return;
   }
   if (capabilitiesSnapshot().portable) {
-    void fetch(resolveBackendUrl(`/v1/sim/timers/${encodeURIComponent(String(timerId))}`), {
+    void fetch(resolveBackendUrl(`/v1/sim/slaprf/timers/${encodeURIComponent(String(timerId))}`), {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ rfEnabled, emergencyMode, scanLive, chanMask }),
@@ -224,7 +224,7 @@ export async function notifySimHubUsbConnected(connected: boolean): Promise<void
     return;
   }
   if (!capabilitiesSnapshot().portable) return;
-  await fetch(resolveBackendUrl("/v1/sim/hub-usb"), {
+  await fetch(resolveBackendUrl("/v1/sim/slaprf/hub-usb"), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ connected }),
@@ -238,7 +238,7 @@ function flushSimHubHellosToPort(port: SimulatedSerialPort): void {
     return;
   }
   if (capabilitiesSnapshot().portable && !window.slaprfWasm) {
-    void fetch(resolveBackendUrl("/v1/sim/usb-hellos"), { method: "GET" })
+    void fetch(resolveBackendUrl("/v1/sim/slaprf/usb-hellos"), { method: "GET" })
       .then((r) => (r.ok ? r.arrayBuffer() : null))
       .then((buf) => {
         if (buf && buf.byteLength > 0) {

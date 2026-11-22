@@ -150,14 +150,14 @@ func TestAPI_TrackGatesThresholdsAndPerGateRules(t *testing.T) {
 	h := NewHarness(t)
 	h.BootClean("#/track")
 
-	// 1. Add a new timer board ("T5") in simulator via POST /v1/sim/timers (201 Created) and verify Timers reflect it.
+	// 1. Add a new timer board ("T5") in simulator via POST /v1/sim/slaprf/timers (201 Created) and verify Timers reflect it.
 	var st api.FullStateResponse
-	createTimerRes := h.APIPost("/v1/sim/timers", map[string]any{
+	createTimerRes := h.APIPost("/v1/sim/slaprf/timers", map[string]any{
 		"role":  "spoke",
 		"label": "T5",
 	}, &st)
 	if createTimerRes.Status != 201 {
-		t.Fatalf("expected 201 Created from POST /v1/sim/timers, got %d", createTimerRes.Status)
+		t.Fatalf("expected 201 Created from POST /v1/sim/slaprf/timers, got %d", createTimerRes.Status)
 	}
 	var newTimerID uint8
 	for _, tm := range st.Timers {
@@ -280,9 +280,9 @@ func TestAPI_TimersProvisionColorDeleteAndSimTimerActions(t *testing.T) {
 	h := NewHarness(t)
 	h.BootClean("#/setup/timers")
 
-	// 1. Add a simulated spoke timer ("T5") via POST /v1/sim/timers, flash, recolor via PATCH /v1/timers/{id}, toggle power, erase, and delete.
+	// 1. Add a simulated spoke timer ("T5") via POST /v1/sim/slaprf/timers, flash, recolor via PATCH /v1/timers/{id}, toggle power, erase, and delete.
 	var st api.FullStateResponse
-	h.APIPost("/v1/sim/timers", map[string]any{
+	h.APIPost("/v1/sim/slaprf/timers", map[string]any{
 		"role":  "spoke",
 		"label": "T5",
 	}, &st)
@@ -297,7 +297,7 @@ func TestAPI_TimersProvisionColorDeleteAndSimTimerActions(t *testing.T) {
 		t.Fatalf("expected T5 timer added")
 	}
 
-	h.APIPost(fmt.Sprintf("/v1/sim/timers/%d:action", t5ID), map[string]any{
+	h.APIPost(fmt.Sprintf("/v1/sim/slaprf/timers/%d:action", t5ID), map[string]any{
 		"action":          "flash",
 		"role":            "spoke",
 		"label":           "T5",
@@ -320,8 +320,8 @@ func TestAPI_TimersProvisionColorDeleteAndSimTimerActions(t *testing.T) {
 	}
 	h.MilestoneScreenshot("api-timers-flashed-and-colored")
 
-	h.APIPost(fmt.Sprintf("/v1/sim/timers/%d:action", t5ID), map[string]any{"action": "toggle-power"}, &st)
-	h.APIPost(fmt.Sprintf("/v1/sim/timers/%d:action", t5ID), map[string]any{"action": "erase"}, &st)
+	h.APIPost(fmt.Sprintf("/v1/sim/slaprf/timers/%d:action", t5ID), map[string]any{"action": "toggle-power"}, &st)
+	h.APIPost(fmt.Sprintf("/v1/sim/slaprf/timers/%d:action", t5ID), map[string]any{"action": "erase"}, &st)
 	h.APIDelete(fmt.Sprintf("/v1/timers/%d", t5ID), &st)
 	for _, tm := range st.Timers {
 		if tm.TimerID == t5ID {
@@ -330,7 +330,7 @@ func TestAPI_TimersProvisionColorDeleteAndSimTimerActions(t *testing.T) {
 	}
 
 	// Unknown action returns 400; deleting nonexistent timer returns 404 Not Found.
-	h.APIExpectStatus("POST", "/v1/sim/timers/1:action", map[string]any{"action": "nonexistent"}, 400)
+	h.APIExpectStatus("POST", "/v1/sim/slaprf/timers/1:action", map[string]any{"action": "nonexistent"}, 400)
 	h.APIExpectStatus("DELETE", "/v1/timers/250", nil, 404)
 }
 
@@ -424,26 +424,26 @@ func TestAPI_HardwareModeSwitchAndSimLapRFDiscoveryAndActions(t *testing.T) {
 	}
 	baseUnits := len(disc.Devices)
 
-	// 3. Add a new simulated LapRF puck ("L3") via POST /v1/sim/laprf/units (201 Created), update voltage via PATCH, and DELETE it.
-	createRes := h.APIPost("/v1/sim/laprf/units", map[string]any{
+	// 3. Add a new simulated LapRF puck ("L3") via POST /v1/sim/laprf/timers (201 Created), update voltage via PATCH, and DELETE it.
+	createRes := h.APIPost("/v1/sim/laprf/timers", map[string]any{
 		"action": "add",
 		"label":  "L3",
 	}, &st)
 	if createRes.Status != 201 {
-		t.Fatalf("expected 201 Created from POST /v1/sim/laprf/units, got %d", createRes.Status)
+		t.Fatalf("expected 201 Created from POST /v1/sim/laprf/timers, got %d", createRes.Status)
 	}
 	if st.SimState == nil || len(st.SimState.LapRFUnits) != baseUnits+1 {
 		t.Fatalf("expected %d simulated LapRF units after add, got %+v", baseUnits+1, st.SimState)
 	}
 	addedPuckID := st.SimState.LapRFUnits[len(st.SimState.LapRFUnits)-1].TimerID
 
-	h.APIPatch(fmt.Sprintf("/v1/sim/laprf/units/%d", addedPuckID), map[string]any{
+	h.APIPatch(fmt.Sprintf("/v1/sim/laprf/timers/%d", addedPuckID), map[string]any{
 		"label":     "L3",
 		"voltageMv": 14800,
 	}, &st)
 	h.MilestoneScreenshot("api-laprf-mode-and-l3-puck")
 
-	h.APIDelete(fmt.Sprintf("/v1/sim/laprf/units/%d", addedPuckID), &st)
+	h.APIDelete(fmt.Sprintf("/v1/sim/laprf/timers/%d", addedPuckID), &st)
 	if len(st.SimState.LapRFUnits) != baseUnits {
 		t.Fatalf("expected %d LapRF units after deleting added puck, got %d", baseUnits, len(st.SimState.LapRFUnits))
 	}
