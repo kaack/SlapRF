@@ -736,8 +736,18 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
         const desktopModal = document.querySelector<HTMLElement>(".device-conn-modal")!;
         expect(desktopModal).not.toBeNull();
         expect(document.querySelector(".device-conn-drawer")).toBeNull();
-        const disconnectAction = desktopModal.querySelector<HTMLButtonElement>('[data-conn-action="disconnect"]')!;
-        const forgetActionDesktop = desktopModal.querySelector<HTMLButtonElement>('[data-conn-action="forget"]')!;
+        expect(desktopModal.querySelector(".slaprf-modal-icon")).toBeNull();
+        expect((desktopModal.querySelector(".device-conn-head-titles h3")?.textContent || "").trim()).toBe(
+          "H1 BE7C0001"
+        );
+        expect(desktopModal.querySelector(".slaprf-modal-head [data-conn-sheet-close]")).not.toBeNull();
+        expect(desktopModal.querySelector(".slaprf-modal-foot [data-conn-sheet-close]")).toBeNull();
+        const disconnectAction = desktopModal.querySelector<HTMLButtonElement>(
+          '.slaprf-modal-foot [data-conn-action="disconnect"]'
+        )!;
+        const forgetActionDesktop = desktopModal.querySelector<HTMLButtonElement>(
+          '.slaprf-modal-foot [data-conn-action="forget"]'
+        )!;
         expect(disconnectAction).not.toBeNull();
         expect(forgetActionDesktop).not.toBeNull();
         expect(forgetActionDesktop.textContent || "").toContain("Forget Device");
@@ -823,7 +833,14 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
 
         const mobileDrawer = document.querySelector<HTMLElement>(".device-conn-drawer")!;
         expect(mobileDrawer).not.toBeNull();
-        const forgetBtnMobile = mobileDrawer.querySelector<HTMLButtonElement>('[data-conn-action="forget"]')!;
+        expect((mobileDrawer.querySelector(".device-conn-head-titles strong")?.textContent || "").trim()).toBe(
+          "H1 BE7C0001"
+        );
+        expect(mobileDrawer.querySelector(".mre-sheet-head [data-conn-sheet-close]")).toBeNull();
+        expect(mobileDrawer.querySelector(".mre-sheet-foot [data-conn-sheet-close]")).toBeNull();
+        const forgetBtnMobile = mobileDrawer.querySelector<HTMLButtonElement>(
+          '.mre-sheet-foot [data-conn-action="forget"]'
+        )!;
         expect(forgetBtnMobile).not.toBeNull();
         forgetBtnMobile.click();
         await new Promise((r) => window.setTimeout(r, 120));
@@ -1044,8 +1061,10 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       await flushMicrotasks();
       expect(getSelect().value).toBe("rotorhazard");
       expect(getSelect().disabled).toBe(true);
+      expect(netRoot.querySelector('[data-slot="external-conn-actions"] .badge')).toBeNull();
       const extDisconnectBtn = netRoot.querySelector<HTMLButtonElement>('[data-action="network-disconnect-active"]')!;
       expect(extDisconnectBtn).not.toBeNull();
+      expect(extDisconnectBtn.classList.contains("btn-ghost")).toBe(false);
       expect((extDisconnectBtn.textContent || "").trim()).toBe("Disconnect");
       extDisconnectBtn.click();
       await new Promise((r) => window.setTimeout(r, 15));

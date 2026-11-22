@@ -18,6 +18,7 @@ import {
   flushMicrotasks,
   it,
   makeDetectedTimer,
+  makeFullState,
   makeGate,
   makeHeat,
   makeMockApiClient,
@@ -390,7 +391,22 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect(disabledValEl.textContent).toBe("");
       // No global Admin User / Admin Password fields in the top bar before opening a prompt
       expect(root.querySelector("[data-rh-creds-prompt='1']")).toBeNull();
-      // Clicking Connect… opens the inline per-device credentials prompt
+      // While R1 is connected, IP/Port fields are disabled and the single button shows Disconnect
+      expect(root.querySelector<HTMLInputElement>("[data-field='rh-host']")?.disabled).toBe(true);
+      expect(root.querySelector<HTMLInputElement>("[data-field='rh-port']")?.disabled).toBe(true);
+      expect(root.querySelector("[data-action='rh-open-manual-creds']")).toBeNull();
+      expect(root.querySelector("[data-action='network-disconnect-active']")).not.toBeNull();
+
+      // Once disconnected, IP/Port fields become editable and clicking Connect… opens the inline per-device credentials prompt
+      store.simState!.rotorhazardUnits![0].connected = false;
+      store.hydrate(
+        makeFullState({
+          timingHardwareMode: "rotorhazard",
+          simState: store.simState!,
+        })
+      );
+      await flushMicrotasks();
+      expect(root.querySelector<HTMLInputElement>("[data-field='rh-host']")?.disabled).toBe(false);
       const openPromptBtn = root.querySelector<HTMLButtonElement>("[data-action='rh-open-manual-creds']")!;
       expect(openPromptBtn).not.toBeNull();
       openPromptBtn.click();

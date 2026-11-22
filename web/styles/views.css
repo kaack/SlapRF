@@ -5133,8 +5133,23 @@ html[data-theme="light"] .flasher-hub-link .segmented button.is-active {
   line-height: 1.4;
   color: var(--text-3);
 }
-.device-conn-cancel-mobile {
-  width: 100%;
+.device-conn-desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.device-conn-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.device-conn-foot.is-mobile {
+  justify-content: stretch;
+}
+.device-conn-foot.is-mobile .device-conn-btn {
+  flex: 1 1 0;
   justify-content: center;
 }
 .debug-usb-busy-wrap {

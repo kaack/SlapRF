@@ -2145,54 +2145,57 @@ export class NetworkView extends Component {
       const extSig = `${effectiveMode}|${lock.connectedCount}|${lock.busy ? 1 : 0}`;
       if (extSig !== this.lastExternalInlineSig) {
         this.lastExternalInlineSig = extSig;
-        const badgeHtml =
-          lock.connectedCount > 0
-            ? `<span class="badge"><span class="status-dot is-up" style="display:inline-block;margin-right:6px"></span>${lock.connectedCount} connected</span>`
-            : "";
-        const disconnectHtml =
-          lock.connectedCount > 0
-            ? `<button
-                 type="button"
-                 class="btn btn-ghost net-conn-btn"
-                 data-action="network-disconnect-active"
-                 ${lock.busy ? "disabled" : ""}
-                 title="Disconnect active connection to switch timing system"
-               >
-                 ${icons.close(14)}
-                 <span>${lock.connectedCount > 1 ? "Disconnect all" : "Disconnect"}</span>
-               </button>`
-            : "";
-        const primaryActionHtml = isLapRFUSB
+        const isConnected = lock.connectedCount > 0;
+        const primaryActionHtml = isConnected
           ? `<button
                type="button"
                class="btn net-conn-btn"
-               data-action="laprf-connect-usb"
+               data-action="network-disconnect-active"
                ${lock.busy ? "disabled" : ""}
-               title="Connect a LapRF 8-Way timer over USB"
+               title="Disconnect active connection to switch timing system"
              >
-               ${icons.plug(14)}
-               <span>${lock.busy ? "Connecting…" : lock.connectedCount > 0 ? "Add USB" : "Connect USB"}</span>
+               ${icons.plugOff(14)}
+               <span>${
+                 isLapRFUSB
+                   ? "Disconnect USB"
+                   : isLapRFNet
+                     ? "Disconnect Ethernet"
+                     : lock.connectedCount > 1
+                       ? "Disconnect all"
+                       : "Disconnect"
+               }</span>
              </button>`
-          : isLapRFNet
+          : isLapRFUSB
             ? `<button
                  type="button"
                  class="btn net-conn-btn"
-                 data-action="laprf-connect-eth"
+                 data-action="laprf-connect-usb"
                  ${lock.busy ? "disabled" : ""}
+                 title="Connect a LapRF 8-Way timer over USB"
                >
-                 ${icons.wifi(14)}
-                 <span>${lock.busy ? "Connecting…" : "Connect Ethernet"}</span>
+                 ${icons.plug(14)}
+                 <span>${lock.busy ? "Connecting…" : "Connect USB"}</span>
                </button>`
-            : `<button
-                 type="button"
-                 class="btn net-conn-btn"
-                 data-action="rh-open-manual-creds"
-                 ${lock.busy ? "disabled" : ""}
-               >
-                 ${icons.wifi(14)}
-                 <span>Connect…</span>
-               </button>`;
-        extActionsHost.innerHTML = `${badgeHtml}${primaryActionHtml}${disconnectHtml}`;
+            : isLapRFNet
+              ? `<button
+                   type="button"
+                   class="btn net-conn-btn"
+                   data-action="laprf-connect-eth"
+                   ${lock.busy ? "disabled" : ""}
+                 >
+                   ${icons.wifi(14)}
+                   <span>${lock.busy ? "Connecting…" : "Connect Ethernet"}</span>
+                 </button>`
+              : `<button
+                   type="button"
+                   class="btn net-conn-btn"
+                   data-action="rh-open-manual-creds"
+                   ${lock.busy ? "disabled" : ""}
+                 >
+                   ${icons.wifi(14)}
+                   <span>Connect…</span>
+                 </button>`;
+        extActionsHost.innerHTML = primaryActionHtml;
       }
     }
   }
@@ -2317,6 +2320,10 @@ export class NetworkView extends Component {
               ? `<div style="padding:10px 14px;border-top:1px solid var(--border,rgba(255,255,255,0.08))"><span class="note">No powered-on LapRF timers responded on ${esc(this.laprfScannedSubnet)} TCP :5403.</span></div>`
               : "";
 
+        const laprfLocked = connectedEndpoints.size > 0 || this.laprfBusy;
+        const laprfLockAttr = laprfLocked
+          ? 'disabled title="Disconnect active connection to edit IP or port"'
+          : "";
         connHost.innerHTML = `
           <div class="net-conn-field is-ip">
             <input
@@ -2327,6 +2334,7 @@ export class NetworkView extends Component {
               placeholder="192.168.1.2"
               aria-label="LapRF Ethernet IP"
               title="LapRF Ethernet IP"
+              ${laprfLockAttr}
             />
           </div>
           <div class="net-conn-field is-port-num">
@@ -2337,6 +2345,7 @@ export class NetworkView extends Component {
               data-field="laprf-port"
               aria-label="LapRF TCP port"
               title="LapRF TCP port"
+              ${laprfLockAttr}
             />
           </div>`;
 
@@ -2788,6 +2797,10 @@ export class NetworkView extends Component {
       }
       this.patchNetConnSubbar(rhSubbarParts.join(""));
 
+      const rhLocked = connectedEndpoints.size > 0 || this.rhBusy;
+      const rhLockAttr = rhLocked
+        ? 'disabled title="Disconnect active connection to edit Host IP or port"'
+        : "";
       connHost.innerHTML = `
         <div class="net-conn-field is-ip">
           <input
@@ -2798,6 +2811,7 @@ export class NetworkView extends Component {
             placeholder="192.168.1.101"
             aria-label="RotorHazard Host IP"
             title="RotorHazard Host IP"
+            ${rhLockAttr}
           />
         </div>
         <div class="net-conn-field is-port-num">
@@ -2808,6 +2822,7 @@ export class NetworkView extends Component {
             data-field="rh-port"
             aria-label="RotorHazard HTTP port"
             title="RotorHazard HTTP port"
+            ${rhLockAttr}
           />
         </div>`;
 
@@ -3189,20 +3204,16 @@ export class NetworkView extends Component {
       const actSig = `rh_usb|${totalConnCount}|${selectedConnSnap?.timerId ?? 0}|${this.rhUsbSelectedPort}|${this.rhBusy ? 1 : 0}|${this.rhUsbRefreshing ? 1 : 0}`;
       if (actSig !== this.lastExternalInlineSig) {
         this.lastExternalInlineSig = actSig;
-        const badgeHtml =
-          totalConnCount > 0
-            ? `<span class="badge"><span class="status-dot is-up" style="display:inline-block;margin-right:6px"></span>${totalConnCount} connected</span>`
-            : "";
         const mainBtnHtml =
           selectedAlreadyConnected && selectedConnSnap
             ? `<button
-                class="btn btn-ghost net-conn-btn"
+                class="btn net-conn-btn"
                 type="button"
                 data-action="rh-disconnect"
                 data-timer-id="${selectedConnSnap.timerId}"
                 ${this.rhBusy ? "disabled" : ""}
               >
-                ${icons.close(14)}<span>Disconnect</span>
+                ${icons.plugOff(14)}<span>Disconnect USB</span>
               </button>`
             : `<button
                 class="btn net-conn-btn"
@@ -3215,13 +3226,13 @@ export class NetworkView extends Component {
         const disconnectAllHtml =
           !selectedAlreadyConnected && totalConnCount > 0
             ? `<button
-                class="btn btn-ghost net-conn-btn"
+                class="btn net-conn-btn"
                 type="button"
                 data-action="network-disconnect-active"
                 ${this.rhBusy ? "disabled" : ""}
                 title="Disconnect active connection to switch timing system"
               >
-                ${icons.close(14)}<span>${totalConnCount > 1 ? "Disconnect all" : "Disconnect"}</span>
+                ${icons.plugOff(14)}<span>${totalConnCount > 1 ? "Disconnect all" : "Disconnect USB"}</span>
               </button>`
             : "";
         const refreshHtml = `
@@ -3235,7 +3246,7 @@ export class NetworkView extends Component {
           >
             ${icons.reset(14)}
           </button>`;
-        extActionsHost.innerHTML = `${badgeHtml}${mainBtnHtml}${disconnectAllHtml}${refreshHtml}`;
+        extActionsHost.innerHTML = `${mainBtnHtml}${disconnectAllHtml}${refreshHtml}`;
       }
     }
 

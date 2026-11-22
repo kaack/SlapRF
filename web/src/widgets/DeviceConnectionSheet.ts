@@ -38,40 +38,25 @@ export function openDeviceConnectionSheet(opts: DeviceConnectionSheetOptions): v
   const label = isOther
     ? "USB Device"
     : s?.label || cfg?.timerLabel || paired?.label || (isSpoke ? "Spoke" : "H1");
-  const roleLabel = isOther
-    ? "Unflashed"
-    : isSpoke
-      ? `Spoke${s?.slot ? ` · Slot ${s.slot}` : ""}`
-      : "Hub";
-  const transportLabel = isBle ? "Bluetooth" : "USB-C";
   const fp = (s?.fp || cfg?.fingerprint || paired?.fp || "").trim().toUpperCase();
-  const metaLine = `${roleLabel} · ${transportLabel}${fp ? ` · ${fp}` : ""}`;
+  const titleText = fp ? `${label} ${fp}` : label;
+  const descText = isBle
+    ? `Disconnect for now while keeping ${label} paired to this device, or forget ${label} so another phone, computer, or Raspberry Pi can pair.`
+    : `Close the USB-C connection to ${label}.`;
 
-  const actionsHtml = `
-    <div class="device-conn-actions">
-      <button type="button" class="device-conn-action" data-conn-action="disconnect">
-        <span class="device-conn-action-icon">${icons.plugOff(18)}</span>
-        <span class="device-conn-action-copy">
-          <strong>Disconnect</strong>
-          <span>${
-            isBle
-              ? `Disconnect for now while keeping ${esc(label)} paired to this device.`
-              : `Close the USB-C connection to ${esc(label)}.`
-          }</span>
-        </span>
-      </button>
-      ${
-        isBle
-          ? `<button type="button" class="device-conn-action is-forget" data-conn-action="forget">
-               <span class="device-conn-action-icon">${icons.trash(18)}</span>
-               <span class="device-conn-action-copy">
-                 <strong>Forget Device</strong>
-                 <span>Clear Bluetooth pairing on ${esc(label)} so another phone, computer, or Raspberry Pi can pair.</span>
-               </span>
-             </button>`
-          : ""
-      }
-    </div>`;
+  const actionsFootHtml = `
+    <button type="button" class="btn device-conn-btn" data-conn-action="disconnect">
+      ${icons.plugOff(14)}
+      <span>Disconnect</span>
+    </button>
+    ${
+      isBle
+        ? `<button type="button" class="btn device-conn-btn" data-conn-action="forget">
+             ${icons.trash(14)}
+             <span>Forget Device</span>
+           </button>`
+        : ""
+    }`;
 
   const mobile = isMobileViewport();
   const root = document.createElement("div");
@@ -90,17 +75,15 @@ export function openDeviceConnectionSheet(opts: DeviceConnectionSheetOptions): v
           </div>
           <div class="mre-sheet-title-row">
             <div class="device-conn-head-titles">
-              <strong>${esc(label)}</strong>
-              <span class="device-conn-head-meta">${esc(metaLine)}</span>
+              <strong>${esc(titleText)}</strong>
             </div>
-            <button type="button" class="btn btn-ghost btn-xs" data-conn-sheet-close aria-label="Close">
-              ${icons.close(15)}
-            </button>
           </div>
         </div>
-        <div class="mre-sheet-body">${actionsHtml}</div>
-        <div class="mre-sheet-foot">
-          <button type="button" class="btn btn-ghost device-conn-cancel-mobile" data-conn-sheet-close>Cancel</button>
+        <div class="mre-sheet-body">
+          <p class="device-conn-desc">${esc(descText)}</p>
+        </div>
+        <div class="mre-sheet-foot device-conn-foot is-mobile">
+          ${actionsFootHtml}
         </div>
       </div>`;
   } else {
@@ -112,21 +95,19 @@ export function openDeviceConnectionSheet(opts: DeviceConnectionSheetOptions): v
       <div class="slaprf-modal card device-conn-modal" role="document">
         <div class="slaprf-modal-head">
           <div class="slaprf-modal-title-row">
-            <span class="slaprf-modal-icon">
-              ${isBle ? icons.wifi(17) : icons.plug(17)}
-            </span>
             <div class="device-conn-head-titles">
-              <h3>${esc(label)}</h3>
-              <span class="device-conn-head-meta">${esc(metaLine)}</span>
+              <h3>${esc(titleText)}</h3>
             </div>
           </div>
           <button type="button" class="btn btn-ghost btn-xs" data-conn-sheet-close aria-label="Close">
             ${icons.close(15)}
           </button>
         </div>
-        <div class="slaprf-modal-body">${actionsHtml}</div>
-        <div class="slaprf-modal-foot">
-          <button type="button" class="btn btn-ghost" data-conn-sheet-close>Cancel</button>
+        <div class="slaprf-modal-body">
+          <p class="device-conn-desc">${esc(descText)}</p>
+        </div>
+        <div class="slaprf-modal-foot device-conn-foot">
+          ${actionsFootHtml}
         </div>
       </div>`;
   }
