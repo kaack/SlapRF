@@ -312,9 +312,8 @@ func TestClientServer_StandaloneDemoModeAndCrossOriginBackendConnect(t *testing.
 
 	// 2b. Verify timing systems (SlapRF, LapRF 8-Way, RotorHazard) switch inline on #/network in Simulator Demo Mode without auto-connecting!
 	h.NavigateSidebar("network")
-	if vis, _ := h.Page.Locator(`button[data-action="open-usb-slot-actions"]`).First().IsVisible(); vis {
-		_ = h.Page.Locator(`button[data-action="open-usb-slot-actions"]`).First().Click()
-		_ = h.Page.Locator(`button[data-action="modal-usb-disconnect"]`).First().Click()
+	if vis, _ := h.Page.Locator(`button[data-action="disconnect-usb-slot"]`).First().IsVisible(); vis {
+		_ = h.Page.Locator(`button[data-action="disconnect-usb-slot"]`).First().Click()
 	}
 	h.SelectCustomOption(`select[data-field="network-hardware-mode"]`, "LapRF 8-Way (Network)")
 	h.MustBeVisible(h.Page.Locator(`[data-slot="laprf-connection"]`).First(), "LapRF Ethernet connection card")

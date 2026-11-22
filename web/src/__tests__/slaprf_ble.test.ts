@@ -839,7 +839,7 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
         );
       }
     };
-    const netRoot = mountHtml(`<div id="net-mode-switch-host" style="width:960px"></div>`);
+    const netRoot = mountHtml(`<div id="net-mode-switch-host" style="width:1120px"></div>`);
     const netView = new NetworkView(netRoot.querySelector("#net-mode-switch-host")!, store, api);
 
     try {

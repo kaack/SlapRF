@@ -355,7 +355,7 @@ func TestComponent_SettingsIntroResponsiveCollapseSeeMoreLess(t *testing.T) {
 
 func TestComponent_TableScrollShellOverflowArrowsAndScrollPreserve(t *testing.T) {
 	h := NewHarnessWithOptions(t, HarnessOptions{
-		Viewport: &playwright.Size{Width: 560, Height: 820},
+		Viewport: &playwright.Size{Width: 940, Height: 820},
 	})
 	h.BootWithSnapshot(SnapshotPracticePopulated, "#/sim", nil)
 

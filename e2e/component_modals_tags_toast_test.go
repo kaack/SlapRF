@@ -316,7 +316,12 @@ func TestComponent_UsbPortPickerDialogSelectAndCancel(t *testing.T) {
 	h.MilestoneScreenshot("usb-port-connected-h1")
 
 	if err := usbBtn.Click(); err != nil {
-		t.Fatalf("click USB Disconnect: %v", err)
+		t.Fatalf("click USB connection options: %v", err)
+	}
+	disconnectSheetBtn := h.Page.Locator(`button[data-conn-action="disconnect"]`).First()
+	h.MustBeVisible(disconnectSheetBtn, "Device connection sheet Disconnect button")
+	if err := disconnectSheetBtn.Click(); err != nil {
+		t.Fatalf("click Disconnect in connection sheet: %v", err)
 	}
 	h.WaitUntil("TopBar USB button returns to Connect state", 5*time.Second, func() (bool, error) {
 		txt, err := usbBtn.InnerText()
