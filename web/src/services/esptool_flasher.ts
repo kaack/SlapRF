@@ -941,7 +941,7 @@ export async function flashXiaoC5WithEsptool(
     const written = parseSlaprfConfigBlock(image);
     emit("rebooting", 97, `Verifying ${label}…`);
     await sleep(1500);
-    const verified = await readIdentityWithRetry(port, 5).catch(() => null);
+    const verified = await readIdentityWithRetry(port, 4, true).catch(() => null);
     if (verified && written && verified.fingerprint && written.fingerprint) {
       if (verified.fingerprint.toUpperCase() !== written.fingerprint.toUpperCase()) {
         throw new Error(

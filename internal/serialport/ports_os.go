@@ -1,12 +1,9 @@
-//go:build !android && !js
+//go:build !linux && !android && !js
 
 package serialport
 
 import (
-	"errors"
 	"fmt"
-	"os"
-	"runtime"
 	"strings"
 	"time"
 
@@ -21,9 +18,13 @@ type osSerialPort struct {
 
 func (p *osSerialPort) Read(b []byte) (int, error)  { return p.port.Read(b) }
 func (p *osSerialPort) Write(b []byte) (int, error) { return p.port.Write(b) }
-func (p *osSerialPort) Close() error                { return p.port.Close() }
-func (p *osSerialPort) SetDTR(v bool) error         { return p.port.SetDTR(v) }
-func (p *osSerialPort) SetRTS(v bool) error         { return p.port.SetRTS(v) }
+func (p *osSerialPort) Close() error {
+	_ = p.port.ResetOutputBuffer()
+	_ = p.port.ResetInputBuffer()
+	return p.port.Close()
+}
+func (p *osSerialPort) SetDTR(v bool) error { return p.port.SetDTR(v) }
+func (p *osSerialPort) SetRTS(v bool) error { return p.port.SetRTS(v) }
 func (p *osSerialPort) SetReadTimeout(t time.Duration) error {
 	return p.port.SetReadTimeout(t)
 }
@@ -47,17 +48,7 @@ func openUSBSerialPort(portName string, baud int) (firmware.SerialPort, error) {
 	}
 	p, err := serial.Open(portName, mode)
 	if err != nil {
-		return nil, formatLinuxSerialOpenError(portName, err)
+		return nil, err
 	}
 	return &osSerialPort{port: p}, nil
-}
-
-func formatLinuxSerialOpenError(portName string, err error) error {
-	if err == nil || runtime.GOOS != "linux" {
-		return err
-	}
-	if errors.Is(err, os.ErrPermission) || strings.Contains(strings.ToLower(err.Error()), "permission denied") {
-		return fmt.Errorf("permission denied opening %s (run: sudo usermod -aG dialout $USER, then log out and back in)", portName)
-	}
-	return err
 }
