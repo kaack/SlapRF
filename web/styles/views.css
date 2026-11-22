@@ -6762,6 +6762,17 @@ html[data-theme="light"] .flasher-hub-link .segmented button.is-active {
 .net-device-card-body {
   padding: 0 18px 18px;
 }
+.net-device-card-body > .debug-subbox {
+  background: var(--surface-2);
+}
+.net-device-card-body .debug-bar-track {
+  background: var(--bg);
+  border-color: var(--border-strong);
+}
+html[data-theme="light"] .net-device-card-body .debug-bar-track {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+}
 .timer-color-dot {
   width: 11px;
   height: 11px;
