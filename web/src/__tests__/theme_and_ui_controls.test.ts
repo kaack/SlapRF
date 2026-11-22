@@ -689,5 +689,32 @@ describe("core/theme, Sidebar & TopBar theme toggler, icons, and neutral control
     expect(pilotSheet.style.translate).toBe("");
     expect(pilotSheet.style.transition).toBe("");
     window.__slaprfSetKbOffset!(0, 0, false);
+
+    // Verify pilot name and channel label inside Signals pilot pills share identical vertical bounds
+    const pillProbe = mountHtml(`
+      <div class="practice-workspace-page" data-mobile-practice-view="signals">
+        <div class="practice-picker-row">
+          <button class="pilot-chip is-active" style="--c:#a3e635">
+            <span class="dot"></span>
+            <span class="pilot-chip-name" id="test-chip-name">FAERRY</span>
+            <span class="pilot-chip-chan mono" id="test-chip-chan">R1</span>
+          </button>
+        </div>
+        <button class="races-filter-pill rc-sig-pilot-pill is-active" style="--c:#a3e635">
+          <span class="dot" style="--c:#a3e635"></span>
+          <span id="test-sig-name">FAERRY</span>
+          <span class="mono note" id="test-sig-chan">R1</span>
+        </button>
+      </div>
+    `);
+    const chipNameRect = pillProbe.querySelector<HTMLElement>("#test-chip-name")!.getBoundingClientRect();
+    const chipChanRect = pillProbe.querySelector<HTMLElement>("#test-chip-chan")!.getBoundingClientRect();
+    expect(Math.abs(chipNameRect.top - chipChanRect.top) < 0.5).toBe(true);
+    expect(Math.abs(chipNameRect.bottom - chipChanRect.bottom) < 0.5).toBe(true);
+
+    const sigNameRect = pillProbe.querySelector<HTMLElement>("#test-sig-name")!.getBoundingClientRect();
+    const sigChanRect = pillProbe.querySelector<HTMLElement>("#test-sig-chan")!.getBoundingClientRect();
+    expect(Math.abs(sigNameRect.top - sigChanRect.top) < 0.5).toBe(true);
+    expect(Math.abs(sigNameRect.bottom - sigChanRect.bottom) < 0.5).toBe(true);
   });
 });

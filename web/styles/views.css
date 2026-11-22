@@ -1673,11 +1673,20 @@ body.is-gate-dragging * {
   font-weight: 500;
   line-height: 1;
 }
+.pilot-chip-name,
+.pilot-chip-time,
+.pilot-chip-chan {
+  display: inline-flex;
+  align-items: center;
+}
 .pilot-chip-chan {
   display: none;
-  font-size: 11.5px;
-  font-weight: 600;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+  font-weight: 500;
   line-height: 1;
+  letter-spacing: 0.01em;
   color: var(--text-3);
 }
 .pilot-chip-chan:empty {
@@ -13744,6 +13753,17 @@ html[data-theme="light"] .rc-review-exec-row.is-selected-row .rc-exec-sel-strip 
   flex-shrink: 0;
   white-space: nowrap;
   gap: 6px;
+}
+.rc-sig-pilot-pill > span:not(.dot) {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+}
+.rc-sig-pilot-pill > .note {
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: inherit;
+  font-weight: 500;
 }
 .rc-sig-pilot-pill.is-active {
   border-color: color-mix(in srgb, var(--c, var(--accent)) 72%, var(--border-strong));
