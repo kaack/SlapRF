@@ -51,55 +51,66 @@ gh run download <RUN_ID> -n slaprf-e2e-report -D ./ci-e2e-report
 
 **Every release must include human-readable release notes in `docs/releases/vX.Y.Z.md` committed before creating the `vX.Y.Z` tag.** (GitHub's automatic `generate_release_notes` only lists merged PRs and produces empty release bodies when commits land directly on `main`.)
 
-### Write for Pilots & Race Directors, Not Compilers
-Release notes are read by humans deciding what changed and whether to update. A reader should be able to scan the entire release in **20 seconds**.
+### Write & Format for Humans (Visual Breathing Room, Zero Wall of Text)
+Release notes are read by pilots and race directors deciding what changed and whether to update. Make them visually inviting and effortless to scan in **15 to 20 seconds**:
 
-1. **Describe User Outcomes, Never Code Internals**:
+1. **Visual Layout & Hierarchy**:
+   - **Headline features table (`### ✨ What's New`)**: Present new features in a clean 2-column Markdown table (`| Feature | What Changed |`) so the eye scans left-to-right instead of wading through paragraphs.
+   - **Horizontal dividers (`---`)**: Separate every major section with `---` to create generous vertical breathing room on GitHub's release page.
+   - **Single-line bullets (`·` separator)**: Under `### 🛠️ Improvements` and `### 🩹 Bug Fixes`, format items as `- **Area** · Short plain-English update.` Keep each bullet tight (**8 to 16 words**) so it stays on **one line** on desktop without wrapping into a wall of text.
+   - **Styled GitHub callout (`> [!TIP]` or `> [!IMPORTANT]`)**: Put firmware compatibility and any brief API/upgrade note inside a GitHub alert card at the bottom (use `[!IMPORTANT]` only when reflashing or manual migration is required; otherwise `[!TIP]`).
+2. **Emoji Restraint (Section Headers Only)**:
+   - Use **at most one emoji per `###` section header** (`### ✨ What's New`, `### 🛠️ Improvements`, `### 🩹 Bug Fixes`).
+   - Put **zero emojis** inside table cells, bullet items, or callout boxes.
+3. **Describe User Outcomes, Never Code Internals**:
    - **Never include** TypeScript/Go/C symbol names (`AppStore`, `DebugView`, `sync.Once`, `LOAD_NO_CACHE`), CSS breakpoints (`<= 860px`), OS/D-Bus/Mach-O plumbing (`org.bluez.Adapter1`, `__TEXT,__info_plist`, `GPU compositor translate`), repo file paths, CI workflow names (`verify.yml`), or shell brace globs (`/v1/{usb,bluetooth}/*`).
-   - Explain what the user can now **do, see, or connect** in plain English using actual in-app screen and button names (**Practice**, **Races**, **Network**, **Signals**, **Simulator**, **Flasher**).
-2. **One Idea Per Bullet, Short & Scannable**:
-   - Keep each bullet to **1 short sentence (roughly 12 to 22 words)**.
-   - Never cram 3 or 4 sub-changes into a single 50-word compound bullet. Group tiny related UI polish tweaks into one clean summary sentence instead of listing every micro-commit.
-   - Aim for **5 to 12 bullets total** across the entire release.
-3. **Cut Noise & Redundancy**:
-   - Omit internal refactors, test/CI fixes, agent skill edits, and routine doc tweaks that require zero user action.
-   - Do **not** list attached binary filenames (`slaprf-windows-amd64.exe`, etc.); GitHub Releases already renders the **Assets** download table directly underneath the notes.
-   - Follow `technical-writing-ste`: active voice, zero em-dashes, and zero AI marketing puffery (`seamless`, `effortless`, `robust`, `next-generation`, `under the hood`).
+   - Explain what the user can now **do, see, or connect** using actual in-app screen and control names (**Practice**, **Races**, **Network**, **Signals**, **Simulator**, **Flasher**).
+4. **Cut Noise & Redundancy**:
+   - Aim for **3 to 5 table rows** and **3 to 5 bullets per list** (roll tiny related UI polish tweaks into one clean line; omit internal refactors, test/CI fixes, and routine doc edits).
+   - Do **not** list attached binary filenames (`slaprf-windows-amd64.exe`, etc.); GitHub Releases already renders the **Assets** download box directly underneath the notes.
+   - Follow `technical-writing-ste`: active voice, zero em-dashes (use `·`, colons, or parentheses), and zero AI marketing puffery (`seamless`, `effortless`, `robust`, `next-generation`, `under the hood`).
 
 ### Bad vs. Good Calibration
-- **Bad (developer commit dump)**:
+- **Bad (dense developer wall of text)**:
   > - **Android APK WebView cache**: Configured the Android `WebView` host to bypass stale HTTP disk cache entries (`LOAD_NO_CACHE`) so upgrading the APK always loads the newly embedded web bundle immediately.
   > - **Smooth Android IME keyboard drawers**: Animated mobile bottom-sheet drawers above the Android virtual keyboard using single-shot GPU compositor `translate` synchronization while keeping the bottom navigation bar fixed.
-- **Good (human release notes)**:
-  > - **Android app updates**: Updating the Android APK now loads the new UI immediately instead of serving cached files from the previous version.
-  > - **Smoother mobile navigation & drawers**: Swipe across tabs in bottom-bar order with natural flick physics, smooth drawer animations, and clean keyboard handling.
+- **Good (airy, single-line human release notes)**:
+  > - **Android** · App updates always load the fresh UI bundle immediately.
+  > - **Mobile tab swiping** · Bottom-bar swipe order, natural flick physics, and smooth **More** drawer animations.
 
 ### How to Audit Changes Before Writing
-Inspect commits since the previous tag (`${PREV}`) to understand what shipped, then translate user-visible changes into plain English:
+Inspect commits since the previous tag (`${PREV}`) to understand what shipped, then translate user-visible changes into the visual template below:
 ```bash
 PREV=$(git tag --sort=-v:refname | head -n 1)
 git log "${PREV}..HEAD" --no-merges --oneline
 ```
-Check upgrade impact so you can add a 1-line callout at the bottom when needed:
-- **Firmware compatibility**: State in one line whether existing XIAO ESP32-C5 timers work as-is or need reflashing.
-- **Breaking changes (CLI / storage / REST API)**: Only add a short 1-sentence note if external scripts, saved data, or startup flags require user action.
 
 ### Release Notes Template
-Include only sections (`### What's New`, `### Improvements`, `### Fixes`) that have items in the release:
+Include only sections (`### ✨ What's New`, `### 🛠️ Improvements`, `### 🩹 Bug Fixes`) that apply to the release, separated by `---`:
 
 ```markdown
-One plain-English sentence summarizing the most noticeable updates in this version.
+### ✨ What's New
 
-### What's New
-- **Short title**: Plain-English sentence describing what users can now do.
+| Feature | What Changed |
+| :--- | :--- |
+| **Short Feature Name** | One concise plain-English sentence on what users can now do. |
 
-### Improvements
-- **Short title**: Plain-English sentence describing what is faster, clearer, or easier to use.
+---
 
-### Fixes
-- **Short title**: Plain-English sentence describing the user-visible problem that was fixed.
+### 🛠️ Improvements
 
-> **Firmware compatibility**: Existing `v0.0.8` or newer XIAO ESP32-C5 timers work without reflashing.
+- **Area** · Short single-line description of what is faster, clearer, or easier to use.
+
+---
+
+### 🩹 Bug Fixes
+
+- **Area** · Short single-line description of the user-visible issue resolved.
+
+---
+
+> [!TIP]
+> **No reflash needed** · Existing `v0.0.8+` XIAO ESP32-C5 timers are 100% compatible with `vX.Y.Z`.
 
 **Full Changelog**: https://github.com/kaack/SlapRF/compare/vX.Y.W...vX.Y.Z
 ```

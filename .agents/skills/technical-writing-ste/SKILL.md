@@ -43,7 +43,7 @@ Never emit any of the following patterns in documentation, `README.md`, or UI co
    - **No restatement conclusions**: Do not end pages or sections with *"In summary, SlapRF provides a powerful way to..."*. Stop after the last technical step or fact.
    - **No artificial rule-of-three adjective chains** (for example *"fast, reliable, and intuitive"*).
 4. **Clean Formatting Over Decoration**:
-   - Do not put decorative emojis in Markdown headings, bullet lists, or comparison tables.
+   - Do not put decorative emojis in `README.md` or `docs-site/` headings, bullet lists, or comparison tables. (Exception: GitHub release notes in `docs/releases/vX.Y.Z.md` use one emoji per `###` section header per `ci-and-release`, with zero emojis inside table rows or bullet items.)
    - Prefer scannable 2-to-4 column Markdown tables for comparisons, LED states, CLI flags, and quick-start choices over walls of paragraphs.
 
 ---
