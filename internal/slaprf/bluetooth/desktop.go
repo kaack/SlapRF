@@ -25,7 +25,7 @@ const (
 	bleScanWindow       = 4 * time.Second
 	bleScanRefreshEvery = 8 * time.Second
 	bleSeenTTL          = 30 * time.Second
-	bleFirstListWait    = 1500 * time.Millisecond
+	bleFirstListWait    = 2200 * time.Millisecond
 	bleOpenScanTimeout  = 8 * time.Second
 	bleConnectTimeout   = 8 * time.Second
 	bleEnableRetryAfter = 30 * time.Second
@@ -74,6 +74,12 @@ func (c *bleDesktopConn) MaxWriteLen() int {
 }
 
 func (c *bleDesktopConn) NoteConnectedFingerprint(fpHex string) {
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return
+	}
 	fp, ok := ParseBLEPortName(BLEPortPrefix + fpHex)
 	if !ok {
 		return
@@ -102,7 +108,26 @@ func (c *bleDesktopConn) Close() error {
 	if runtime.GOOS == "linux" {
 		_ = c.tx.EnableNotifications(nil)
 	}
-	return c.dev.Disconnect()
+	err := c.dev.Disconnect()
+	if runtime.GOOS == "linux" {
+		addrStr := c.dev.Address.String()
+		addrUpper := strings.ToUpper(strings.TrimSpace(addrStr))
+		bleHost.mu.Lock()
+		adapterID := bleHost.adapterID
+		delete(bleHost.seen, c.fp)
+		if addrUpper != "" {
+			bleHost.dedupeSeenByAddrLocked("", addrUpper)
+		}
+		bleHost.mu.Unlock()
+		deadline := time.Now().Add(600 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			if !isBLEDeviceStillConnected(adapterID, addrStr) {
+				break
+			}
+			time.Sleep(40 * time.Millisecond)
+		}
+	}
+	return err
 }
 
 type bleDesktopHost struct {
@@ -240,7 +265,11 @@ func (h *bleDesktopHost) dedupeSeenByAddrLocked(keepFP, addrKey string) {
 func (h *bleDesktopHost) noteResolvedFP(c *bleDesktopConn, fp string, fpVal uint32) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	addrKey := strings.ToUpper(strings.TrimSpace(c.dev.Address.String()))
+	addrRaw := c.dev.Address.String()
+	if h.conns[addrRaw] != c {
+		return
+	}
+	addrKey := strings.ToUpper(strings.TrimSpace(addrRaw))
 	oldFP := c.fp
 	c.fp = fp
 	if addrKey != "" {
@@ -606,6 +635,12 @@ func bleOpenPortContext(
 			if !found && time.Since(scanStart) >= 600*time.Millisecond {
 				seen, found = h.lookupUnresolvedSingle()
 			}
+			if found && runtime.GOOS == "linux" && time.Since(scanStart) < 400*time.Millisecond {
+				if !sleepWithContext(ctx, 400*time.Millisecond-time.Since(scanStart)) {
+					h.stopScan()
+					return nil, slaprf.ErrConnectCancelled
+				}
+			}
 		}
 		if !found {
 			seen, found = h.lookupUnresolvedSingle()
@@ -669,7 +704,7 @@ func bleOpenPortContext(
 				h.mu.Unlock()
 				waitEnd := refreshSince.Add(900 * time.Millisecond)
 				for time.Now().Before(waitEnd) {
-					if refreshed, ok := h.lookup(fp); ok && refreshed.at.After(refreshSince) {
+					if refreshed, ok := h.lookup(fp); ok && refreshed.at.After(refreshSince) && time.Since(refreshSince) >= 450*time.Millisecond {
 						seen = refreshed
 						break
 					}
@@ -681,6 +716,9 @@ func bleOpenPortContext(
 						waitEnd = time.Time{}
 					case <-time.After(80 * time.Millisecond):
 					}
+				}
+				if refreshed, ok := h.lookup(fp); ok && refreshed.at.After(refreshSince) {
+					seen = refreshed
 				}
 				h.stopScan()
 				ensureBLEDiscoveryStopped(adapterID)
@@ -719,9 +757,6 @@ func bleOpenPortContext(
 			return nil, slaprf.ErrConnectCancelled
 		}
 		if err != nil {
-			if runtime.GOOS == "linux" {
-				cancelBLEPendingConnect(adapterID, seen.addr.String())
-			}
 			lastErr = fmt.Errorf("Bluetooth hub %s connect failed: %w", fp, err)
 			continue
 		}
