@@ -664,7 +664,50 @@ export class AppShell extends Component {
       }
     };
 
+    const canScrollInsideModalDialog = (target: EventTarget | null, modalBackdrop: HTMLElement): boolean => {
+      if (!(target instanceof Element)) return false;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement
+      ) {
+        return true;
+      }
+      const dialog = target.closest<HTMLElement>(
+        ".slaprf-modal, .confirm-modal, .modal-card, .pilot-dir-mobile-editor, .mobile-more-drawer-sheet, .device-conn-drawer-sheet"
+      );
+      if (!dialog || !modalBackdrop.contains(dialog)) {
+        return false;
+      }
+      let cur: HTMLElement | null = target instanceof HTMLElement ? target : target.parentElement;
+      while (cur && modalBackdrop.contains(cur)) {
+        if (cur.scrollHeight > cur.clientHeight + 1 || cur.scrollWidth > cur.clientWidth + 1) {
+          const st = window.getComputedStyle(cur);
+          const oy = st.overflowY;
+          const ox = st.overflowX;
+          if (
+            ((oy === "auto" || oy === "scroll") && cur.scrollHeight > cur.clientHeight + 1) ||
+            ((ox === "auto" || ox === "scroll") && cur.scrollWidth > cur.clientWidth + 1)
+          ) {
+            return true;
+          }
+        }
+        if (cur === dialog) break;
+        cur = cur.parentElement;
+      }
+      return false;
+    };
+
     const onWindowTouchMove = (e: TouchEvent) => {
+      const openModalBackdrop = document.querySelector<HTMLElement>(
+        ".slaprf-modal-backdrop:not([hidden]):not(.is-closing), .confirm-modal-backdrop:not([hidden]):not(.is-closing), .modal-backdrop:not([hidden]):not(.is-closing), .mobile-more-drawer-overlay:not([hidden]):not(.is-closing), .pilot-dir-mobile-drawer-overlay:not([hidden]):not(.is-closing), .practice-pilot-drawer-overlay:not([hidden]):not(.is-closing), .device-conn-drawer-overlay:not([hidden]):not(.is-closing)"
+      );
+      if (openModalBackdrop && !canScrollInsideModalDialog(e.target, openModalBackdrop)) {
+        if (e.cancelable) {
+          e.preventDefault();
+        }
+        return;
+      }
       if (e.touches.length !== 2 || !twoFingerScrollState) {
         return;
       }

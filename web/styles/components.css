@@ -1280,7 +1280,47 @@ select.input.is-custom-select-open {
     transform: translate3d(0, 12px, 0) scale(0.965);
   }
 }
-.confirm-modal-backdrop {
+html:has(
+  .slaprf-modal-backdrop:not([hidden]):not(.is-closing),
+  .confirm-modal-backdrop:not([hidden]):not(.is-closing),
+  .modal-backdrop:not([hidden]):not(.is-closing),
+  .mobile-more-drawer-overlay:not([hidden]):not(.is-closing),
+  .pilot-dir-mobile-drawer-overlay:not([hidden]):not(.is-closing),
+  .practice-pilot-drawer-overlay:not([hidden]):not(.is-closing),
+  .device-conn-drawer-overlay:not([hidden]):not(.is-closing)
+),
+body:has(
+  .slaprf-modal-backdrop:not([hidden]):not(.is-closing),
+  .confirm-modal-backdrop:not([hidden]):not(.is-closing),
+  .modal-backdrop:not([hidden]):not(.is-closing),
+  .mobile-more-drawer-overlay:not([hidden]):not(.is-closing),
+  .pilot-dir-mobile-drawer-overlay:not([hidden]):not(.is-closing),
+  .practice-pilot-drawer-overlay:not([hidden]):not(.is-closing),
+  .device-conn-drawer-overlay:not([hidden]):not(.is-closing)
+),
+body:has(
+  .slaprf-modal-backdrop:not([hidden]):not(.is-closing),
+  .confirm-modal-backdrop:not([hidden]):not(.is-closing),
+  .modal-backdrop:not([hidden]):not(.is-closing),
+  .mobile-more-drawer-overlay:not([hidden]):not(.is-closing),
+  .pilot-dir-mobile-drawer-overlay:not([hidden]):not(.is-closing),
+  .practice-pilot-drawer-overlay:not([hidden]):not(.is-closing),
+  .device-conn-drawer-overlay:not([hidden]):not(.is-closing)
+) .app,
+body:has(
+  .slaprf-modal-backdrop:not([hidden]):not(.is-closing),
+  .confirm-modal-backdrop:not([hidden]):not(.is-closing),
+  .modal-backdrop:not([hidden]):not(.is-closing),
+  .mobile-more-drawer-overlay:not([hidden]):not(.is-closing),
+  .pilot-dir-mobile-drawer-overlay:not([hidden]):not(.is-closing),
+  .practice-pilot-drawer-overlay:not([hidden]):not(.is-closing),
+  .device-conn-drawer-overlay:not([hidden]):not(.is-closing)
+) .main {
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+}
+.confirm-modal-backdrop,
+.modal-backdrop {
   position: fixed;
   inset: 0;
   z-index: 9999;
@@ -1290,17 +1330,23 @@ select.input.is-custom-select-open {
   padding: 16px;
   background: rgba(6, 7, 10, 0.65);
   backdrop-filter: blur(3px);
+  overscroll-behavior: none;
+  touch-action: none;
   animation: slaprf-modal-backdrop-in 0.22s ease both;
 }
-.confirm-modal-backdrop.is-closing {
+.confirm-modal-backdrop.is-closing,
+.modal-backdrop.is-closing {
   pointer-events: none;
   animation: slaprf-modal-backdrop-out 0.19s ease forwards;
 }
-.confirm-modal {
+.confirm-modal,
+.modal-card {
   width: 92vw;
   max-width: 380px;
   max-height: calc(100vh - 32px);
   overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   overflow-wrap: anywhere;
   word-break: break-word;
   padding: 16px;

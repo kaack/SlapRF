@@ -186,12 +186,22 @@ export function scrollOuterPageBy(deltaY: number, originTarget?: EventTarget | n
   const el = originTarget instanceof Element ? originTarget : null;
   if (el) {
     const modalContainer = el.closest<HTMLElement>(
-      ".lap-editor-card, .slaprf-modal-body, .modal-body, .slaprf-modal-backdrop, .modal-backdrop"
+      ".lap-editor-card, .slaprf-modal-body, .modal-body, .confirm-modal, .slaprf-modal, .slaprf-modal-backdrop, .confirm-modal-backdrop, .modal-backdrop"
     );
-    if (modalContainer && modalContainer.scrollHeight > modalContainer.clientHeight + 2) {
-      modalContainer.scrollTop += deltaY;
+    if (modalContainer) {
+      if (modalContainer.scrollHeight > modalContainer.clientHeight + 2) {
+        modalContainer.scrollTop += deltaY;
+      }
       return;
     }
+  }
+  if (
+    typeof document !== "undefined" &&
+    document.querySelector(
+      ".slaprf-modal-backdrop:not([hidden]), .confirm-modal-backdrop:not([hidden]), .modal-backdrop:not([hidden])"
+    )
+  ) {
+    return;
   }
   if (typeof window !== "undefined" && typeof window.scrollBy === "function") {
     window.scrollBy(0, deltaY);

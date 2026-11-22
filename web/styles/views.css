@@ -3560,6 +3560,18 @@ html[data-theme="light"] .scope-tune-custom-icon {
     padding: 0 12px;
     box-sizing: border-box;
   }
+  .rc-signals-chart-host,
+  .rc-signals-chart-inner,
+  .scope-root {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .scope-graph-box {
+    flex: 0 0 auto;
+  }
   .scope-root > .scope-canvas {
     flex: 0 0 auto;
   }
@@ -3567,12 +3579,24 @@ html[data-theme="light"] .scope-tune-custom-icon {
     display: none !important;
   }
   .scope-root > .channel-legend {
+    flex: 1 1 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: 6px;
     margin-top: 10px;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scope-root > .channel-legend::-webkit-scrollbar {
+    display: none;
   }
   .scope-root > .channel-legend > .channel {
+    flex: 0 0 40px;
     width: 100%;
     height: 40px;
     min-height: 40px;
@@ -10184,6 +10208,8 @@ tr.is-away-pilot td {
   box-sizing: border-box;
   background: rgba(5, 7, 12, 0.72);
   backdrop-filter: blur(4px);
+  overscroll-behavior: none;
+  touch-action: none;
   animation: slaprf-modal-backdrop-in 0.22s ease both;
 }
 .slaprf-modal-backdrop.is-closing {
@@ -10197,6 +10223,8 @@ tr.is-away-pilot td {
   min-width: 0;
   box-sizing: border-box;
   overflow-x: hidden;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   padding: 18px 20px;
   display: flex;
   flex-direction: column;
@@ -21732,7 +21760,7 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
     background: transparent !important;
     border: 0 !important;
     box-shadow: none !important;
-    overflow: visible;
+    overflow: hidden;
     gap: 10px;
   }
   .races-page .rc-canvas-panel.rc-page-card.is-signals-panel > .rc-mobile-signals-picker-row {
@@ -21773,14 +21801,16 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
     cursor: grabbing;
     user-select: none;
   }
-  .races-page .rc-canvas-panel.rc-page-card.is-signals-panel > .rc-panel-body.is-signals-body {
+  .races-page .rc-canvas-panel.rc-page-card.is-signals-panel > .rc-panel-body.is-signals-body,
+  .races-page .rc-canvas-panel.rc-page-card.is-signals-panel .rc-panel-body.is-signals-body {
     flex: 1 1 0;
     min-height: 0;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    overflow-y: auto;
-    overscroll-behavior-y: contain;
+    background: transparent !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden !important;
   }
   .races-page .rc-canvas-panel.rc-page-card.is-signals-panel > .rc-panel-body.is-signals-body > .rc-signals-pilot-wrap {
     display: none !important;
@@ -22325,8 +22355,9 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
     flex: 1 1 0;
     min-height: 0;
     padding: 0 !important;
-    overflow-y: auto;
-    overscroll-behavior-y: contain;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden !important;
   }
 
   .races-page .rc-canvas-panel.is-signals-panel,
