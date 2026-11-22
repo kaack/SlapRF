@@ -18,6 +18,7 @@ SlapRF uses six workflows in `.github/workflows/`:
 | `docs.yml` | Push to `main` touching `docs-site/**`, `workflow_dispatch` | Fast (~35s) docs-only build (`cmd/build-docs`) updating only `/docs/docs/` on the `github-page` branch (`https://slaprf.app/docs/`). |
 | `pages.yml` | Push to `main`, `v*` tags, `workflow_dispatch` | Full gated deployment (`verify` + `firmware` -> `cmd/build-web`) to the `github-page` branch (`https://slaprf.app` + `/docs/`). |
 | `release.yml` | Push `v*` tag, `workflow_dispatch` | Runs `verify` + `firmware` + `web_bundle`, builds 5 SlapRF Portable binaries (`ubuntu-latest` `CGO_ENABLED=0` for Windows/Linux; `macos-latest` `CGO_ENABLED=1` with `CoreBluetooth` + `otool` verification for `darwin/arm64` & `darwin/amd64`) + signed `slaprf-android-arm64.apk`, and publishes the GitHub Release using `docs/releases/<tag>.md`. |
+| `release-notes.yml` | Push to `main` touching `docs/releases/v*.md`, `workflow_dispatch` | Fast (~10s) sync that updates the body of an already-published GitHub Release whenever `docs/releases/vX.Y.Z.md` is edited on `main`, without rebuilding any binaries. |
 | `pr-report.yml` | Completion of `Verify` on PRs | Posts/updates the Playwright E2E summary comment on pull requests. |
 
 ---
@@ -48,44 +49,57 @@ gh run download <RUN_ID> -n slaprf-e2e-report -D ./ci-e2e-report
 
 ## 2. Authoring Release Notes (`docs/releases/vX.Y.Z.md`)
 
-**Every release must include structured release notes in `docs/releases/vX.Y.Z.md` committed before creating the `vX.Y.Z` tag.** (GitHub's automatic `generate_release_notes` only lists merged PRs and produces empty release bodies when commits land directly on `main`.)
+**Every release must include human-readable release notes in `docs/releases/vX.Y.Z.md` committed before creating the `vX.Y.Z` tag.** (GitHub's automatic `generate_release_notes` only lists merged PRs and produces empty release bodies when commits land directly on `main`.)
 
-### How to Audit Changes Before Writing Notes
-Do not just copy raw commit subject lines. Inspect both the commit log and the actual diffs across user-facing and integration boundaries since the previous tag (`${PREV}`):
+### Write for Pilots & Race Directors, Not Compilers
+Release notes are read by humans deciding what changed and whether to update. A reader should be able to scan the entire release in **20 seconds**.
+
+1. **Describe User Outcomes, Never Code Internals**:
+   - **Never include** TypeScript/Go/C symbol names (`AppStore`, `DebugView`, `sync.Once`, `LOAD_NO_CACHE`), CSS breakpoints (`<= 860px`), OS/D-Bus/Mach-O plumbing (`org.bluez.Adapter1`, `__TEXT,__info_plist`, `GPU compositor translate`), repo file paths, CI workflow names (`verify.yml`), or shell brace globs (`/v1/{usb,bluetooth}/*`).
+   - Explain what the user can now **do, see, or connect** in plain English using actual in-app screen and button names (**Practice**, **Races**, **Network**, **Signals**, **Simulator**, **Flasher**).
+2. **One Idea Per Bullet, Short & Scannable**:
+   - Keep each bullet to **1 short sentence (roughly 12 to 22 words)**.
+   - Never cram 3 or 4 sub-changes into a single 50-word compound bullet. Group tiny related UI polish tweaks into one clean summary sentence instead of listing every micro-commit.
+   - Aim for **5 to 12 bullets total** across the entire release.
+3. **Cut Noise & Redundancy**:
+   - Omit internal refactors, test/CI fixes, agent skill edits, and routine doc tweaks that require zero user action.
+   - Do **not** list attached binary filenames (`slaprf-windows-amd64.exe`, etc.); GitHub Releases already renders the **Assets** download table directly underneath the notes.
+   - Follow `technical-writing-ste`: active voice, zero em-dashes, and zero AI marketing puffery (`seamless`, `effortless`, `robust`, `next-generation`, `under the hood`).
+
+### Bad vs. Good Calibration
+- **Bad (developer commit dump)**:
+  > - **Android APK WebView cache**: Configured the Android `WebView` host to bypass stale HTTP disk cache entries (`LOAD_NO_CACHE`) so upgrading the APK always loads the newly embedded web bundle immediately.
+  > - **Smooth Android IME keyboard drawers**: Animated mobile bottom-sheet drawers above the Android virtual keyboard using single-shot GPU compositor `translate` synchronization while keeping the bottom navigation bar fixed.
+- **Good (human release notes)**:
+  > - **Android app updates**: Updating the Android APK now loads the new UI immediately instead of serving cached files from the previous version.
+  > - **Smoother mobile navigation & drawers**: Swipe across tabs in bottom-bar order with natural flick physics, smooth drawer animations, and clean keyboard handling.
+
+### How to Audit Changes Before Writing
+Inspect commits since the previous tag (`${PREV}`) to understand what shipped, then translate user-visible changes into plain English:
 ```bash
 PREV=$(git tag --sort=-v:refname | head -n 1)
 git log "${PREV}..HEAD" --no-merges --oneline
-git diff --stat "${PREV}..HEAD" -- internal/api/ docs-site/static/specs/ firmware/ cmd/ web/src/
 ```
-Explicitly check all **4 Breaking-Change & Upgrade Boundaries**:
-1. **Firmware compatibility (`firmware/`, `internal/firmware/`, `WIRE_PROTO_VER`)**: State clearly whether existing field timers require reflashing or remain compatible without reflashing.
-2. **REST & WebSocket API (`internal/api/`, `openapi.yaml`, `asyncapi.yaml`)**: Call out any renamed/removed routes, changed payload fields, or new endpoints.
-3. **Storage & backup format (`internal/storage/`, `engine_persistence.ts`)**: Note any database migrations or export/import changes.
-4. **CLI flags, ports & defaults (`cmd/slaprf`, `:8080`, `:5403`)**: Flag any changed startup flags or network port defaults.
+Check upgrade impact so you can add a 1-line callout at the bottom when needed:
+- **Firmware compatibility**: State in one line whether existing XIAO ESP32-C5 timers work as-is or need reflashing.
+- **Breaking changes (CLI / storage / REST API)**: Only add a short 1-sentence note if external scripts, saved data, or startup flags require user action.
 
-### Release Notes Template & Style
-Read and follow the `technical-writing-ste` skill (active voice, concrete technical facts and units, zero AI slop, zero em-dashes). Group user-relevant changes by impact (omit internal `[skip ci]` agent-config chores unless user-facing) and include only sections that apply:
+### Release Notes Template
+Include only sections (`### What's New`, `### Improvements`, `### Fixes`) that have items in the release:
 
 ```markdown
-## Highlights
-One or two crisp sentences summarizing the headline changes in this release.
+One plain-English sentence summarizing the most noticeable updates in this version.
 
-## Breaking Changes
-- Omit this section completely when there are no breaking changes.
-- When present, state what changed and the exact migration action required.
+### What's New
+- **Short title**: Plain-English sentence describing what users can now do.
 
-## New Features
-- **Feature area**: Concrete description of what users or integrators can now do.
+### Improvements
+- **Short title**: Plain-English sentence describing what is faster, clearer, or easier to use.
 
-## Improvements
-- **Subsystem**: Concrete UX, latency, build, or documentation improvements.
+### Fixes
+- **Short title**: Plain-English sentence describing the user-visible problem that was fixed.
 
-## Bug Fixes
-- **Component**: Exact user-visible symptom resolved and affected platforms/modes.
-
-## Downloads & Firmware Compatibility
-- **App binaries**: Single-file executables for Windows, macOS (`arm64` / `amd64`), Linux (`amd64` / `arm64`), and Android (`arm64-v8a` APK).
-- **XIAO ESP32-C5 firmware**: `slaprf-xiao-c5.bin` (USB Hub & Spokes) and `slaprf-xiao-c5-ble.bin` (Bluetooth Hub), wire protocol `v2` (state whether existing timers need reflashing).
+> **Firmware compatibility**: Existing `v0.0.8` or newer XIAO ESP32-C5 timers work without reflashing.
 
 **Full Changelog**: https://github.com/kaack/SlapRF/compare/vX.Y.W...vX.Y.Z
 ```
@@ -119,4 +133,4 @@ One or two crisp sentences summarizing the headline changes in this release.
    gh release view vX.Y.Z
    gh release view vX.Y.Z --json assets --jq '.assets[].name'
    ```
-   *(If you ever need to amend release notes on an already-published release without re-running builds, update `docs/releases/vX.Y.Z.md` and run `gh release edit vX.Y.Z --notes-file docs/releases/vX.Y.Z.md`.)*
+   *(If you ever need to amend release notes on an already-published release without re-running builds, edit `docs/releases/vX.Y.Z.md` and push to `main`: `release-notes.yml` updates the live GitHub Release body automatically in ~10s.)*

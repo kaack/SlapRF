@@ -1,0 +1,66 @@
+name: Sync Release Notes
+
+# Updates the body of any already-published GitHub Release in ~10s whenever its
+# Markdown file in docs/releases/vX.Y.Z.md is edited on main (without rebuilding
+# firmware, desktop binaries, or Android APKs). If the tag has not been released
+# yet (for example, committing docs/releases/vX.Y.Z.md right before tagging),
+# this workflow exits 0 cleanly.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/releases/v*.md"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Specific release tag to sync (e.g. v0.0.13); leave empty to sync changed files"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  sync-notes:
+    name: Sync GitHub Release Notes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Update published release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          FILES=()
+          if [ -n "${INPUT_TAG}" ]; then
+            FILES+=("docs/releases/${INPUT_TAG}.md")
+          else
+            while IFS= read -r f; do
+              [ -n "$f" ] && FILES+=("$f")
+            done < <(git diff --name-only HEAD~1..HEAD -- 'docs/releases/v*.md' || true)
+          fi
+
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "No release note files changed."
+            exit 0
+          fi
+
+          for f in "${FILES[@]}"; do
+            if [ ! -s "$f" ]; then
+              continue
+            fi
+            TAG="$(basename "$f" .md)"
+            if gh release view "${TAG}" >/dev/null 2>&1; then
+              echo "Updating published GitHub Release notes for ${TAG} from ${f}..."
+              gh release edit "${TAG}" --notes-file "${f}"
+            else
+              echo "Release ${TAG} is not published yet; skipping sync."
+            fi
+          done
