@@ -9,14 +9,13 @@ Reference guide to the screens, live signal scope controls, and crossing detecti
 
 | Screen | Purpose |
 | :--- | :--- |
-| Practice | Open or timed practice sessions with live lap tables, **Signals** (5.8 GHz RSSI scope and calibration), and **Trends** (progression and split consistency charts). |
-| Races | Event creation, MultiGP import, visual Format Canvas brackets, live Race Control horns, and Marshal Review waveforms. |
+| Practice | Practice session directory and workspace (`Pilots`, **Track**, `Overview`, `Laps`, `Trends`, `Signals`, and `Analytics`). Each session stores its own track layout and timing rules. |
+| Races | Event creation, MultiGP import, per-race **Track** & timing rules editor, visual Format Canvas brackets, live Marshal / Race Control horns, and Review waveforms. |
 | Pilots | Pilot directory with callsigns, phonetic TTS spellings, and default 5.8 GHz channels (`Raceband`, `Fatshark`, `Boscam`, `IMD6`). |
-| Track | Visual course loop editor for ordering active gate timers (`H1`, `T1`-`T6`) and marking the Start / Finish gate. |
 | Network | Timing system selector (`SlapRF (USB)`, `SlapRF (Bluetooth)`, `LapRF 8-Way (Network)`, `LapRF 8-Way (USB)`, `RotorHazard (Network)`, `RotorHazard (USB)`), connection manager, topology graph, and live RSSI monitor. |
 | Flasher | Built-in wizard (on Android and desktop) for flashing Hub and Spoke firmware, inspecting board configuration, or factory-erasing boards over USB-C. |
 | Simulator | Multi-pilot 5.8 GHz physics track simulator for testing track layouts, threshold behavior, and race brackets without hardware. |
-| Settings | Datasource (Demo vs. SlapRF Server and Simulator toggle), MultiGP API key, Timing rules, Announcer voice & horn levels, LapRF 8-Way emulator, Authentication, and `.json` database backup/restore. |
+| Settings | Datasource (Demo vs. SlapRF Server and Simulator toggle), MultiGP API key, Announcer voice & horn levels, LapRF 8-Way emulator, Authentication, and `.json` database backup/restore. |
 
 ## Signals Controls
 
@@ -32,7 +31,7 @@ Available inside **Practice -> Signals** and **Race -> Signals**:
 
 ## Crossing Rules
 
-SlapRF runs a hysteresis detector (`Enter dBm` -> peak tracking -> `Exit dBm`) governed by global rules that can also be overridden per gate in **Fine-tune**:
+SlapRF runs a hysteresis detector (`Enter dBm` -> peak tracking -> `Exit dBm`) governed by per-track timing rules configured in each Practice session or Race **Track** tab, with optional per-timer and per-pilot-at-timer overrides in **Track** and **Signals -> Fine-tune**:
 
 | Parameter | Role |
 | :--- | :--- |

@@ -71,7 +71,7 @@ Open **Network** in the native SlapRF desktop or Android app and select your har
 
 ## Multi-Unit Courses & Section Splits
 
-Most clubs place one 8-channel RotorHazard or LapRF 8-Way timer at the Start / Finish gate. If you connect two or more RotorHazard or LapRF timers at once, open **Track** and drag each unit onto the course loop in flight order to record `S1`, `S2`, and `S3` section splits. For cable-free split gates across a field without running LAN cables or Raspberry Pis to each gate, use battery-powered [SlapRF DIY Timers](../hardware/parts-and-assembly).
+Most clubs place one 8-channel RotorHazard or LapRF 8-Way timer at the Start / Finish gate. If you connect two or more RotorHazard or LapRF timers at once, open your **Practice** session or **Race** workspace, select the **Track** tab, and drag each unit onto the track line in flight order to record `S1`, `S2`, and `S3` section splits. For cable-free split gates across a field without running LAN cables or Raspberry Pis to each gate, use battery-powered [SlapRF DIY Timers](../hardware/parts-and-assembly).
 
 ## LapRF 8-Way Emulator
 

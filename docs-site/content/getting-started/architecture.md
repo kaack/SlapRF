@@ -41,7 +41,7 @@ A SlapRF track uses one Hub timer (`H1`) and up to 6 optional Spoke timers (`T1`
   {{< tab name="USB Mode" >}}
   USB Mode (`slaprf-xiao-c5.bin`) connects the Hub directly to your laptop or Android phone over a USB-C data cable for minimum transport latency.
 
-  The host USB port powers `H1` directly with no battery required at the bench. Battery-powered Spoke timers (`T1` to `T6`) sit at the track gates, including Start / Finish. If your USB cable reaches the Start / Finish gate, you can also place `H1` directly on the Start / Finish gate in the **Track** editor.
+  The host USB port powers `H1` directly with no battery required at the bench. Battery-powered Spoke timers (`T1` to `T6`) sit at the track gates, including Start / Finish. If your USB cable reaches the Start / Finish gate, you can also place `H1` directly on the Start / Finish gate in your practice session or race **Track** tab.
 
   {{< themed-image light="/images/slaprf-setup.jpg" dark="/images/slaprf-setup-dark.jpg" alt="SlapRF USB Mode" >}}
   {{< /tab >}}

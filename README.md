@@ -66,8 +66,8 @@ SlapRF has two parts. You can use them together or separately:
 | <a href="docs/slaprf-bracket-2x-dark.png?raw=1#gh-dark-mode-only"><img src="docs/slaprf-bracket-2x-dark.png#gh-dark-mode-only" alt="Tournament Bracket Canvas" /></a><a href="docs/slaprf-bracket-2x-light.png?raw=1#gh-light-mode-only"><img src="docs/slaprf-bracket-2x-light.png#gh-light-mode-only" alt="Tournament Bracket Canvas" /></a> | <a href="docs/slaprf-cockpit-2x-dark.png?raw=1#gh-dark-mode-only"><img src="docs/slaprf-cockpit-2x-dark.png#gh-dark-mode-only" alt="Race Control Cockpit" /></a><a href="docs/slaprf-cockpit-2x-light.png?raw=1#gh-light-mode-only"><img src="docs/slaprf-cockpit-2x-light.png#gh-light-mode-only" alt="Race Control Cockpit" /></a> |
 | Build qualifying, redemption, and finals stages on the bracket graph. | Run start horns, record holeshots and laps, and monitor 50 Hz RSSI. |
 
-- **Practice and Section Splits**: Record best laps, 3-lap and 5-lap averages, consistency spread, and `S1`/`S2`/`S3` section deltas with voice callouts.
-- **Tournament Formats**: Run Controlled Qualifying, Double-Elimination brackets, Chase-the-Ace finals, and Open Qualifier (ZippyQ) queues.
+- **Practice and Section Splits**: Configure an independent track layout and timing rules per session, and record best laps, 3-lap and 5-lap averages, consistency spread, and `S1`/`S2`/`S3` section deltas with voice callouts.
+- **Tournament Formats**: Run Controlled Qualifying, Double-Elimination brackets, Chase-the-Ace finals, and Open Qualifier (ZippyQ) queues, each with its own race track and timing rules.
 - **Waveform Review**: Inspect recorded `5.8 GHz` RSSI pass curves after a heat. Add missed crossings, remove false triggers, or apply time penalties.
 - **MultiGP RaceSync**: Import chapters, pilot rosters, and schedules from MultiGP. Send heat results and event standings back to MultiGP.
 - **External Software and APIs**: Stream crossings over the LapRF 8-Way TCP (`:5403`) server, the **[REST API (OpenAPI 3.1)](https://slaprf.app/docs/reference/api-reference/rest/)**, and the **[WebSocket Stream API (AsyncAPI 3.0)](https://slaprf.app/docs/reference/api-reference/async/)**.

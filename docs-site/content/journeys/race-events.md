@@ -14,6 +14,15 @@ Open **Races** from the main navigation to start a new event:
 | Built-in Templates | Start from Qualifying + Finals, Double Elimination, Single Elimination, Open Qualifier, Points Mains, Chase the Ace, or a Blank Custom Format. |
 | MultiGP Import | Add your chapter API key in **Settings -> MultiGP** to pull registered pilots, VTX channels, and event rounds directly from MultiGP. |
 
+## Track & Timing Rules
+
+Inside an event workspace, open **Track** to configure the course for that specific race:
+
+- Drag active timers (`H1`, `T1`-`T6`, RotorHazard, or LapRF units) onto the track line in flight order and click the checkered flag under the Start / Finish gate.
+- Set track-wide **Timing rules** (`Min lap time`, `Max lap time`, `Min crossing time`, and `Beep on crossing`), or select an individual timer chip to override rules for a single gate.
+
+Each race stores its own track and timing rules independently from practice sessions and other races. When a race is completed or scrapped, its recorded track and timing rules lock read-only.
+
 ## Format & Heats
 
 Inside an event workspace, open **Setup** to configure stages, advancement rules, and heat lineups using either editor:

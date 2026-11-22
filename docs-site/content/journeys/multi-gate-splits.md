@@ -32,11 +32,11 @@ In Bluetooth Hub mode, place `H1` at Start / Finish and place Spokes (`T1`, `T2`
 
 ### Set Gate Order
 
-Open **Network** to confirm `H1` and all powered Spokes report `Online`. Open **Track**, drag your active timers onto the loop in exact flight order, and click the checkered flag on your Start / Finish gate.
+Open **Network** to confirm `H1` and all powered Spokes report `Online`. Open **Practice** (or **Races**), select your session or event, and open its **Track** tab. Drag your active timers onto the track line in flight order and click the checkered flag under your Start / Finish gate. Each session and race saves its own gate order and timing rules independently.
 
 ### Calibrate All
 
-Start a **Practice** session and fly 2 to 3 complete laps through every gate. Open **Signals**, keep `All timers` selected, and tap **Calibrate all** so SlapRF computes tailored Enter and Exit thresholds for each gate at once.
+Tap **Start** in your **Practice** session and fly 2 to 3 complete laps through every gate. Open **Signals**, keep `All timers` selected, and tap **Calibrate all** so SlapRF computes Enter and Exit thresholds for each gate on that track at once.
 
 {{% /steps %}}
 

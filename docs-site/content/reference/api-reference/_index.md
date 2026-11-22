@@ -9,7 +9,7 @@ SlapRF Portable and the SlapRF Android LAN host expose a versioned HTTP REST API
 
 ## REST API (OpenAPI 3.1.0)
 
-Resource-oriented `/v1/*` endpoints across system state, pilots, track gates, practice sessions, race sessions, hardware links, simulator controls, and storage.
+Resource-oriented `/v1/*` endpoints across system state, pilots, hardware timers, practice sessions (including per-session tracks and timing rules), race sessions (including per-race tracks and timing rules), hardware links, simulator controls, and storage.
 
 - **Interactive Reference**: [Browse REST API Docs](/docs/reference/api-reference/rest/)
 - **OpenAPI Specification**: [Download openapi.yaml](/docs/specs/openapi.yaml)

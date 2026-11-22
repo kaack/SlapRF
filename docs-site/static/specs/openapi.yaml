@@ -15,8 +15,8 @@ info:
       - `DELETE`: Remove an item from a collection (`200 OK`, `404 Not Found`, `409 Conflict`).
       - Unsupported HTTP methods return `405 Method Not Allowed` with an `Allow` header.
     - **Singletons & `:action` Custom Methods (AIP-136 / AIP-156)**:
-      - Singletons (`/v1/storage`, `/v1/track`, `/v1/timing/rules`, `/v1/timing/arm`, `/v1/timing/mode`, `/v1/hardware/mode`, `/v1/sim`, `/v1/laprf-emulator`, `/v1/auth/config`) always exist and never accept `DELETE`.
-      - Imperative operations use `POST ...:<action>` (for example, `/v1/storage:reset`, `/v1/track:reset`, `/v1/practice/sessions/{sessionId}:start`, and `/v1/race/sessions/{sessionId}:pause`).
+      - Singletons (`/v1/storage`, `/v1/timing/arm`, `/v1/timing/mode`, `/v1/hardware/mode`, `/v1/sim`, `/v1/laprf-emulator`, `/v1/auth/config`, and scoped `.../track` / `.../track/rules`) always exist and never accept `DELETE`.
+      - Imperative operations use `POST ...:<action>` (for example, `/v1/storage:reset`, `/v1/practice/sessions/{sessionId}/track:reset`, `/v1/practice/sessions/{sessionId}:start`, and `/v1/race/sessions/{sessionId}:pause`).
   license:
     name: MIT
     url: https://github.com/kaack/SlapRF
@@ -39,9 +39,8 @@ tags:
 
   - name: Timing Singletons
     description: |
-      Singleton resources controlling the active timing engine's detection filters, operating mode, and hardware backend.
-      - **Hysteresis & Lap Filters (`/v1/timing/rules`)**: Configure `minCrossingMs`, `minLapSeconds`, `maxLapSeconds`, `confirmationWindowMs`, and holeshot rules.
-      - **Arming, Operating Mode & Hardware Mode (`/v1/timing/arm`, `/v1/timing/mode`, `/v1/hardware/mode`)**: Arm or disarm global lap recording, switch between `practice` and `race` modes, and select the active timing hardware pipeline (`slaprf`, `slaprf_ble`, `laprf`, `laprf_usb`, `rotorhazard`, or `rotorhazard_usb`).
+      Singleton resources controlling the active timing engine's arming state, operating mode, and hardware backend.
+      - **Arming, Operating Mode & Hardware Mode (`/v1/timing/arm`, `/v1/timing/mode`, `/v1/hardware/mode`)**: Arm or disarm lap recording, switch between `practice` and `race` modes, and select the active timing hardware pipeline (`slaprf`, `slaprf_ble`, `laprf`, `laprf_usb`, `rotorhazard`, or `rotorhazard_usb`).
 
   - name: Pilots
     description: |
@@ -49,21 +48,22 @@ tags:
       - **CRUD & Unique Constraints**: Create pilots with `POST /v1/pilots` (`201 Created` + `Location` header) and update callsign, phonetic TTS name, VTX band/channel, or per-pilot thresholds via `PUT /v1/pilots/{slotIndex}`.
       - **Bulk Import & Export**: Merge pilots from CSV or MultiGP entries via `POST /v1/pilots:import` and export the roster via `GET /v1/pilots/export.csv`.
 
-  - name: Track & Timers
+  - name: Timers
     description: |
-      Course layout (`START_FINISH` and `SECTOR_GATE` checkpoints), detected receiver hardware bindings, and per-gate / per-pilot rule overrides.
-      - **Gates (`/v1/track/gates`)**: Add, reorder, or delete course gates and bind each gate to a `timerId`, `enterThreshold`, and `exitThreshold`.
-      - **Granular Rule Overrides**: Override global timing filters for an entire gate (`/v1/track/gates/{gateId}/rules`) or for a specific pilot at a specific gate (`/v1/track/gates/{gateId}/pilots/{slotIndex}/rules`).
+      Physical and simulated receiver hardware inventory (`/v1/timers`) shared across practice sessions and race events.
+      - **Discovery & Provisioning (`/v1/timers`)**: Inspect online status, battery voltage, and firmware versions for Hub `H1`, Spokes `T1`-`T6`, LapRF 8-Way pucks, and RotorHazard units, update display colors, or delete offline entries.
 
   - name: Practice Sessions
     description: |
-      Multi-session open practice management with independent pilot channel assignments and lap history.
+      Multi-session practice management where each session owns its own pilot channels, course track, timing rules, and lap history.
       - **Session Addressing**: Pass an explicit `sessionId` or the literal alias `current` to target the currently selected practice session.
+      - **Scoped Track & Timing Rules (`.../track/*`)**: Configure gates (`.../track/gates`), per-pilot thresholds (`.../track/thresholds`), track-wide timing rules (`.../track/rules`), and per-gate or per-pilot-at-gate rule overrides independently for each practice session.
       - **Lifecycle Actions**: Transition sessions with `:start`, `:pause`, `:resume`, `:stop`, and `:clearLaps`, and validate or invalidate individual laps via `PATCH .../laps/{lapId}` or `POST .../laps/{lapId}:toggle`.
 
   - name: Race Sessions
     description: |
-      Full tournament race control covering qualifying rounds, double-elimination / multi-stage DAG brackets, Open Qualifier (ZippyQ), marshal overrides, and MultiGP RaceSync integration.
+      Full tournament race control covering qualifying rounds, double-elimination / multi-stage DAG brackets, Open Qualifier (ZippyQ), independent per-race tracks and timing rules, marshal overrides, and MultiGP RaceSync integration.
+      - **Scoped Track & Timing Rules (`.../track/*`)**: Configure gates (`.../track/gates`), per-pilot thresholds (`.../track/thresholds`), track-wide timing rules (`.../track/rules`), and per-gate or per-pilot-at-gate rule overrides independently for each race (`409 Conflict` once a race is `completed` or `scrapped`).
       - **Lifecycle & Heat Control**: Drive session state (`:start`, `:pause`, `:resume`, `:stop`, `:complete`, `:scrap`, `:reopen`), stage progression (`stages/{stageRef}:control`, `:advance`), and live heat horns/clocks (`heats/{heatId}:control`).
       - **Marshal & MultiGP Sync**: Apply lap toggles, time penalties, or seat reorders via `pilots/{slotIndex}:marshal`, import MultiGP chapters via `sessions:importMultiGP`, and push results through `/v1/race/multigp/proxy/{subPath}`.
 
@@ -277,45 +277,6 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
                 error: "password must be at least 4 characters when enabled"
-
-  /v1/timing/rules:
-    get:
-      tags: [Timing Singletons]
-      summary: Read global timing detection rules singleton
-      operationId: getTimingRules
-      responses:
-        "200":
-          description: Current global timing rules
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TimingRules"
-
-    put:
-      tags: [Timing Singletons]
-      summary: Replace global timing detection rules singleton
-      operationId: putTimingRules
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/TimingRules"
-      responses:
-        "200":
-          description: Clamped and applied global timing rules
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TimingRules"
-        "400":
-          description: Invalid timing rules payload
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "minLapTimeMs must be non-negative"
 
   /v1/timing/arm:
     get:
@@ -625,440 +586,9 @@ paths:
               schema:
                 type: string
 
-  /v1/track:
-    get:
-      tags: [Track & Timers]
-      summary: Read course track singleton (gates and timers)
-      operationId: getTrack
-      responses:
-        "200":
-          description: Track gates and detected timers
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  gates:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/TrackGate"
-                  timers:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/DetectedTimer"
-
-  "/v1/track:reset":
-    post:
-      tags: [Track & Timers]
-      summary: Reset course track topology to preset or default layout
-      operationId: resetTrack
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                preset:
-                  type: string
-      responses:
-        "200":
-          description: Updated full state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-
-  /v1/track/thresholds:
-    put:
-      tags: [Track & Timers]
-      summary: Apply batch per-gate, per-pilot enter/exit RSSI thresholds
-      operationId: putTrackThresholds
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: array
-              items:
-                $ref: "#/components/schemas/GateThresholdUpdate"
-      responses:
-        "200":
-          description: Updated full state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-        "400":
-          description: Invalid track threshold parameters
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "enterThreshold must be greater than exitThreshold"
-
-  /v1/track/gates:
-    get:
-      tags: [Track & Timers]
-      summary: List all course gates
-      operationId: listTrackGates
-      responses:
-        "200":
-          description: Gate list
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/TrackGate"
-
-    post:
-      tags: [Track & Timers]
-      summary: Create a gate node on the course track
-      operationId: createTrackGate
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                name:
-                  type: string
-                  example: "Split 1"
-                assignedTimerId:
-                  type: integer
-                  example: 2
-                trackOrder:
-                  type: integer
-                  example: 1
-      responses:
-        "201":
-          description: Created gate and updated full state
-          headers:
-            Location:
-              schema:
-                type: string
-                example: /v1/track/gates/5
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-        "400":
-          description: Invalid gate configuration or threshold parameters
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "invalid gate type or threshold range"
-
-  /v1/track/gates/{gateId}:
-    parameters:
-      - name: gateId
-        in: path
-        required: true
-        schema:
-          type: integer
-          minimum: 1
-    get:
-      tags: [Track & Timers]
-      summary: Get a single track gate
-      operationId: getTrackGate
-      responses:
-        "200":
-          description: Track gate
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TrackGate"
-        "404":
-          description: Gate not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate not found"
-
-    put:
-      tags: [Track & Timers]
-      summary: Replace a track gate (name, role, order, or assigned timer)
-      operationId: putTrackGate
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/GateUpdate"
-      responses:
-        "200":
-          description: Updated full state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-        "400":
-          description: Invalid gate configuration or threshold parameters
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "invalid gate type or threshold range"
-        "404":
-          description: Gate not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate not found"
-
-    patch:
-      tags: [Track & Timers]
-      summary: Partially update a track gate
-      operationId: patchTrackGate
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/GateUpdate"
-      responses:
-        "200":
-          description: Updated full state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-        "400":
-          description: Invalid gate configuration or threshold parameters
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "invalid gate type or threshold range"
-        "404":
-          description: Gate not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate not found"
-
-    delete:
-      tags: [Track & Timers]
-      summary: Remove a gate from the track
-      operationId: deleteTrackGate
-      responses:
-        "200":
-          description: Updated full state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-        "404":
-          description: Gate not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate not found"
-
-  /v1/track/gates/{gateId}/rules:
-    parameters:
-      - name: gateId
-        in: path
-        required: true
-        schema:
-          type: integer
-    get:
-      tags: [Track & Timers]
-      summary: Read per-gate timing rule overrides singleton
-      operationId: getGateRules
-      responses:
-        "200":
-          description: Per-gate rule overrides
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/GateRuleOverrides"
-        "404":
-          description: Gate not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate not found"
-
-    put:
-      tags: [Track & Timers]
-      summary: Replace per-gate timing rule overrides singleton
-      operationId: putGateRules
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/GateRuleOverrides"
-      responses:
-        "200":
-          description: Updated full state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-        "400":
-          description: Invalid gate rule override parameters
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "confirmationWindowMs must be positive"
-        "404":
-          description: Gate not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate not found"
-
-  "/v1/track/gates/{gateId}/rules:reset":
-    parameters:
-      - name: gateId
-        in: path
-        required: true
-        schema:
-          type: integer
-    post:
-      tags: [Track & Timers]
-      summary: Reset per-gate timing rule overrides back to global rules
-      operationId: resetGateRules
-      responses:
-        "200":
-          description: Updated full state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-        "404":
-          description: Gate not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate not found"
-
-  /v1/track/gates/{gateId}/pilots/{slotIndex}/rules:
-    parameters:
-      - name: gateId
-        in: path
-        required: true
-        schema:
-          type: integer
-      - name: slotIndex
-        in: path
-        required: true
-        schema:
-          type: integer
-    get:
-      tags: [Track & Timers]
-      summary: Read Tier-3 per-pilot-at-gate rule overrides singleton
-      operationId: getPilotGateRules
-      responses:
-        "200":
-          description: Pilot-at-gate rule overrides
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/GateRuleOverrides"
-        "404":
-          description: Gate or pilot slot not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate or pilot slot not found"
-
-    put:
-      tags: [Track & Timers]
-      summary: Replace Tier-3 per-pilot-at-gate rule overrides singleton
-      operationId: putPilotGateRules
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/GateRuleOverrides"
-      responses:
-        "200":
-          description: Updated full state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-        "400":
-          description: Invalid gate rule override parameters
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "confirmationWindowMs must be positive"
-        "404":
-          description: Gate or pilot slot not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate or pilot slot not found"
-
-  "/v1/track/gates/{gateId}/pilots/{slotIndex}/rules:reset":
-    parameters:
-      - name: gateId
-        in: path
-        required: true
-        schema:
-          type: integer
-      - name: slotIndex
-        in: path
-        required: true
-        schema:
-          type: integer
-    post:
-      tags: [Track & Timers]
-      summary: Reset Tier-3 per-pilot-at-gate timing rule overrides
-      operationId: resetPilotGateRules
-      responses:
-        "200":
-          description: Updated full state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-        "404":
-          description: Gate or pilot slot not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate or pilot slot not found"
-
   /v1/timers:
     get:
-      tags: [Track & Timers]
+      tags: [Timers]
       summary: List detected hardware timers
       operationId: listTimers
       responses:
@@ -1072,7 +602,7 @@ paths:
                   $ref: "#/components/schemas/DetectedTimer"
 
     post:
-      tags: [Track & Timers]
+      tags: [Timers]
       summary: Provision a newly flashed hardware timer
       operationId: createTimer
       requestBody:
@@ -1124,7 +654,7 @@ paths:
         schema:
           type: integer
     get:
-      tags: [Track & Timers]
+      tags: [Timers]
       summary: Get a detected timer by timerId
       operationId: getTimer
       responses:
@@ -1144,7 +674,7 @@ paths:
                 error: "timer not found"
 
     patch:
-      tags: [Track & Timers]
+      tags: [Timers]
       summary: Update display color for a detected timer
       operationId: patchTimer
       requestBody:
@@ -1183,7 +713,7 @@ paths:
                 error: "timer not found"
 
     delete:
-      tags: [Track & Timers]
+      tags: [Timers]
       summary: Delete an offline detected timer entry
       operationId: deleteTimer
       responses:
@@ -1853,6 +1383,518 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
                 error: "practice session or lap not found"
+
+  /v1/practice/sessions/{sessionId}/track:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Practice Sessions]
+      summary: Read practice session track gates, detected timers, and timing rules
+      operationId: getPracticeSessionTrack
+      responses:
+        "200":
+          description: Scoped track gates, detected timers, and timing rules
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [gates, timers, rules]
+                properties:
+                  gates:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TrackGate"
+                  timers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DetectedTimer"
+                  rules:
+                    $ref: "#/components/schemas/TimingRules"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  "/v1/practice/sessions/{sessionId}/track:reset":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Practice Sessions]
+      summary: Reset practice session track layout to default gates
+      operationId: resetPracticeSessionTrack
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /v1/practice/sessions/{sessionId}/track/thresholds:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      tags: [Practice Sessions]
+      summary: Apply batch per-gate, per-pilot RSSI thresholds on this practice session track
+      operationId: putPracticeSessionTrackThresholds
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: "#/components/schemas/GateThresholdUpdate"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid threshold update payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session, gate, or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /v1/practice/sessions/{sessionId}/track/rules:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Practice Sessions]
+      summary: Read track-wide timing rules for this practice session
+      operationId: getPracticeSessionTrackRules
+      responses:
+        "200":
+          description: Scoped timing rules
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimingRules"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      tags: [Practice Sessions]
+      summary: Replace track-wide timing rules for this practice session
+      operationId: putPracticeSessionTrackRules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TimingRules"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid timing rules payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /v1/practice/sessions/{sessionId}/track/gates:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Practice Sessions]
+      summary: List ordered gates on this practice session track
+      operationId: listPracticeSessionTrackGates
+      responses:
+        "200":
+          description: Ordered track gates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TrackGate"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      tags: [Practice Sessions]
+      summary: Add a gate node to this practice session track
+      operationId: createPracticeSessionTrackGate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  example: "Split 1"
+                assignedTimerId:
+                  type: integer
+                  example: 2
+                trackOrder:
+                  type: integer
+                  example: 1
+      responses:
+        "201":
+          description: Created gate and updated full state
+          headers:
+            Location:
+              schema:
+                type: string
+                example: /v1/practice/sessions/session-1/track/gates/2
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /v1/practice/sessions/{sessionId}/track/gates/{gateId}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    get:
+      tags: [Practice Sessions]
+      summary: Get a single gate on this practice session track
+      operationId: getPracticeSessionTrackGate
+      responses:
+        "200":
+          description: Track gate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrackGate"
+        "404":
+          description: Practice session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      tags: [Practice Sessions]
+      summary: Replace a gate on this practice session track (name, role, order, or assigned timer)
+      operationId: putPracticeSessionTrackGate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateUpdate"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate update payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      tags: [Practice Sessions]
+      summary: Partially update a gate on this practice session track
+      operationId: patchPracticeSessionTrackGate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateUpdate"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate update payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags: [Practice Sessions]
+      summary: Remove a gate from this practice session track
+      operationId: deletePracticeSessionTrackGate
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /v1/practice/sessions/{sessionId}/track/gates/{gateId}/rules:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      tags: [Practice Sessions]
+      summary: Read per-gate timing rule overrides on this practice session track
+      operationId: getPracticeSessionGateRules
+      responses:
+        "200":
+          description: Per-gate rule overrides
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GateRuleOverrides"
+        "404":
+          description: Practice session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      tags: [Practice Sessions]
+      summary: Replace per-gate timing rule overrides on this practice session track
+      operationId: putPracticeSessionGateRules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateRuleOverrides"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate rule override payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/v1/practice/sessions/{sessionId}/track/gates/{gateId}/rules:reset":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Practice Sessions]
+      summary: Reset per-gate timing rule overrides back to track rules
+      operationId: resetPracticeSessionGateRules
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /v1/practice/sessions/{sessionId}/track/gates/{gateId}/pilots/{slotIndex}/rules:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: slotIndex
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      tags: [Practice Sessions]
+      summary: Read per-pilot-at-gate rule overrides on this practice session track
+      operationId: getPracticeSessionPilotGateRules
+      responses:
+        "200":
+          description: Pilot-at-gate rule overrides
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GateRuleOverrides"
+        "404":
+          description: Practice session, gate, or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      tags: [Practice Sessions]
+      summary: Replace per-pilot-at-gate rule overrides on this practice session track
+      operationId: putPracticeSessionPilotGateRules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateRuleOverrides"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate rule override payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session, gate, or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/v1/practice/sessions/{sessionId}/track/gates/{gateId}/pilots/{slotIndex}/rules:reset":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: slotIndex
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Practice Sessions]
+      summary: Reset per-pilot-at-gate rule overrides on this practice session track
+      operationId: resetPracticeSessionPilotGateRules
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session, gate, or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /v1/race/sessions:
     get:
@@ -2815,6 +2857,606 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
                 error: "race session, heat, or pilot slot not found"
+
+  /v1/race/sessions/{sessionId}/track:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Race Sessions]
+      summary: Read race session track gates, detected timers, and timing rules
+      operationId: getRaceSessionTrack
+      responses:
+        "200":
+          description: Scoped track gates, detected timers, and timing rules
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [gates, timers, rules]
+                properties:
+                  gates:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TrackGate"
+                  timers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DetectedTimer"
+                  rules:
+                    $ref: "#/components/schemas/TimingRules"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  "/v1/race/sessions/{sessionId}/track:reset":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Race Sessions]
+      summary: Reset race session track layout to default gates
+      operationId: resetRaceSessionTrack
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+  /v1/race/sessions/{sessionId}/track/thresholds:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      tags: [Race Sessions]
+      summary: Apply batch per-gate, per-pilot RSSI thresholds on this race session track
+      operationId: putRaceSessionTrackThresholds
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: "#/components/schemas/GateThresholdUpdate"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid threshold update payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session, gate, or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+  /v1/race/sessions/{sessionId}/track/rules:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Race Sessions]
+      summary: Read track-wide timing rules for this race session
+      operationId: getRaceSessionTrackRules
+      responses:
+        "200":
+          description: Scoped timing rules
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimingRules"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      tags: [Race Sessions]
+      summary: Replace track-wide timing rules for this race session
+      operationId: putRaceSessionTrackRules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TimingRules"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid timing rules payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+  /v1/race/sessions/{sessionId}/track/gates:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Race Sessions]
+      summary: List ordered gates on this race session track
+      operationId: listRaceSessionTrackGates
+      responses:
+        "200":
+          description: Ordered track gates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TrackGate"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      tags: [Race Sessions]
+      summary: Add a gate node to this race session track
+      operationId: createRaceSessionTrackGate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  example: "Split 1"
+                assignedTimerId:
+                  type: integer
+                  example: 2
+                trackOrder:
+                  type: integer
+                  example: 1
+      responses:
+        "201":
+          description: Created gate and updated full state
+          headers:
+            Location:
+              schema:
+                type: string
+                example: /v1/race/sessions/session-1/track/gates/2
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+  /v1/race/sessions/{sessionId}/track/gates/{gateId}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    get:
+      tags: [Race Sessions]
+      summary: Get a single gate on this race session track
+      operationId: getRaceSessionTrackGate
+      responses:
+        "200":
+          description: Track gate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrackGate"
+        "404":
+          description: Race session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      tags: [Race Sessions]
+      summary: Replace a gate on this race session track (name, role, order, or assigned timer)
+      operationId: putRaceSessionTrackGate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateUpdate"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate update payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+    patch:
+      tags: [Race Sessions]
+      summary: Partially update a gate on this race session track
+      operationId: patchRaceSessionTrackGate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateUpdate"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate update payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+    delete:
+      tags: [Race Sessions]
+      summary: Remove a gate from this race session track
+      operationId: deleteRaceSessionTrackGate
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Race session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+  /v1/race/sessions/{sessionId}/track/gates/{gateId}/rules:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      tags: [Race Sessions]
+      summary: Read per-gate timing rule overrides on this race session track
+      operationId: getRaceSessionGateRules
+      responses:
+        "200":
+          description: Per-gate rule overrides
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GateRuleOverrides"
+        "404":
+          description: Race session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      tags: [Race Sessions]
+      summary: Replace per-gate timing rule overrides on this race session track
+      operationId: putRaceSessionGateRules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateRuleOverrides"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate rule override payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+  "/v1/race/sessions/{sessionId}/track/gates/{gateId}/rules:reset":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Race Sessions]
+      summary: Reset per-gate timing rule overrides back to track rules
+      operationId: resetRaceSessionGateRules
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Race session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+  /v1/race/sessions/{sessionId}/track/gates/{gateId}/pilots/{slotIndex}/rules:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: slotIndex
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      tags: [Race Sessions]
+      summary: Read per-pilot-at-gate rule overrides on this race session track
+      operationId: getRaceSessionPilotGateRules
+      responses:
+        "200":
+          description: Pilot-at-gate rule overrides
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GateRuleOverrides"
+        "404":
+          description: Race session, gate, or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      tags: [Race Sessions]
+      summary: Replace per-pilot-at-gate rule overrides on this race session track
+      operationId: putRaceSessionPilotGateRules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateRuleOverrides"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate rule override payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session, gate, or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+  "/v1/race/sessions/{sessionId}/track/gates/{gateId}/pilots/{slotIndex}/rules:reset":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: slotIndex
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Race Sessions]
+      summary: Reset per-pilot-at-gate rule overrides on this race session track
+      operationId: resetRaceSessionPilotGateRules
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Race session, gate, or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
 
   /v1/race/sessions/{sessionId}/standings.csv:
     parameters:

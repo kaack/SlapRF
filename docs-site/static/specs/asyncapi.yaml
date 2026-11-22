@@ -233,8 +233,8 @@ components:
 
     RaceUpdatedEventMessage:
       name: race
-      title: Race Bracket, Active Heat, or Horn Announcement Updated (JSON Text Frame)
-      summary: Emitted on heat countdown ticks, horn triggers, heat start/finish/confirmation, and bracket progression.
+      title: Race Bracket, Scoped Track, Active Heat, or Horn Announcement Updated (JSON Text Frame)
+      summary: Emitted on heat countdown ticks, horn triggers, heat start/finish/confirmation, bracket progression, and race-scoped track or timing-rule updates (`trackInitialized`, `trackSnapshot`, `rules`).
       contentType: application/json
       payload:
         $ref: "#/components/schemas/RaceEnvelope"
@@ -242,7 +242,7 @@ components:
     PracticeUpdatedEventMessage:
       name: practice
       title: Practice Session State Updated (JSON Text Frame)
-      summary: Emitted when a practice session starts, pauses, stops, or updates its pilot roster.
+      summary: Emitted when a practice session starts, pauses, stops, updates its pilot roster, or modifies its session-scoped track or timing rules (`trackInitialized`, `trackSnapshot`, `rules`).
       contentType: application/json
       payload:
         $ref: "#/components/schemas/PracticeEnvelope"

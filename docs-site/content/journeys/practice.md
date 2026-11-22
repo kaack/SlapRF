@@ -25,13 +25,13 @@ Confirm the connected timer chip shows a green live indicator.
 
 Open **Pilots** and enter each pilot's callsign, optional phonetic spelling for text-to-speech pronunciation, and default 5.8 GHz channel (such as `R1 5658` or `F4 5800`).
 
-### Verify Track
+### Configure Session Track
 
-Open **Track** and confirm your active gate timer (`H1` or `T1`) sits on the course loop with the checkered Start / Finish flag selected.
+Open **Practice**, select or create a practice session, and open its **Track** tab. Confirm your active gate timer (`H1` or `T1`) sits on the track line with the checkered Start / Finish flag selected, and adjust track-wide or per-timer **Timing rules** (`Min lap time`, `Max lap time`, `Min crossing time`, and `Beep on crossing`) if needed. Each practice session stores its own track layout and timing rules independently.
 
 ### Fly & Calibrate
 
-Open **Practice**, select the active pilots, tap **Start**, and switch to the **Signals** tab. Arm your quad, fly 2 to 3 clean passes through the Start / Finish gate at normal race speed, then tap **Calibrate**. SlapRF inspects your signal peaks and noise floor and sets the Enter and Exit dBm levels automatically.
+In your **Practice** session, open **Pilots** to assign active pilot channels, tap **Start**, and switch to **Signals**. Arm your quad, fly 2 to 3 clean passes through the Start / Finish gate at normal race speed, then tap **Calibrate**. SlapRF inspects your signal peaks and noise floor and sets the Enter and Exit dBm levels automatically.
 
 {{% /steps %}}
 
@@ -49,4 +49,4 @@ Any timer chip or global rule with custom overrides shows a small blue pencil in
 
 ## Audio Callouts
 
-Open **Settings -> Announcer** to configure practice audio. Enable **Beep on Cross** for an instant low-latency tone the moment a gate crossing registers, and choose whether spoken callouts read pilot name plus lap time or lap time alone.
+Enable **Beep on crossing** in your session's **Track** tab (or per timer in **Signals -> Fine-tune**) for an instant low-latency tone the moment a gate crossing registers. Open **Settings -> Announcer** to choose your offline voice, volume, and whether spoken callouts read pilot name plus lap time or lap time alone.
