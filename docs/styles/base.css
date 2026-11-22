@@ -38,6 +38,20 @@ a {
   text-decoration: none;
 }
 
+.link-inline {
+  color: var(--text);
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: var(--text-2);
+  text-underline-offset: 2.5px;
+  cursor: pointer;
+  transition: color 0.12s, text-decoration-color 0.12s;
+}
+.link-inline:hover {
+  color: var(--icon-hover);
+  text-decoration-color: var(--text);
+}
+
 button {
   font: inherit;
   color: inherit;
