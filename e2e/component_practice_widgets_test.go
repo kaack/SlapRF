@@ -435,6 +435,10 @@ func TestComponent_PilotRssiChartMobileInlineTimerRowColumns(t *testing.T) {
 		ok, evalErr := h.Page.Evaluate(`() => {
 			const panel = document.querySelector(".practice-mobile-signals-panel");
 			if (!panel) return false;
+			const firstPilotChipChan = document.querySelector(".practice-picker-row .pilot-chip[data-pilot='1'] .pilot-chip-chan");
+			if (!firstPilotChipChan || getComputedStyle(firstPilotChipChan).display === "none" || !(firstPilotChipChan.textContent || "").trim()) {
+				return false;
+			}
 			const calibBar = panel.querySelector(".scope-calib");
 			if (calibBar && getComputedStyle(calibBar).display !== "none") return false;
 			const rows = Array.from(panel.querySelectorAll(".channel-legend > button.channel"));

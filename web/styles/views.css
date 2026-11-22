@@ -1673,6 +1673,25 @@ body.is-gate-dragging * {
   font-weight: 500;
   line-height: 1;
 }
+.pilot-chip-chan {
+  display: none;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text-3);
+}
+.pilot-chip-chan:empty {
+  display: none !important;
+}
+.practice-workspace-page[data-mobile-practice-view="signals"] .practice-picker-row .pilot-chip .pilot-chip-chan:not(:empty),
+.rc-mobile-signals-picker-row .pilot-chip .pilot-chip-chan:not(:empty) {
+  display: inline-flex;
+  align-items: center;
+}
+.practice-workspace-page[data-mobile-practice-view="signals"] .practice-picker-row .pilot-chip.is-active .pilot-chip-chan,
+.rc-mobile-signals-picker-row .pilot-chip.is-active .pilot-chip-chan {
+  color: var(--text-2);
+}
 .pilot-chip.is-active {
   border-color: color-mix(in srgb, var(--c) 72%, var(--border-strong));
   background: color-mix(in srgb, var(--c) 11%, var(--surface));

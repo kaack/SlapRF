@@ -573,6 +573,7 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       expect(spinningCalib1.classList.contains("is-calibrating")).toBe(true);
       expect(spinningCalib1.getAttribute("aria-disabled")).toBe("true");
       expect(spinningCalib1.getAttribute("data-calib-busy")).toBe("1");
+      await flushMicrotasks();
 
       const inlineTune1 = root.querySelector<HTMLElement>(
         '[data-gate-chip="1"] .channel-right-cols .channel-mobile-action-btn.is-tune[data-tune-gate="1"]'

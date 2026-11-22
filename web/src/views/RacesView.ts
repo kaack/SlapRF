@@ -9521,7 +9521,7 @@ export class RacesView extends Component {
                   >
                     <span class="dot" style="--c:${c.color}"></span>
                     <span class="pilot-chip-name">${esc(c.callsign)}</span>
-                    ${c.channelLabel ? `<span class="pilot-chip-time">${esc(c.channelLabel)}</span>` : ""}
+                    ${c.channelLabel ? `<span class="pilot-chip-chan mono">${esc(c.channelLabel)}</span>` : ""}
                   </button>`
                   )
                   .join("")}

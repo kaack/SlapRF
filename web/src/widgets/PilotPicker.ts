@@ -1,6 +1,7 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
+import { formatBandChannelShort } from "../core/vtx_channels";
 import { practiceStats } from "../state/analysis";
 import { AppStore } from "../state/store";
 
@@ -254,10 +255,12 @@ export class PilotPicker extends Component {
           const active = p.slotIndex === selected;
           const s = practiceStats(this.store, p);
           const laps = s.laps.length;
+          const chLabel = p.channel > 0 ? formatBandChannelShort(p.band, p.channel) : "";
           return `
             <button class="pilot-chip ${active ? "is-active" : ""} ${s.onTrack ? "is-live" : ""}" role="tab" aria-selected="${active}" data-pilot="${p.slotIndex}" data-analytics-pilot-pill="${p.slotIndex}" style="--c:${p.color}">
               <span class="dot ${s.onTrack ? "is-live" : ""}"></span>
               <span class="pilot-chip-name">${esc(p.callsign)}</span>
+              <span class="pilot-chip-chan mono">${esc(chLabel)}</span>
               <span class="pilot-chip-time">${laps} laps</span>
             </button>`;
         })
@@ -280,6 +283,7 @@ export class PilotPicker extends Component {
       const active = p.slotIndex === selected;
       const s = practiceStats(this.store, p);
       const laps = s.laps.length;
+      const chLabel = p.channel > 0 ? formatBandChannelShort(p.band, p.channel) : "";
       btn.classList.toggle("is-active", active);
       btn.classList.toggle("is-live", s.onTrack);
       btn.setAttribute("aria-selected", String(active));
@@ -288,6 +292,8 @@ export class PilotPicker extends Component {
       if (dot) dot.classList.toggle("is-live", s.onTrack);
       const nameEl = btn.querySelector<HTMLElement>(".pilot-chip-name");
       if (nameEl && nameEl.textContent !== p.callsign) nameEl.textContent = p.callsign;
+      const chanEl = btn.querySelector<HTMLElement>(".pilot-chip-chan");
+      if (chanEl && chanEl.textContent !== chLabel) chanEl.textContent = chLabel;
       const timeEl = btn.querySelector<HTMLElement>(".pilot-chip-time");
       const timeText = `${laps} laps`;
       if (timeEl && timeEl.textContent !== timeText) timeEl.textContent = timeText;
