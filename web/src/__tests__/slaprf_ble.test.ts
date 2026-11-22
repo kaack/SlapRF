@@ -628,16 +628,17 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       netView = new NetworkView(netRoot.querySelector("#ble-forget-host")!, store, api);
       await flushMicrotasks();
 
-      // 1. Unpaired initial state -> "Pair Device" + collapsible intro with underlined Settings link and (see more)
+      // 1. Unpaired initial state -> inline timing system selector enabled + "Pair Device" + collapsible intro with (see more)
       const connSlot = netRoot.querySelector<HTMLElement>('[data-slot="connection"]')!;
       const connIntro = netRoot.querySelector<HTMLElement>('[data-section-anchor="connection"] > .settings-intro')!;
+      const modeSelectInitial = netRoot.querySelector<HTMLSelectElement>('select[data-field="network-hardware-mode"]')!;
+      expect(modeSelectInitial).not.toBeNull();
+      expect(modeSelectInitial.disabled).toBe(false);
+      expect(modeSelectInitial.value).toBe("slaprf_ble");
       expect(connSlot.textContent || "").toContain("Pair Device");
       expect(connIntro.classList.contains("has-intro-collapse")).toBe(true);
       expect(connIntro.querySelector(".settings-intro-more")).not.toBeNull();
-      expect(connIntro.textContent || "").toContain("Set up to connect to the Hub over Bluetooth");
-      const settingsLink = connIntro.querySelector<HTMLAnchorElement>('a.link-inline[href="#/setup/timing-devices"]');
-      expect(settingsLink).not.toBeNull();
-      expect(settingsLink!.textContent || "").toBe("Settings");
+      expect(connIntro.textContent || "").toContain("Select your timing device and connect to the Hub over Bluetooth");
 
       // 2. Paired & connected over BLE -> shows both Disconnect (x) AND Forget Device
       const bleStatus: TimerStatus = {
@@ -844,6 +845,8 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
 
         const finalConnectBtn = connSlot.querySelector<HTMLButtonElement>('[data-action="connect-add"]')!;
         expect((finalConnectBtn.textContent || "").trim()).toBe("Pair Device");
+        const modeSelectAfterForget = netRoot.querySelector<HTMLSelectElement>('select[data-field="network-hardware-mode"]')!;
+        expect(modeSelectAfterForget.disabled).toBe(false);
       } finally {
         window.matchMedia = origMatchMedia;
       }
@@ -854,6 +857,153 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       window.localStorage.removeItem("slaprf.hw.knownTimers");
       window.fetch = origFetch;
       await probeCapabilities();
+    }
+  });
+
+  it("exposes inline timing device selector on NetworkView that locks while connected and unlocks on disconnect", async () => {
+    usbPool.applyBackendPoolSnapshot({ debugSlotIndex: 0, slots: [], knownTimers: [] });
+    const store = makeStore({
+      simulatorRunning: true,
+      timingHardwareMode: "slaprf",
+    });
+    const { api } = makeMockApiClient(store);
+    api.setTimingHardwareMode = async (mode) => {
+      store.hydrate(makeFullState({ simulatorRunning: true, timingHardwareMode: mode }));
+    };
+    api.simRotorHazardAction = async (payload: { action: string; timerId?: number }) => {
+      if (payload.action === "disconnect") {
+        store.hydrate(
+          makeFullState({
+            simulatorRunning: true,
+            timingHardwareMode: store.timingHardwareMode,
+            timers: [],
+            simState: { running: true, speedMultiplier: 1, pilots: [], rotorhazardUnits: [] },
+          })
+        );
+      }
+    };
+    const netRoot = mountHtml(`<div id="net-mode-switch-host"></div>`);
+    const netView = new NetworkView(netRoot.querySelector("#net-mode-switch-host")!, store, api);
+
+    try {
+      await flushMicrotasks();
+      const getSelect = () =>
+        netRoot.querySelector<HTMLSelectElement>('select[data-field="network-hardware-mode"]')!;
+
+      // 1. Disconnected SlapRF (USB): dropdown is enabled with all 5 options and "Connect USB" button is visible
+      let sel = getSelect();
+      expect(sel).not.toBeNull();
+      expect(sel.disabled).toBe(false);
+      expect(Array.from(sel.options).map((o) => o.value)).toEqual([
+        "slaprf",
+        "slaprf_ble",
+        "laprf",
+        "rotorhazard",
+        "rotorhazard_usb",
+      ]);
+      expect(netRoot.querySelector('[data-slot="connection"]')?.textContent || "").toContain("Connect USB");
+
+      // 2. Switch inline to SlapRF (Bluetooth) -> button changes to "Pair Device" without leaving NetworkView
+      sel.value = "slaprf_ble";
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+      await flushMicrotasks();
+      expect(store.timingHardwareMode).toBe("slaprf_ble");
+      expect(netRoot.querySelector('[data-slot="connection"]')?.textContent || "").toContain("Pair Device");
+
+      // 3. While connecting / connected, dropdown stays visible in place but becomes disabled
+      usbPool.applyBackendPoolSnapshot({
+        debugSlotIndex: 0,
+        slots: [
+          {
+            slotIndex: 0,
+            connected: false,
+            connecting: true,
+            connectStatus: "Waiting for Bluetooth LE connection…",
+            portName: "ble:BE7C0001",
+            probing: false,
+            reconnecting: false,
+            reconnectAttempt: 0,
+            maxReconnectAttempts: 5,
+            reconnectFailed: false,
+            isOtherDevice: false,
+          },
+        ],
+        knownTimers: [],
+      });
+      await flushMicrotasks();
+      expect(getSelect().disabled).toBe(true);
+
+      // Cancel / disconnect -> dropdown immediately unlocks again
+      usbPool.applyBackendPoolSnapshot({ debugSlotIndex: 0, slots: [], knownTimers: [] });
+      await flushMicrotasks();
+      expect(getSelect().disabled).toBe(false);
+
+      // 4. Switch inline to RotorHazard (Network) with an active connected device -> dropdown locks and inline Disconnect unlocks it
+      store.hydrate({
+        serverTimestampUs: 10_000_000,
+        timingHardwareMode: "rotorhazard",
+        pilots: store.pilots,
+        gates: store.nodes,
+        timers: [
+          {
+            timerId: 1,
+            timerLabel: "R1",
+            firmwareVersion: "RotorHazard",
+            endpointAddr: "192.168.1.101:5000",
+            online: true,
+            framesRxCount: 120,
+            lastSeenAt: new Date().toISOString(),
+            color: "#d4ff3a",
+            isHub: false,
+            batteryMv: 0,
+            batteryPct: 0,
+            noiseFloorDbm: 0,
+            lastRssi: [],
+          },
+        ],
+        laps: [],
+        crossings: [],
+        filtered: [],
+        summaries: [],
+        rules: store.rules,
+        simulatorRunning: true,
+        simState: {
+          running: true,
+          speedMultiplier: 1,
+          pilots: [],
+          rotorhazardUnits: [
+            {
+              timerId: 1,
+              label: "R1",
+              hostIp: "192.168.1.101",
+              port: 5000,
+              adminUser: "admin",
+              adminPass: "rotorhazard",
+              poweredOn: true,
+              connected: true,
+              nodeCount: 8,
+              assignedGateId: 0,
+              trackPosition: "Unassigned",
+            },
+          ],
+        },
+        raceArmed: false,
+        laprfEmulatorStatus: store.laprfEmulator,
+        raceState: store.raceState,
+      });
+      await flushMicrotasks();
+      expect(getSelect().value).toBe("rotorhazard");
+      expect(getSelect().disabled).toBe(true);
+      const extDisconnectBtn = netRoot.querySelector<HTMLButtonElement>('[data-action="network-disconnect-active"]')!;
+      expect(extDisconnectBtn).not.toBeNull();
+      expect((extDisconnectBtn.textContent || "").trim()).toBe("Disconnect");
+      extDisconnectBtn.click();
+      await new Promise((r) => window.setTimeout(r, 15));
+      await flushMicrotasks();
+      expect(getSelect().disabled).toBe(false);
+    } finally {
+      netView.destroy();
+      usbPool.applyBackendPoolSnapshot({ debugSlotIndex: 0, slots: [], knownTimers: [] });
     }
   });
 });

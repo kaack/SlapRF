@@ -2115,10 +2115,28 @@ export class UsbConnectionPool {
       this._debugSlotIndex = pool.debugSlotIndex === 1 ? 1 : 0;
     }
     if (Array.isArray(pool.slots)) {
+      const seenSlots = new Set<number>();
       for (const snap of pool.slots) {
+        seenSlots.add(snap.slotIndex);
         const slot = this.slots[snap.slotIndex];
         if (slot) {
           slot.applyBackendSlotSnapshot(snap);
+        }
+      }
+      for (let idx = 0; idx < this.slots.length; idx++) {
+        if (!seenSlots.has(idx)) {
+          this.slots[idx].applyBackendSlotSnapshot({
+            slotIndex: idx,
+            connected: false,
+            connecting: false,
+            connectStatus: "",
+            probing: false,
+            reconnecting: false,
+            reconnectAttempt: 0,
+            maxReconnectAttempts: 0,
+            reconnectFailed: false,
+            isOtherDevice: false,
+          });
         }
       }
     }

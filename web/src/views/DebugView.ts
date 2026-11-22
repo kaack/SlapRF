@@ -577,6 +577,7 @@ export class DebugView extends Component {
       unsubLapRF?.();
       unsubTheme();
       this.unsubConsole?.();
+      this.viewActive = false;
       this.unsubConsole = null;
       this.console.setBusyLabel(null);
       window.cancelAnimationFrame(this.rafId);
@@ -1110,7 +1111,7 @@ export class DebugView extends Component {
   }
 
   private ingestRotorHazardSample(): void {
-    if (!this.isRotorHazardMode()) return;
+    if (!this.viewActive || !this.isRotorHazardMode()) return;
     const isUSB = this.isRotorHazardUSBMode();
     const snaps = this.getRhSnapshots();
     const snap = this.activeRhSnapshot();

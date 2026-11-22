@@ -372,7 +372,7 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect(txt).not.toContain("Vanover");
       expect(txt).not.toContain("MinChan");
       // Hardware frequencies, Enter/Exit, RSSI, and CROSSING appear cleanly
-      expect(txt).toContain("Manual connection");
+      expect(txt).toContain("Connection");
       expect(txt).toContain("Discover");
       expect(txt).toContain("RotorHazard devices");
       expect(txt).not.toContain("Connected RotorHazard devices");
@@ -628,10 +628,10 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect(root.querySelector("#sim-usb [data-field='rh-host']")).toBeNull();
       expect(root.querySelector("#sim-usb [data-field='rh-pass']")).toBeNull();
 
-      // NetworkView renders USB serial port picker (defaulting to unconnected SIM-RH-USB2) and live 0..255 Node bars matching RotorHazard Network
+      // NetworkView renders USB serial port picker (defaulting to SIM-RH-USB1) and live 0..255 Node bars matching RotorHazard Network
       const netEl = root.querySelector("#net-usb")!;
+      expect(netEl.textContent ?? "").toContain("USB Serial Port");
       const usbVisTxt = netEl.querySelector("[data-slot='rh-usb-sections']")!.textContent ?? "";
-      expect(usbVisTxt).toContain("USB serial connection");
       expect(usbVisTxt).toContain("RotorHazard USB devices");
       expect(usbVisTxt).toContain("SIM-RH-USB1");
       expect(usbVisTxt).toContain("Node 1");

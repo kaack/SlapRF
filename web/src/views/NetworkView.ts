@@ -1,10 +1,11 @@
 import { Component } from "../core/component";
+import { isCustomSelectOpenWithin, scanCustomSelects } from "../core/custom_select";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { scanSettingsIntroCollapse } from "../core/settings_intro";
 import { getAppTheme, subscribeAppTheme } from "../core/theme";
 import { ApiClient } from "../services/api_client";
-import { capabilitiesSnapshot, resolveBackendUrl } from "../services/capabilities";
+import { capabilitiesSnapshot, resolveBackendUrl, subscribeCapabilities } from "../services/capabilities";
 import {
   LapRFDiscoveredDevice,
   sharedLapRFLink,
@@ -27,7 +28,13 @@ import {
 } from "../services/timer_console";
 import { timerColor } from "../state/selectors";
 import { AppStore } from "../state/store";
-import { DetectedTimer, isRotorHazardMode, isSlapRFMode } from "../types/models";
+import {
+  DetectedTimer,
+  isRotorHazardMode,
+  isSlapRFMode,
+  normalizeTimingHardwareMode,
+  TimingHardwareMode,
+} from "../types/models";
 import { openDeviceConnectionSheet } from "../widgets/DeviceConnectionSheet";
 import { patchUsbConnectionBar } from "../widgets/UsbConnectionBar";
 import { channelColor, DBM_MAX, DBM_MIN, formatHardwareFreq, RACEBAND, racebandName } from "./debug/charts";
@@ -176,6 +183,10 @@ export class NetworkView extends Component {
   private rhUsbLoadedOnce = false;
   private lastRhUsbConnSig = "";
   private lastRhUsbTimersStructSig = "";
+  private modeSwitchBusy = false;
+  private lastModeSelectorSig = "";
+  private lastExternalInlineSig = "";
+  private lastRenderedHardwareMode: TimingHardwareMode | "" = "";
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
     super(el);
@@ -189,15 +200,24 @@ export class NetworkView extends Component {
 
     el.innerHTML = `
       <div class="settings debug-page network-page">
-        <div data-slot="slaprf-sections" style="display:contents">
-          <section class="settings-section" data-section-anchor="connection">
-            <div class="settings-intro">
-              <h2>Connection</h2>
-              <p>Connect the Hub (or a Spoke) over USB-C to inspect the 2.4 GHz network and 5.8 GHz channel readings.</p>
+        <section class="settings-section" data-section-anchor="connection">
+          <div class="settings-intro" data-slot="connection-intro">
+            <h2>Connection</h2>
+            <p>Connect the Hub (or a Spoke) over USB-C to inspect the 2.4 GHz network and 5.8 GHz channel readings.</p>
+          </div>
+          <div class="debug-status-layout net-connection-stack">
+            <div class="net-timing-mode-bar">
+              <div class="net-timing-mode-select-slot" data-slot="network-mode-selector"></div>
+              <div class="net-slaprf-inline-slot" data-slot="connection"></div>
+              <div class="net-external-inline-slot" data-slot="external-conn-actions" style="display:none"></div>
             </div>
-            <div class="debug-status-layout" data-slot="connection"></div>
-          </section>
+            <div data-slot="laprf-connection" style="display:none"></div>
+            <div data-slot="rh-connection" style="display:none"></div>
+            <div data-slot="rh-usb-connection" style="display:none"></div>
+          </div>
+        </section>
 
+        <div data-slot="slaprf-sections" style="display:contents">
           <section class="settings-section" data-section-anchor="topology">
             <div class="settings-intro">
               <h2>Topology</h2>
@@ -217,14 +237,6 @@ export class NetworkView extends Component {
         </div>
 
         <div data-slot="laprf-sections" style="display:none">
-          <section class="settings-section" data-section-anchor="connection">
-            <div class="settings-intro">
-              <h2>Manual connection</h2>
-              <p>Connect directly to a LapRF 8-Way timer by Ethernet IP (TCP :5403) or over a USB CDC serial link (115200 baud). Go to <a href="#/setup/timing-devices" class="link-inline">Settings</a> to change the connectivity type.</p>
-            </div>
-            <div class="debug-status-layout" data-slot="laprf-connection"></div>
-          </section>
-
           <section class="settings-section" data-section-anchor="discover">
             <div class="settings-intro">
               <h2>Discover</h2>
@@ -243,14 +255,6 @@ export class NetworkView extends Component {
         </div>
 
         <div data-slot="rh-sections" style="display:none">
-          <section class="settings-section" data-section-anchor="connection">
-            <div class="settings-intro">
-              <h2>Manual connection</h2>
-              <p>Enter a RotorHazard server's IP address and port to sign in with admin credentials and connect directly. Go to <a href="#/setup/timing-devices" class="link-inline">Settings</a> to change the connectivity type.</p>
-            </div>
-            <div class="debug-status-layout" data-slot="rh-connection"></div>
-          </section>
-
           <section class="settings-section" data-section-anchor="discover">
             <div class="settings-intro">
               <h2>Discover</h2>
@@ -269,14 +273,6 @@ export class NetworkView extends Component {
         </div>
 
         <div data-slot="rh-usb-sections" style="display:none">
-          <section class="settings-section" data-section-anchor="connection">
-            <div class="settings-intro">
-              <h2>USB serial connection</h2>
-              <p>Connect RotorHazard USB serial nodes directly over USB-C / CDC (ESP32-C5, STM32, Arduino, or RP2040 binary serial protocol). Go to <a href="#/setup/timing-devices" class="link-inline">Settings</a> to change the connectivity type.</p>
-            </div>
-            <div class="debug-status-layout" data-slot="rh-usb-connection"></div>
-          </section>
-
           <section class="settings-section" data-section-anchor="timer">
             <div class="settings-intro">
               <h2>RotorHazard USB devices</h2>
@@ -351,6 +347,10 @@ export class NetworkView extends Component {
         void this.setSurveyMode(false);
         return;
       }
+      if (this.store.timingHardwareMode !== this.lastRenderedHardwareMode) {
+        this.renderAll();
+        return;
+      }
       this.scheduleLiveRefresh();
     });
 
@@ -360,6 +360,10 @@ export class NetworkView extends Component {
 
     const unsubRh = sharedRHLink.subscribe(() => {
       this.scheduleLiveRefresh();
+    });
+
+    const unsubCaps = subscribeCapabilities(() => {
+      this.renderAll();
     });
 
     this.livePollTimer = window.setInterval(() => {
@@ -529,7 +533,10 @@ export class NetworkView extends Component {
     });
     this.listen(el, "change", (e) => {
       const t = e.target as HTMLInputElement | HTMLSelectElement;
-      if (t.matches("[data-all-ports]")) {
+      if (t.dataset.field === "network-hardware-mode") {
+        const next: TimingHardwareMode = normalizeTimingHardwareMode(t.value);
+        void this.onChangeHardwareMode(next);
+      } else if (t.matches("[data-all-ports]")) {
         this.showAllPorts = (t as HTMLInputElement).checked;
         this.savePrefs();
       } else if (t.dataset.field === "rh-usb-port") {
@@ -558,6 +565,8 @@ export class NetworkView extends Component {
       this.lastRhTimersStructSig = "";
       this.lastRhUsbConnSig = "";
       this.lastRhUsbTimersStructSig = "";
+      this.lastModeSelectorSig = "";
+      this.lastExternalInlineSig = "";
       this.renderAll();
     });
 
@@ -591,6 +600,7 @@ export class NetworkView extends Component {
       unsubStore();
       unsubLaprf();
       unsubRh();
+      unsubCaps();
       unsubTheme();
     });
 
@@ -1096,6 +1106,10 @@ export class NetworkView extends Component {
       case "disconnect-usb-slot": {
         this.connError = null;
         await usbPool.mainConsole.disconnectCleanly();
+        break;
+      }
+      case "network-disconnect-active": {
+        await this.disconnectActiveHardware();
         break;
       }
       case "connect-add": {
@@ -1757,12 +1771,227 @@ export class NetworkView extends Component {
     return 1;
   }
 
-  private renderAll(): void {
+  private connectionLockState(): {
+    locked: boolean;
+    connectedCount: number;
+    busy: boolean;
+  } {
     const mode = this.store.timingHardwareMode;
+    if (this.modeSwitchBusy) {
+      return { locked: true, connectedCount: 0, busy: true };
+    }
+    if (mode === "laprf") {
+      const connectedCount = sharedLapRFLink.snapshots(this.store).filter((s) => s.connected).length;
+      const busy = this.laprfBusy;
+      return { locked: connectedCount > 0 || busy, connectedCount, busy };
+    }
+    if (isRotorHazardMode(mode)) {
+      const connectedCount = sharedRHLink.snapshots(this.store).filter((s) => s.connected).length;
+      const busy = this.rhBusy;
+      return { locked: connectedCount > 0 || busy, connectedCount, busy };
+    }
+    const connectedCount = usbPool.slots.filter((c) => c.connected).length;
+    const busy = usbPool.slots.some((c) => c.connecting || c.reconnecting || Boolean(c.busyLabel));
+    return { locked: connectedCount > 0 || busy, connectedCount, busy };
+  }
+
+  private async onChangeHardwareMode(next: TimingHardwareMode): Promise<void> {
+    if (this.connectionLockState().locked || next === this.store.timingHardwareMode) {
+      this.renderAll();
+      return;
+    }
+    this.connError = null;
+    this.laprfError = null;
+    this.rhError = null;
+    this.rhCredPrompt = null;
+    this.rhUsbLoadedOnce = false;
+    this.releaseSurveyOnLeave();
+    this.modeSwitchBusy = true;
+    this.renderAll();
+    try {
+      await this.api.setTimingHardwareMode(next);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.connError = msg;
+    } finally {
+      this.modeSwitchBusy = false;
+      this.lastLaprfConnSig = "";
+      this.lastLaprfTimersStructSig = "";
+      this.lastRhConnSig = "";
+      this.lastRhTimersStructSig = "";
+      this.lastRhUsbConnSig = "";
+      this.lastRhUsbTimersStructSig = "";
+      this.renderAll();
+    }
+  }
+
+  private async disconnectActiveHardware(): Promise<void> {
+    const mode = this.store.timingHardwareMode;
+    if (isSlapRFMode(mode)) {
+      this.connError = null;
+      await usbPool.disconnectAllCleanly();
+      this.renderAll();
+      return;
+    }
+    if (mode === "laprf") {
+      if (this.laprfBusy) return;
+      this.laprfBusy = true;
+      this.laprfError = null;
+      this.lastLaprfConnSig = "";
+      this.renderAll();
+      try {
+        const snaps = sharedLapRFLink.snapshots(this.store).filter((s) => s.connected);
+        for (const s of snaps) {
+          await sharedLapRFLink.disconnect(this.store, this.api, s.timerId).catch(() => undefined);
+        }
+        if (this.laprfDiscovered.length > 0) {
+          const res = await sharedLapRFLink.discover(this.store, this.api).catch(() => null);
+          if (res) {
+            this.laprfScannedSubnet = res.subnet;
+            this.laprfDiscovered = res.devices;
+          }
+        }
+      } finally {
+        this.laprfBusy = false;
+        this.lastLaprfConnSig = "";
+        this.lastLaprfTimersStructSig = "";
+        this.renderAll();
+      }
+      return;
+    }
+    if (isRotorHazardMode(mode)) {
+      if (this.rhBusy) return;
+      this.rhBusy = true;
+      this.rhError = null;
+      this.lastRhConnSig = "";
+      this.lastRhUsbConnSig = "";
+      this.renderAll();
+      try {
+        const snaps = sharedRHLink.snapshots(this.store).filter((s) => s.connected);
+        for (const s of snaps) {
+          await sharedRHLink.disconnectDevice(this.store, this.api, s.timerId).catch(() => undefined);
+        }
+        if (this.rhDiscovered.length > 0 && mode === "rotorhazard") {
+          const res = await sharedRHLink.scanLan(this.store, this.api, this.rhPort).catch(() => null);
+          if (res) {
+            this.rhScannedSubnet = res.subnet;
+            this.rhDiscovered = res.devices;
+          }
+        } else if (!this.store.simulatorRunning && mode === "rotorhazard_usb") {
+          await this.refreshRhUsbPorts();
+        }
+      } finally {
+        this.rhBusy = false;
+        this.lastRhConnSig = "";
+        this.lastRhTimersStructSig = "";
+        this.lastRhUsbConnSig = "";
+        this.lastRhUsbTimersStructSig = "";
+        this.renderAll();
+      }
+    }
+  }
+
+  private renderTopConnectionControls(mode: TimingHardwareMode): void {
     const isBleMode = mode === "slaprf_ble";
     const isLapRF = mode === "laprf";
     const isRHNet = mode === "rotorhazard";
     const isRHUSB = mode === "rotorhazard_usb";
+    const isSlapRF = !isLapRF && !isRHNet && !isRHUSB;
+
+    const connIntro = this.el.querySelector<HTMLElement>('[data-slot="connection-intro"]');
+    if (connIntro && connIntro.dataset.introMode !== mode) {
+      connIntro.dataset.introMode = mode;
+      connIntro.classList.remove("has-intro-collapse");
+      const introText = isRHUSB
+        ? "Select your timing device and connect RotorHazard USB serial nodes over USB-C / CDC (ESP32-C5, STM32, Arduino, or RP2040)."
+        : isRHNet
+          ? "Select your timing device and enter a RotorHazard server IP address and port to sign in with admin credentials."
+          : isLapRF
+            ? "Select your timing device and connect to a LapRF 8-Way timer over Ethernet IP (TCP :5403) or USB CDC serial (115200 baud)."
+            : isBleMode
+              ? "Select your timing device and connect to the Hub over <strong>Bluetooth</strong> to inspect pairing status, 2.4 GHz ESP-NOW Spokes, and live 5.8 GHz readings."
+              : "Select your timing device and connect the Hub (or a Spoke) over <strong>USB-C</strong> to inspect the 2.4 GHz network and 5.8 GHz readings.";
+      connIntro.innerHTML = `<h2>Connection</h2><p>${introText}</p>`;
+      scanSettingsIntroCollapse(connIntro);
+    }
+
+    const sim = this.store.simulatorRunning;
+    const caps = capabilitiesSnapshot();
+    const canUseExternal = sim || caps.portable;
+    const effectiveMode: TimingHardwareMode =
+      !canUseExternal && mode !== "slaprf" ? "slaprf" : mode;
+    const lock = this.connectionLockState();
+
+    const modeHost = this.el.querySelector<HTMLElement>('[data-slot="network-mode-selector"]');
+    if (modeHost && !isCustomSelectOpenWithin(modeHost)) {
+      const modeSig = `${effectiveMode}|${canUseExternal ? 1 : 0}|${lock.locked ? 1 : 0}`;
+      if (modeSig !== this.lastModeSelectorSig || modeHost.childElementCount === 0) {
+        this.lastModeSelectorSig = modeSig;
+        const lockTitle = lock.locked
+          ? 'title="Disconnect active device to switch timing system"'
+          : "";
+        modeHost.innerHTML = `
+          <select
+            name="network-timing-hardware-mode"
+            data-field="network-hardware-mode"
+            class="input net-timing-mode-select"
+            aria-label="Timing system"
+            ${lock.locked ? `disabled ${lockTitle}` : ""}
+          >
+            <option value="slaprf" ${effectiveMode === "slaprf" ? "selected" : ""}>SlapRF (USB)</option>
+            <option value="slaprf_ble" ${effectiveMode === "slaprf_ble" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select SlapRF (Bluetooth)"'}>SlapRF (Bluetooth)</option>
+            <option value="laprf" ${effectiveMode === "laprf" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select LapRF 8-Way (Network)"'}>LapRF 8-Way (Network)</option>
+            <option value="rotorhazard" ${effectiveMode === "rotorhazard" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select RotorHazard (Network)"'}>RotorHazard (Network)</option>
+            <option value="rotorhazard_usb" ${effectiveMode === "rotorhazard_usb" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select RotorHazard (USB)"'}>RotorHazard (USB)</option>
+          </select>`;
+        scanCustomSelects(modeHost);
+      }
+    }
+
+    const slaprfConnHost = this.el.querySelector<HTMLElement>('[data-slot="connection"]');
+    const extActionsHost = this.el.querySelector<HTMLElement>('[data-slot="external-conn-actions"]');
+    const laprfConnHost = this.el.querySelector<HTMLElement>('[data-slot="laprf-connection"]');
+    const rhConnHost = this.el.querySelector<HTMLElement>('[data-slot="rh-connection"]');
+    const rhUsbConnHost = this.el.querySelector<HTMLElement>('[data-slot="rh-usb-connection"]');
+
+    if (slaprfConnHost) slaprfConnHost.style.display = isSlapRF ? "contents" : "none";
+    if (laprfConnHost) laprfConnHost.style.display = isLapRF ? "" : "none";
+    if (rhConnHost) rhConnHost.style.display = isRHNet ? "" : "none";
+    if (rhUsbConnHost) rhUsbConnHost.style.display = isRHUSB ? "" : "none";
+
+    if (extActionsHost) {
+      const showExt = !isSlapRF && lock.connectedCount > 0;
+      extActionsHost.style.display = showExt ? "inline-flex" : "none";
+      const extSig = showExt ? `${lock.connectedCount}|${lock.busy ? 1 : 0}` : "0";
+      if (extSig !== this.lastExternalInlineSig) {
+        this.lastExternalInlineSig = extSig;
+        extActionsHost.innerHTML = showExt
+          ? `<span class="badge"><span class="status-dot is-up" style="display:inline-block;margin-right:6px"></span>${lock.connectedCount} connected</span>
+             <button
+               type="button"
+               class="pilot-chip debug-usb-add-chip net-mode-disconnect-chip"
+               data-action="network-disconnect-active"
+               ${lock.busy ? "disabled" : ""}
+               title="Disconnect active connection to switch timing system"
+             >
+               ${icons.close(14)}
+               <span class="pilot-chip-name">${lock.connectedCount > 1 ? "Disconnect all" : "Disconnect"}</span>
+             </button>`
+          : "";
+      }
+    }
+  }
+
+  private renderAll(): void {
+    const mode = this.store.timingHardwareMode;
+    this.lastRenderedHardwareMode = mode;
+    const isBleMode = mode === "slaprf_ble";
+    const isLapRF = mode === "laprf";
+    const isRHNet = mode === "rotorhazard";
+    const isRHUSB = mode === "rotorhazard_usb";
+
+    this.renderTopConnectionControls(mode);
+
     const slaprfWrap = this.el.querySelector<HTMLElement>('[data-slot="slaprf-sections"]');
     const laprfWrap = this.el.querySelector<HTMLElement>('[data-slot="laprf-sections"]');
     const rhWrap = this.el.querySelector<HTMLElement>('[data-slot="rh-sections"]');
@@ -1787,15 +2016,6 @@ export class NetworkView extends Component {
 
     if (slaprfWrap) {
       const introSig = isBleMode ? "ble" : "usb";
-      const connIntro = slaprfWrap.querySelector<HTMLElement>('[data-section-anchor="connection"] > .settings-intro');
-      if (connIntro && connIntro.dataset.introMode !== introSig) {
-        connIntro.dataset.introMode = introSig;
-        connIntro.classList.remove("has-intro-collapse");
-        connIntro.innerHTML = isBleMode
-          ? `<h2>Bluetooth Hub</h2><p>Set up to connect to the Hub over <strong>Bluetooth</strong>. Go to <a href="#/setup/timing-devices" class="link-inline">Settings</a> to change the connectivity type, or pair wirelessly to inspect pairing status, 2.4 GHz ESP-NOW Spokes, and live 5.8 GHz readings.</p>`
-          : `<h2>Connection</h2><p>Set up to connect to the Hub over <strong>USB-C</strong>. Go to <a href="#/setup/timing-devices" class="link-inline">Settings</a> to change the connectivity type, or connect the Hub (or a Spoke) to inspect the 2.4 GHz network and 5.8 GHz readings.</p>`;
-        scanSettingsIntroCollapse(connIntro);
-      }
       const topoSec = slaprfWrap.querySelector<HTMLElement>('[data-section-anchor="topology"]');
       if (topoSec) {
         topoSec.hidden = false;

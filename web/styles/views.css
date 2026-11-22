@@ -26193,3 +26193,82 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
     border-bottom-color: rgba(220, 38, 38, 0.34);
   }
 }
+
+/* Network page inline Timing System selector + connection controls */
+.net-connection-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.net-timing-mode-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.net-timing-mode-select-slot {
+  flex: 0 0 232px;
+  min-width: 210px;
+  max-width: 100%;
+}
+
+.net-timing-mode-select,
+.custom-select-wrap:has(> .net-timing-mode-select) {
+  height: 38px;
+}
+
+.custom-select-wrap:has(> .net-timing-mode-select) .custom-select-trigger {
+  height: 38px;
+  min-height: 38px;
+  padding: 0 13px;
+  border-radius: 999px;
+  border: 1.5px solid var(--border);
+  background: var(--surface);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.custom-select-wrap:has(> .net-timing-mode-select) .custom-select-trigger:hover:not(:disabled),
+.custom-select-wrap:has(> .net-timing-mode-select) .custom-select-trigger.is-custom-select-open {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+
+.custom-select-wrap:has(> .net-timing-mode-select) .custom-select-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.net-slaprf-inline-slot {
+  display: contents;
+}
+
+.net-timing-mode-bar > .net-slaprf-inline-slot > .debug-usb-busy-wrap,
+.net-timing-mode-bar > .net-slaprf-inline-slot > .sim-error-note {
+  flex: 1 0 100%;
+  margin-top: 2px;
+}
+
+.net-external-inline-slot {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.net-mode-disconnect-chip {
+  height: 38px;
+  padding: 0 14px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+@media (max-width: 640px) {
+  .net-timing-mode-select-slot {
+    flex: 1 1 100%;
+  }
+}
