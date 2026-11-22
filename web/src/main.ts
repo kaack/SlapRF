@@ -1,4 +1,5 @@
 import { installCustomSelects } from "./core/custom_select";
+import { installMobileKeyboardShift } from "./core/mobile_keyboard";
 import { navigateToRouteSection, Router } from "./core/router";
 import { installSettingsIntroCollapse } from "./core/settings_intro";
 import { installTableScrollIndicators } from "./core/table_scroll";
@@ -410,6 +411,7 @@ async function bootstrap(): Promise<void> {
   root.hidden = false;
   setBootStatus("Initializing UI components…", 18);
   installCustomSelects();
+  installMobileKeyboardShift();
   installTableScrollIndicators();
   installSettingsIntroCollapse();
   installWakeLock();

@@ -1,5 +1,6 @@
 import { computeDirectionalPinch, computeWheelZoomFactors } from "../core/chart_pinch";
 import { icons } from "../core/icons";
+import { installMobileKeyboardShift } from "../core/mobile_keyboard";
 import { Router } from "../core/router";
 import {
   adaptColorForTheme,
@@ -658,5 +659,35 @@ describe("core/theme, Sidebar & TopBar theme toggler, icons, and neutral control
       localStorage.removeItem(RSSI_PREF_KEY);
       chart.destroy();
     }
+  });
+
+  it("shifts mobile drawers via GPU-composited translate without root style invalidation", () => {
+    installMobileKeyboardShift();
+    expect(typeof window.__slaprfSetKbOffset).toBe("function");
+
+    const host = mountHtml(`
+      <div>
+        <div class="pilot-dir-mobile-drawer-overlay">
+          <div class="pilot-dir-mobile-editor" id="kb-test-pilot" style="height:260px"></div>
+        </div>
+        <div class="scope-tune-drawer" id="kb-test-tune" style="height:240px"></div>
+      </div>
+    `);
+    const pilotSheet = host.querySelector<HTMLElement>("#kb-test-pilot")!;
+    const tuneSheet = host.querySelector<HTMLElement>("#kb-test-tune")!;
+
+    window.__slaprfSetKbOffset!(310.5, 285, true);
+    expect(document.documentElement.style.getPropertyValue("--slaprf-kb-offset")).toBe("");
+    expect(pilotSheet.style.transition).toBe("translate 285ms cubic-bezier(0.2, 0, 0, 1)");
+    expect(pilotSheet.style.translate).toContain("-");
+    expect(tuneSheet.style.transition).toBe("translate 285ms cubic-bezier(0.2, 0, 0, 1)");
+    expect(tuneSheet.style.translate).toContain("-");
+
+    window.__slaprfSetKbOffset!(0, 285, false);
+    expect(pilotSheet.style.translate).toBe("0px");
+    pilotSheet.dispatchEvent(new TransitionEvent("transitionend", { propertyName: "translate" }));
+    expect(pilotSheet.style.translate).toBe("");
+    expect(pilotSheet.style.transition).toBe("");
+    window.__slaprfSetKbOffset!(0, 0, false);
   });
 });

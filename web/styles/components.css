@@ -1287,7 +1287,8 @@ html:has(
   .mobile-more-drawer-overlay:not([hidden]):not(.is-closing),
   .pilot-dir-mobile-drawer-overlay:not([hidden]):not(.is-closing),
   .practice-pilot-drawer-overlay:not([hidden]):not(.is-closing),
-  .device-conn-drawer-overlay:not([hidden]):not(.is-closing)
+  .device-conn-drawer-overlay:not([hidden]):not(.is-closing),
+  .mre-sheet-overlay:not([hidden]):not(.is-closing)
 ),
 body:has(
   .slaprf-modal-backdrop:not([hidden]):not(.is-closing),
@@ -1296,7 +1297,8 @@ body:has(
   .mobile-more-drawer-overlay:not([hidden]):not(.is-closing),
   .pilot-dir-mobile-drawer-overlay:not([hidden]):not(.is-closing),
   .practice-pilot-drawer-overlay:not([hidden]):not(.is-closing),
-  .device-conn-drawer-overlay:not([hidden]):not(.is-closing)
+  .device-conn-drawer-overlay:not([hidden]):not(.is-closing),
+  .mre-sheet-overlay:not([hidden]):not(.is-closing)
 ),
 body:has(
   .slaprf-modal-backdrop:not([hidden]):not(.is-closing),
@@ -1305,7 +1307,8 @@ body:has(
   .mobile-more-drawer-overlay:not([hidden]):not(.is-closing),
   .pilot-dir-mobile-drawer-overlay:not([hidden]):not(.is-closing),
   .practice-pilot-drawer-overlay:not([hidden]):not(.is-closing),
-  .device-conn-drawer-overlay:not([hidden]):not(.is-closing)
+  .device-conn-drawer-overlay:not([hidden]):not(.is-closing),
+  .mre-sheet-overlay:not([hidden]):not(.is-closing)
 ) .app,
 body:has(
   .slaprf-modal-backdrop:not([hidden]):not(.is-closing),
@@ -1314,10 +1317,20 @@ body:has(
   .mobile-more-drawer-overlay:not([hidden]):not(.is-closing),
   .pilot-dir-mobile-drawer-overlay:not([hidden]):not(.is-closing),
   .practice-pilot-drawer-overlay:not([hidden]):not(.is-closing),
-  .device-conn-drawer-overlay:not([hidden]):not(.is-closing)
+  .device-conn-drawer-overlay:not([hidden]):not(.is-closing),
+  .mre-sheet-overlay:not([hidden]):not(.is-closing)
 ) .main {
   overflow: hidden !important;
   overscroll-behavior: none !important;
+}
+@media (max-width: 860px) {
+  html:has(.scope-tune-drawer:not([hidden]):not(.is-mobile-closed):not(.is-closing)),
+  body:has(.scope-tune-drawer:not([hidden]):not(.is-mobile-closed):not(.is-closing)),
+  body:has(.scope-tune-drawer:not([hidden]):not(.is-mobile-closed):not(.is-closing)) .app,
+  body:has(.scope-tune-drawer:not([hidden]):not(.is-mobile-closed):not(.is-closing)) .main {
+    overflow: hidden !important;
+    overscroll-behavior: none !important;
+  }
 }
 .confirm-modal-backdrop,
 .modal-backdrop {

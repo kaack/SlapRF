@@ -95,24 +95,43 @@ public final class SlapRFHost extends Activity {
     private byte[] pendingSaveBytes;
     private OnBackInvokedCallback backCallback;
     private volatile long lastMultiTouchMs = 0L;
-    private int lastPushedKbCssPx = -1;
+    private float lastPushedKbCssPx = -1f;
+    private int activeImeAnimations = 0;
+    private boolean compositorDrivenImeAnim = false;
+    private int latestTargetKbPx = 0;
+    private boolean latestImeVisible = false;
+    private int lastSysBarsBottom = 0;
 
-    private void pushKeyboardOffsetPx(int kbPhysicalPx) {
+    private float physicalToCssPx(int kbPhysicalPx) {
+        if (kbPhysicalPx <= 0) {
+            return 0f;
+        }
+        float density = getResources().getDisplayMetrics().density;
+        return density > 0f ? (kbPhysicalPx / density) : (float) kbPhysicalPx;
+    }
+
+    private void dispatchKeyboardOffsetPx(int kbPhysicalPx, long durationMs, boolean showing) {
         if (webView == null) {
             return;
         }
-        float density = getResources().getDisplayMetrics().density;
-        int cssPx = density > 0f ? Math.round(kbPhysicalPx / density) : kbPhysicalPx;
-        if (cssPx < 0) {
-            cssPx = 0;
-        }
-        if (cssPx == lastPushedKbCssPx) {
+        float cssPx = physicalToCssPx(kbPhysicalPx);
+        if (durationMs == 0L && Math.abs(cssPx - lastPushedKbCssPx) < 0.25f) {
             return;
         }
         lastPushedKbCssPx = cssPx;
+        String cssStr = String.format(Locale.US, "%.2f", cssPx);
         webView.evaluateJavascript(
-                "document.documentElement.style.setProperty('--slaprf-kb-offset','" + cssPx + "px');",
+                "if(window.__slaprfSetKbOffset)window.__slaprfSetKbOffset("
+                        + cssStr + "," + Math.max(0L, durationMs) + "," + (showing ? "true" : "false") + ");",
                 null);
+    }
+
+    private void settleKeyboardOffsetIfNeeded(int kbPhysicalPx, boolean showing) {
+        float cssPx = physicalToCssPx(kbPhysicalPx);
+        if (lastPushedKbCssPx >= 0f && Math.abs(cssPx - lastPushedKbCssPx) <= 0.6f) {
+            return;
+        }
+        dispatchKeyboardOffsetPx(kbPhysicalPx, 120L, showing);
     }
 
     private static synchronized void ensureTtsInitialized(Context context) {
@@ -344,37 +363,111 @@ public final class SlapRFHost extends Activity {
                     Insets sysBars = insets.getInsets(
                             WindowInsets.Type.systemBars()
                                     | WindowInsets.Type.displayCutout());
-                    v.setPadding(sysBars.left, sysBars.top, sysBars.right, sysBars.bottom);
+                    if (v.getPaddingLeft() != sysBars.left
+                            || v.getPaddingTop() != sysBars.top
+                            || v.getPaddingRight() != sysBars.right
+                            || v.getPaddingBottom() != sysBars.bottom) {
+                        v.setPadding(sysBars.left, sysBars.top, sysBars.right, sysBars.bottom);
+                    }
+                    lastSysBarsBottom = sysBars.bottom;
                     Insets ime = insets.getInsets(WindowInsets.Type.ime());
                     int kbPx = Math.max(0, ime.bottom - sysBars.bottom);
-                    pushKeyboardOffsetPx(kbPx);
+                    latestTargetKbPx = kbPx;
+                    latestImeVisible = insets.isVisible(WindowInsets.Type.ime());
+                    // Only apply directly when no IME WindowInsetsAnimation is in flight;
+                    // otherwise onApplyWindowInsets fires BEFORE onStart with the post-animation
+                    // end state, which would jump the drawer to the target and snap it back.
+                    if (activeImeAnimations == 0) {
+                        dispatchKeyboardOffsetPx(kbPx, lastPushedKbCssPx < 0f ? 0L : 150L, latestImeVisible);
+                    }
                     return WindowInsets.CONSUMED;
                 });
                 rootLayout.setWindowInsetsAnimationCallback(
                         new WindowInsetsAnimation.Callback(WindowInsetsAnimation.Callback.DISPATCH_MODE_STOP) {
                             @Override
+                            public void onPrepare(WindowInsetsAnimation animation) {
+                                if ((animation.getTypeMask() & WindowInsets.Type.ime()) != 0) {
+                                    activeImeAnimations++;
+                                }
+                            }
+
+                            @Override
+                            public WindowInsetsAnimation.Bounds onStart(
+                                    WindowInsetsAnimation animation,
+                                    WindowInsetsAnimation.Bounds bounds) {
+                                if ((animation.getTypeMask() & WindowInsets.Type.ime()) != 0) {
+                                    boolean showing = latestImeVisible;
+                                    WindowInsets rw = rootLayout.getRootWindowInsets();
+                                    if (rw != null) {
+                                        showing = rw.isVisible(WindowInsets.Type.ime());
+                                        Insets sb = rw.getInsets(
+                                                WindowInsets.Type.systemBars()
+                                                        | WindowInsets.Type.displayCutout());
+                                        lastSysBarsBottom = sb.bottom;
+                                        int rwKb = Math.max(0, rw.getInsets(WindowInsets.Type.ime()).bottom - sb.bottom);
+                                        if (showing && rwKb > 0) {
+                                            latestTargetKbPx = rwKb;
+                                        }
+                                    }
+                                    int boundUpperKb = Math.max(0, bounds.getUpperBound().bottom - lastSysBarsBottom);
+                                    int targetKbPx = showing ? Math.max(latestTargetKbPx, boundUpperKb) : 0;
+                                    long durMs = animation.getDurationMillis();
+                                    if (durMs > 0L
+                                            && animation.getInterpolator() != null
+                                            && (!showing || targetKbPx > 0)) {
+                                        compositorDrivenImeAnim = true;
+                                        dispatchKeyboardOffsetPx(targetKbPx, durMs, showing);
+                                    } else {
+                                        compositorDrivenImeAnim = false;
+                                    }
+                                }
+                                return bounds;
+                            }
+
+                            @Override
                             public WindowInsets onProgress(
                                     WindowInsets insets,
                                     List<WindowInsetsAnimation> runningAnimations) {
-                                Insets sysBars = insets.getInsets(
-                                        WindowInsets.Type.systemBars()
-                                                | WindowInsets.Type.displayCutout());
-                                Insets ime = insets.getInsets(WindowInsets.Type.ime());
-                                int kbPx = Math.max(0, ime.bottom - sysBars.bottom);
-                                pushKeyboardOffsetPx(kbPx);
+                                if (!compositorDrivenImeAnim) {
+                                    boolean hasIme = false;
+                                    for (WindowInsetsAnimation anim : runningAnimations) {
+                                        if ((anim.getTypeMask() & WindowInsets.Type.ime()) != 0) {
+                                            hasIme = true;
+                                            break;
+                                        }
+                                    }
+                                    if (hasIme) {
+                                        Insets sysBars = insets.getInsets(
+                                                WindowInsets.Type.systemBars()
+                                                        | WindowInsets.Type.displayCutout());
+                                        Insets ime = insets.getInsets(WindowInsets.Type.ime());
+                                        int kbPx = Math.max(0, ime.bottom - sysBars.bottom);
+                                        dispatchKeyboardOffsetPx(kbPx, 0L, kbPx > 0);
+                                    }
+                                }
                                 return insets;
                             }
 
                             @Override
                             public void onEnd(WindowInsetsAnimation animation) {
-                                WindowInsets rw = rootLayout.getRootWindowInsets();
-                                if (rw != null) {
-                                    Insets sysBars = rw.getInsets(
-                                            WindowInsets.Type.systemBars()
-                                                    | WindowInsets.Type.displayCutout());
-                                    Insets ime = rw.getInsets(WindowInsets.Type.ime());
-                                    int kbPx = Math.max(0, ime.bottom - sysBars.bottom);
-                                    pushKeyboardOffsetPx(kbPx);
+                                if ((animation.getTypeMask() & WindowInsets.Type.ime()) != 0) {
+                                    activeImeAnimations = Math.max(0, activeImeAnimations - 1);
+                                    if (activeImeAnimations == 0) {
+                                        compositorDrivenImeAnim = false;
+                                        WindowInsets rw = rootLayout.getRootWindowInsets();
+                                        if (rw != null) {
+                                            Insets sysBars = rw.getInsets(
+                                                    WindowInsets.Type.systemBars()
+                                                            | WindowInsets.Type.displayCutout());
+                                            lastSysBarsBottom = sysBars.bottom;
+                                            boolean visible = rw.isVisible(WindowInsets.Type.ime());
+                                            Insets ime = rw.getInsets(WindowInsets.Type.ime());
+                                            int kbPx = visible ? Math.max(0, ime.bottom - sysBars.bottom) : 0;
+                                            latestTargetKbPx = kbPx;
+                                            latestImeVisible = visible;
+                                            settleKeyboardOffsetIfNeeded(kbPx, visible);
+                                        }
+                                    }
                                 }
                             }
                         });
