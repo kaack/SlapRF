@@ -480,6 +480,9 @@ body.is-gate-dragging * {
 .gate-unassigned-hint {
   font-size: 11px;
   color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .gate-unassigned-list {
   display: flex;
@@ -488,6 +491,9 @@ body.is-gate-dragging * {
   gap: 10px;
   min-width: 0;
   max-width: 100%;
+  min-height: 58px;
+  height: 58px;
+  box-sizing: border-box;
   flex: 0 1 auto;
   overflow-x: auto;
   overflow-y: hidden;
@@ -580,6 +586,8 @@ body.is-gate-dragging * {
   }
   .gate-unassigned-list {
     width: 100%;
+    min-height: calc(clamp(32px, 10vw, 40px) + 10px);
+    height: calc(clamp(32px, 10vw, 40px) + 10px);
     padding: 6px 6px 4px 2px;
     gap: 8px;
   }
@@ -1258,11 +1266,16 @@ body.is-gate-dragging * {
   grid-template-columns: minmax(0, 1fr) 120px;
   align-items: center;
   gap: 20px;
+  min-height: 68px;
+  box-sizing: border-box;
   padding: 14px 20px;
   border-top: 1px solid var(--border);
 }
 .rule-row:first-child {
   border-top: 0;
+}
+.rule-text {
+  min-width: 0;
 }
 .rule-input {
   width: 120px;
@@ -1286,7 +1299,13 @@ body.is-gate-dragging * {
   color: var(--text-3);
   font-size: 12.5px;
   line-height: 1.55;
-  max-width: 620px;
+}
+@media (min-width: 861px) {
+  .rule-help {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 .rule-meta {
   display: flex;

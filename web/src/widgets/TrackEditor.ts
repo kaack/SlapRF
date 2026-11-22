@@ -247,7 +247,6 @@ export class TrackEditor extends Component {
         <div class="gate-node-circle is-unassigned is-empty-slot-circle">
           <span class="gate-node-empty-label" data-empty-circle-label>Drop<br/>timer</span>
         </div>
-        <div class="gate-node-name is-empty-slot-caption" data-empty-slot-name>Drag a timer onto the line to start your track</div>
         <span class="gate-node-start-btn is-placeholder-flag" aria-hidden="true">${icons.checkered(13)}</span>
       </div>`;
   }
@@ -519,7 +518,6 @@ export class TrackEditor extends Component {
       if (!emptyPlaceholder) return;
       const circle = emptyPlaceholder.querySelector<HTMLElement>(".gate-node-circle");
       const label = emptyPlaceholder.querySelector<HTMLElement>("[data-empty-circle-label]");
-      const nameEl = emptyPlaceholder.querySelector<HTMLElement>("[data-empty-slot-name]");
       if (active) {
         emptyPlaceholder.classList.add("is-insert-preview");
         emptyPlaceholder.style.setProperty("--c", color);
@@ -528,7 +526,6 @@ export class TrackEditor extends Component {
           circle.style.setProperty("--c", color);
         }
         if (label) label.textContent = this.formatTimerShortCode(timerId);
-        if (nameEl) nameEl.textContent = this.formatTimerShortCode(timerId);
       } else {
         emptyPlaceholder.classList.remove("is-insert-preview");
         emptyPlaceholder.style.removeProperty("--c");
@@ -537,7 +534,6 @@ export class TrackEditor extends Component {
           circle.style.removeProperty("--c");
         }
         if (label) label.innerHTML = "Drop<br/>timer";
-        if (nameEl) nameEl.textContent = "Drag a timer onto the line to start your track";
       }
     };
 

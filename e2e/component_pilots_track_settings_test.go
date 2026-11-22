@@ -150,6 +150,12 @@ func TestComponent_TrackEditorDragGateOffToUnassignedAndBack(t *testing.T) {
 		cnt, err := items.Count()
 		return err == nil && cnt == 4, nil
 	})
+	trackCard := h.Page.Locator(`[data-slot="track"]`).First()
+	h.MustBeVisible(trackCard, "TrackEditor card")
+	initialTrackBox, err := trackCard.BoundingBox()
+	if err != nil || initialTrackBox == nil {
+		t.Fatalf("BoundingBox initialTrackBox: %v", err)
+	}
 
 	// Drag the last gate circle down onto [data-unassigned-tray] to unassign it from the track.
 	lastCircle := items.Nth(3).Locator(`.gate-node-circle`).First()
@@ -193,6 +199,13 @@ func TestComponent_TrackEditorDragGateOffToUnassignedAndBack(t *testing.T) {
 	if got := len(h.APIState().Gates); got != 3 {
 		t.Fatalf("expected /v1/state to report 3 gates after unassign drop, got %d", got)
 	}
+	unassignedTrackBox, err := trackCard.BoundingBox()
+	if err != nil || unassignedTrackBox == nil {
+		t.Fatalf("BoundingBox unassignedTrackBox: %v", err)
+	}
+	if diff := initialTrackBox.Height - unassignedTrackBox.Height; diff > 1 || diff < -1 {
+		t.Fatalf("expected TrackEditor card height to stay constant after unassigning gate (%.1f vs %.1f)", initialTrackBox.Height, unassignedTrackBox.Height)
+	}
 	h.MilestoneScreenshot("track-editor-unassigned-gate")
 
 	// Drag an unassigned spoke token back up onto the course line -> back to 4 gate nodes!
@@ -223,11 +236,17 @@ func TestComponent_TrackEditorDragGateOffToUnassignedAndBack(t *testing.T) {
 
 func TestComponent_TimingRulesEditorGlobalEditInlineResetAndPerGateOverride(t *testing.T) {
 	h := NewHarness(t)
-	// SnapshotPracticePopulated includes FilteredDetection records so filter counters render nonzero!
 	h.BootWithSnapshot(SnapshotPracticePopulated, "#/practice/evening-lap-lab/track", nil)
 
-	minLapCount := h.Page.Locator(`[data-count="MIN_LAP"]`).First()
-	h.MustContainText(minLapCount, "2")
+	if cnt, err := h.Page.Locator(`[data-count]`).Count(); err != nil || cnt != 0 {
+		t.Fatalf("expected [data-count] session filter counters to be omitted, got count=%d err=%v", cnt, err)
+	}
+	rulesCard := h.Page.Locator(`[data-slot="rules"]`).First()
+	h.MustBeVisible(rulesCard, "TimingRulesEditor card")
+	allRulesBox, err := rulesCard.BoundingBox()
+	if err != nil || allRulesBox == nil {
+		t.Fatalf("BoundingBox rulesCard (All timers): %v", err)
+	}
 
 	// 1. Global edit on minLapSec -> inline [data-reset-global="minLapSec"] appears -> click to reset.
 	minLapInput := h.Page.Locator(`form.rules input[name="minLapSec"]`).First()
@@ -256,6 +275,13 @@ func TestComponent_TimingRulesEditorGlobalEditInlineResetAndPerGateOverride(t *t
 	h.MustBeVisible(gate2ScopeBtn, "Gate 2 scope tab in TimingRulesEditor")
 	if err := gate2ScopeBtn.Click(); err != nil {
 		t.Fatalf("click Gate 2 scope: %v", err)
+	}
+	gate2RulesBox, err := rulesCard.BoundingBox()
+	if err != nil || gate2RulesBox == nil {
+		t.Fatalf("BoundingBox rulesCard (Gate 2): %v", err)
+	}
+	if diff := allRulesBox.Height - gate2RulesBox.Height; diff > 1 || diff < -1 {
+		t.Fatalf("expected TimingRulesEditor card height to stay constant between All timers (%.1f) and Gate 2 (%.1f)", allRulesBox.Height, gate2RulesBox.Height)
 	}
 
 	overrideToggle := h.Page.Locator(`button[data-override-toggle="minCrossingSec"]`).First()

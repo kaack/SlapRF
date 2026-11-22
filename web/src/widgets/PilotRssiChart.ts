@@ -38,6 +38,7 @@ export interface PilotRssiChartOptions {
 interface TuneRuleSpec {
   key: GateRuleKey;
   label: string;
+  fullLabel: string;
   help: string;
   step: number;
   min: number;
@@ -86,7 +87,8 @@ const TUNE_RULES: TuneRuleSpec[] = [
   {
     key: "minLapSec",
     label: "Minimum lap time",
-    help: "Shortest valid time before this timer can count a pilot again.",
+    fullLabel: "Minimum lap time (seconds)",
+    help: "Shortest valid time before the same timer can count a pilot again.",
     step: 0.5,
     min: 1,
     max: 120,
@@ -96,7 +98,8 @@ const TUNE_RULES: TuneRuleSpec[] = [
   {
     key: "maxLapSec",
     label: "Maximum lap time",
-    help: "Discards laps longer than this (crashes or pack swaps).",
+    fullLabel: "Maximum lap time (seconds)",
+    help: "Laps longer than this are discarded (crashes, landings, or pack swaps).",
     step: 5,
     min: 10,
     max: 900,
@@ -106,7 +109,8 @@ const TUNE_RULES: TuneRuleSpec[] = [
   {
     key: "minCrossingSec",
     label: "Minimum crossing time",
-    help: "Minimum signal hold duration across the gate to reject sharp RF or Wi-Fi spikes.",
+    fullLabel: "Minimum crossing time (seconds)",
+    help: "Minimum signal hold duration required across the gate to reject sharp RF or Wi-Fi spikes.",
     step: 0.02,
     min: 0.04,
     max: 1.5,
@@ -435,7 +439,7 @@ export class PilotRssiChart extends Component {
 
     const handleTuneClick = (e: MouseEvent) => {
       const btn = (e.target as HTMLElement).closest<HTMLElement>(
-        "[data-tune-scope], [data-tune-act], [data-tune-step], [data-tune-reset-key]"
+        "[data-tune-scope], [data-tune-act], [data-tune-step], [data-tune-reset-key], [data-tune-override-toggle]"
       );
       if (!btn) return;
       if (btn.dataset.tuneScope) {
@@ -450,12 +454,36 @@ export class PilotRssiChart extends Component {
         this.dismissMobileTuneDrawer();
         return;
       }
+      if (btn.dataset.tuneAct === "restore-defaults") {
+        void this.restoreScopeTuneDefaults();
+        return;
+      }
       if (btn.dataset.tuneAct === "toggle-beep") {
         void this.toggleTuneBeep();
         return;
       }
       if (btn.dataset.tuneAct === "reset-beep") {
         void this.resetTuneBeep();
+        return;
+      }
+      if (btn.dataset.tuneOverrideToggle) {
+        const key = btn.dataset.tuneOverrideToggle as GateRuleKey;
+        const row = btn.closest<HTMLElement>(".rule-row");
+        const input = row?.querySelector<HTMLInputElement>(`input[data-tune-input="${key}"]`);
+        if (row && input) {
+          if (input.disabled) {
+            input.disabled = false;
+            row.classList.add("is-overridden");
+            input.focus();
+            input.select();
+            const raw = Number(input.value);
+            if (Number.isFinite(raw)) {
+              void this.applyTuneRuleValue(key, raw);
+            }
+          } else {
+            void this.resetSingleTuneRule(key);
+          }
+        }
         return;
       }
       if (btn.dataset.tuneResetKey) {
@@ -1095,11 +1123,20 @@ export class PilotRssiChart extends Component {
         }
       })
     );
+    let wasMobileLayout = this.isMobileLayout;
+    this.listen(window as unknown as HTMLElement, "resize", () => {
+      const nowMobile = this.isMobileLayout;
+      if (nowMobile !== wasMobileLayout) {
+        wasMobileLayout = nowMobile;
+        this.renderTuningDrawer();
+      } else if (nowMobile && this.tuneDrawerOpen) {
+        this.syncMobileDrawerTop(this.tuneDrawerEl);
+      }
+    });
     this.syncHardwareModeScale();
     this.renderControls();
     this.renderCalib();
     this.renderLegend();
-    this.renderTuningDrawer();
     this.renderTuningDrawer();
   }
 
@@ -2745,6 +2782,21 @@ export class PilotRssiChart extends Component {
     }
   }
 
+  private async restoreScopeTuneDefaults(): Promise<void> {
+    if (this.store.isHistoricalTrack) return;
+    const targetGateId = this.activeTuneGateId;
+    if (targetGateId === null) {
+      await this.api.updateRules(DEFAULT_TUNE_RULES).catch(() => undefined);
+      return;
+    }
+    const slotIndex = this.activePilotSlot;
+    if (this.tuningScope === "pilot") {
+      await this.api.setPilotGateRules(targetGateId, slotIndex, {}).catch(() => undefined);
+    } else {
+      await this.api.setGateRules(targetGateId, {}).catch(() => undefined);
+    }
+  }
+
   private async resetTuneBeep(): Promise<void> {
     if (this.store.isHistoricalTrack) return;
     const targetGateId = this.activeTuneGateId;
@@ -2856,6 +2908,8 @@ export class PilotRssiChart extends Component {
       ? Boolean(effRules.beepOnCross) !== Boolean(DEFAULT_TUNE_RULES.beepOnCross)
       : activeOverrides.beepOnCross !== undefined;
     const beepEffOn = Boolean(effRules.beepOnCross);
+    const beepHelpText = `Plays an instant high-priority synthetic tone when a crossing is detected ${isGlobalScope ? "for all timers" : "at this timer"}.`;
+
     const beepCardHtml = `
       <div class="scope-tune-card is-beep-card ${beepOverridden ? "is-overridden" : ""}" data-tune-card="beepOnCross">
         <div class="scope-tune-card-info">
@@ -2867,7 +2921,7 @@ export class PilotRssiChart extends Component {
                 : ""
             }
           </div>
-          <div class="scope-tune-card-help">Instant synthetic WebAudio tone on detection (zero TTS delay, works in Practice and Races).</div>
+          <div class="scope-tune-card-help">${beepHelpText}</div>
         </div>
         <div class="scope-tune-card-controls">
           <div class="scope-tune-switch-slot">
@@ -2936,6 +2990,111 @@ export class PilotRssiChart extends Component {
         </div>`;
     }).join("");
 
+    const inheritedRules = gate
+      ? isPilotScope
+        ? gateRulesAt(this.store, gate.gateId)
+        : this.store.rules
+      : DEFAULT_TUNE_RULES;
+
+    const desktopRowsHtml = TUNE_RULES.map((spec) => {
+      const isOverridden = isGlobalScope
+        ? Math.abs(effRules[spec.key] - DEFAULT_TUNE_RULES[spec.key]) > 1e-6
+        : activeOverrides[spec.key] !== undefined;
+      const curVal = effRules[spec.key];
+      const valStr = this.formatTuneVal(curVal, spec.decimals);
+      const inhStr = this.formatTuneVal(inheritedRules[spec.key], spec.decimals);
+      if (isGlobalScope) {
+        return `
+          <div class="rule-row ${isOverridden ? "is-overridden" : ""}" data-tune-card="${spec.key}">
+            <div class="rule-text">
+              <div class="rule-label">${esc(spec.fullLabel)}</div>
+              <div class="rule-help">${esc(spec.help)}</div>
+            </div>
+            <div class="flasher-pass-wrap rule-input ${isOverridden ? "has-inline-action" : ""}">
+              <input
+                class="input mono ${isOverridden ? "flasher-pass-input" : ""}"
+                type="number"
+                data-tune-input="${spec.key}"
+                value="${valStr}"
+                step="${spec.step}"
+                min="${spec.min}"
+                max="${spec.max}"
+                aria-label="${esc(spec.fullLabel)}"
+              />
+              ${
+                isOverridden
+                  ? `<button class="flasher-pass-toggle rule-inline-btn is-active" type="button" data-tune-reset-key="${spec.key}" title="Restore default (${inhStr} s)" aria-label="Restore default (${inhStr} s)">${icons.reset(14)}</button>`
+                  : ""
+              }
+            </div>
+          </div>`;
+      }
+      const toggleTitle = isOverridden
+        ? `Revert to inherited default (${inhStr} s)`
+        : `Edit to override (inherits ${inhStr} s)`;
+      return `
+        <div class="rule-row ${isOverridden ? "is-overridden" : ""}" data-tune-card="${spec.key}">
+          <div class="rule-text">
+            <div class="rule-label">${esc(spec.fullLabel)}</div>
+            <div class="rule-help">${esc(spec.help)}</div>
+          </div>
+          <div class="flasher-pass-wrap rule-input has-inline-action">
+            <input
+              class="input mono flasher-pass-input"
+              type="number"
+              data-tune-input="${spec.key}"
+              value="${valStr}"
+              step="${spec.step}"
+              min="${spec.min}"
+              max="${spec.max}"
+              aria-label="${esc(spec.fullLabel)}"
+              ${isOverridden ? "" : "disabled"}
+            />
+            <button
+              class="flasher-pass-toggle rule-inline-btn ${isOverridden ? "is-active" : ""}"
+              type="button"
+              data-tune-override-toggle="${spec.key}"
+              title="${toggleTitle}"
+              aria-label="${toggleTitle}"
+              aria-pressed="${isOverridden}"
+            >
+              ${isOverridden ? icons.reset(14) : icons.pencil(14)}
+            </button>
+          </div>
+        </div>`;
+    }).join("");
+
+    const desktopBeepRowHtml = `
+      <div class="rule-row ${beepOverridden ? "is-overridden" : ""}" data-tune-card="beepOnCross">
+        <div class="rule-text">
+          <div class="rule-label">Beep on crossing</div>
+          <div class="rule-help">${beepHelpText}</div>
+        </div>
+        <div class="rule-input rule-switch-wrap">
+          <button
+            type="button"
+            role="switch"
+            aria-checked="${beepEffOn}"
+            class="scope-tune-switch ${beepEffOn ? "is-on" : ""}"
+            data-tune-act="toggle-beep"
+            aria-label="Beep on crossing"
+          >
+            <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
+          </button>
+          ${
+            beepOverridden
+              ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-tune-act="reset-beep" title="Restore default Beep on crossing" aria-label="Restore default Beep on crossing">${icons.reset(13)}</button>`
+              : `<span class="scope-tune-reset-spacer" aria-hidden="true"></span>`
+          }
+        </div>
+      </div>`;
+
+    const desktopFootNote = isGlobalScope
+      ? "Applies to new detections on this track."
+      : isPilotScope
+        ? `Edited rules apply only to ${esc(pilot.callsign)} at ${esc(gateName)}.`
+        : `Edited rules apply only to ${esc(gateName)}.`;
+
     const headDotHtml = isGlobalScope
       ? `<span class="dot channel-all-dot"></span>`
       : `<span class="dot" style="--c:${color}"></span>`;
@@ -2966,6 +3125,20 @@ export class PilotRssiChart extends Component {
             </button>
           </div>`;
 
+    const bodyContentHtml = this.isMobileLayout
+      ? `<div class="scope-tune-grid">
+          ${cardsHtml}
+          ${beepCardHtml}
+        </div>`
+      : `<div class="rules scope-tune-desktop-rules">
+          ${desktopRowsHtml}
+          ${desktopBeepRowHtml}
+          <div class="rules-foot">
+            <p class="note">${desktopFootNote}</p>
+            <button class="btn btn-ghost btn-sm" type="button" data-tune-act="restore-defaults">Restore defaults</button>
+          </div>
+        </div>`;
+
     const nextHtml = `
       <div class="dir-mobile-drawer-top-bar scope-tune-mobile-handle-bar">
         <button
@@ -2987,10 +3160,7 @@ export class PilotRssiChart extends Component {
           ${headActionsHtml}
         </div>
       </div>
-      <div class="scope-tune-grid">
-        ${cardsHtml}
-        ${beepCardHtml}
-      </div>`;
+      ${bodyContentHtml}`;
 
     if (nextHtml !== this.lastTuneDrawerHtml) {
       this.lastTuneDrawerHtml = nextHtml;

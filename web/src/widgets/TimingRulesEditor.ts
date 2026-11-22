@@ -14,7 +14,6 @@ import {
   TimingRules,
   TrackNode,
 } from "../types/models";
-import { FILTER_LABELS } from "./markup";
 import { isTrackTimerActive } from "./TrackEditor";
 
 interface RuleSpec {
@@ -337,7 +336,6 @@ export class TimingRulesEditor extends Component {
       unsubPool();
       unsubSlots.forEach((fn) => fn());
     });
-    this.onDispose(store.subscribe(["crossings"], () => this.renderCounts()));
     this.listen(window, "resize", () => this.syncScopeLayout());
     if (typeof ResizeObserver !== "undefined") {
       const ro = new ResizeObserver(() => this.syncScopeLayout());
@@ -555,7 +553,6 @@ export class TimingRulesEditor extends Component {
 
     const rows = RULES.map((spec) => {
       if (gate) return this.renderGateRow(spec, r, overrides);
-      const overrideNote = this.renderOverrideNote(spec);
       const defVal = DEFAULT_RULES[spec.key];
       const isCustom = Math.abs(r[spec.key] - defVal) > 1e-6;
       return `
@@ -563,10 +560,6 @@ export class TimingRulesEditor extends Component {
           <div class="rule-text">
             <div class="rule-label">${spec.label}</div>
             <div class="rule-help">${spec.help}</div>
-            <div class="rule-meta">
-              <span class="rule-count" data-count="${spec.reason}"></span>
-              ${overrideNote}
-            </div>
           </div>
           <div class="flasher-pass-wrap rule-input ${isCustom ? "has-inline-action" : ""}">
             <input class="input mono ${isCustom ? "flasher-pass-input" : ""}" type="number" name="${spec.key}" value="${r[spec.key]}" step="${spec.step}" min="${spec.min}" max="${spec.max}" />
@@ -604,7 +597,6 @@ export class TimingRulesEditor extends Component {
       </form>`;
     this.renderMobileDrawer();
     this.syncScopeLayout();
-    this.renderCounts();
   }
 
   private renderMobileDrawer(): void {
@@ -645,7 +637,7 @@ export class TimingRulesEditor extends Component {
                 : ""
             }
           </div>
-          <div class="scope-tune-card-help">Instant synthetic WebAudio tone on detection (zero TTS delay, works in Practice and Races).</div>
+          <div class="scope-tune-card-help">Plays an instant high-priority synthetic tone when a crossing is detected ${isGlobalScope ? "for all timers" : "at this timer"}.</div>
         </div>
         <div class="scope-tune-card-controls">
           <div class="scope-tune-switch-slot">
@@ -829,17 +821,11 @@ export class TimingRulesEditor extends Component {
 
   private renderGlobalBeepRow(r: TimingRules): string {
     const isOn = Boolean(r.beepOnCross);
-    const overList = this.store.nodes
-      .filter((p) => this.overridesOf(p).beepOnCross !== undefined)
-      .map((p) => `${esc(gateLabel(this.store, p.gateId))} ${this.overridesOf(p).beepOnCross ? "ON" : "OFF"}`);
     return `
       <div class="rule-row ${isOn ? "is-overridden" : ""}">
         <div class="rule-text">
           <div class="rule-label">Beep on crossing</div>
-          <div class="rule-help">Plays an instant high-priority synthetic tone when a crossing is detected (works in Practice and Races, without TTS delay).</div>
-          <div class="rule-meta">
-            ${overList.length ? `<div class="rule-override-note">Overridden at ${overList.join(", ")}</div>` : ""}
-          </div>
+          <div class="rule-help">Plays an instant high-priority synthetic tone when a crossing is detected for all timers.</div>
         </div>
         <div class="rule-input rule-switch-wrap">
           <button
@@ -867,7 +853,7 @@ export class TimingRulesEditor extends Component {
     return `
       <div class="rule-row ${hasOwn ? "is-overridden" : ""}">
         <div class="rule-text">
-          <div class="rule-label">Beep on crossing ${hasOwn ? `<span class="scope-tune-custom-icon" title="Customized" aria-label="Customized">${icons.pencil(12)}</span>` : ""}</div>
+          <div class="rule-label">Beep on crossing</div>
           <div class="rule-help">Plays an instant high-priority synthetic tone when a crossing is detected at this timer.</div>
         </div>
         <div class="rule-input rule-switch-wrap">
@@ -903,9 +889,6 @@ export class TimingRulesEditor extends Component {
         <div class="rule-text">
           <div class="rule-label">${spec.label}</div>
           <div class="rule-help">${spec.help}</div>
-          <div class="rule-meta">
-            <span class="rule-count" data-count="${spec.reason}"></span>
-          </div>
         </div>
         <div class="flasher-pass-wrap rule-input has-inline-action">
           <input class="input mono flasher-pass-input" type="number" name="${key}" value="${on ? own : r[key]}" step="${spec.step}" min="${spec.min}" max="${spec.max}" ${on ? "" : "disabled"} />
@@ -932,32 +915,6 @@ export class TimingRulesEditor extends Component {
     btn.setAttribute("aria-label", title);
     btn.setAttribute("aria-pressed", String(on));
     btn.innerHTML = on ? icons.reset(14) : icons.pencil(14);
-  }
-
-  /** On the All timers view, list which timers override this rule. */
-  private renderOverrideNote(spec: RuleSpec): string {
-    const key = spec.key;
-    const list = this.store.nodes
-      .filter((p) => this.overridesOf(p)[key] !== undefined)
-      .map((p) => `${esc(gateLabel(this.store, p.gateId))} ${this.overridesOf(p)[key]} s`);
-    return list.length ? `<div class="rule-override-note">Overridden at ${list.join(", ")}</div>` : "";
-  }
-
-  private renderCounts(): void {
-    const counts = new Map<FilterReason, number>();
-    for (const f of this.store.filtered) {
-      if (this.scope !== null && f.gateId !== this.scope) continue;
-      counts.set(f.reason, (counts.get(f.reason) ?? 0) + 1);
-    }
-    const where = this.scope === null ? "" : " here";
-    this.el.querySelectorAll<HTMLElement>("[data-count]").forEach((node) => {
-      const reason = node.dataset.count as FilterReason;
-      const n = counts.get(reason) ?? 0;
-      const label = FILTER_LABELS[reason] ?? reason;
-      node.innerHTML = n
-        ? `${icons.info(13)}<span>${esc(`${n} ${label.toLowerCase()}${where} this session`)}</span>`
-        : "";
-    });
   }
 
   private async save(form: HTMLFormElement): Promise<void> {

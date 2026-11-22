@@ -393,7 +393,7 @@ describe("widgets/Toast & TimingRulesEditor", () => {
     expect(messages).toContain("Stage capacity exceeded");
   });
 
-  it("renders TimingRulesEditor live rejection counts with (i) info SVG icon and saves global + per-gate overrides", async () => {
+  it("renders TimingRulesEditor without session filter counters or override sub-notes and saves global + per-gate overrides", async () => {
     const store = makeStore({
       gates: [
         makeGate(1, { name: "Start/Finish", ruleOverrides: { minLapSec: 4.5 } }),
@@ -414,12 +414,16 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       expect(root.querySelector(".rules-scope")?.textContent ?? "").not.toContain("Applies to");
       expect(root.querySelector("[data-scope='all'] .channel-custom-icon")).toBeNull();
 
-      const minLapCountEl = root.querySelector<HTMLElement>("[data-count='MIN_LAP']")!;
-      expect(minLapCountEl.querySelector("svg")).not.toBeNull();
-      expect(minLapCountEl.textContent).toContain("2 min lap this session");
+      // Session detection counters and override sub-notes are omitted so row height never jumps
+      expect(root.querySelector("[data-count='MIN_LAP']")).toBeNull();
+      expect(root.querySelector(".rule-override-note")).toBeNull();
+      expect(root.textContent).not.toContain("this session");
+      expect(root.textContent).not.toContain("Overridden at");
 
-      // Override note on global scope mentions Start/Finish 4.5 s
-      expect(root.textContent).toContain("Overridden at Start/Finish 4.5 s");
+      // Concise 1-line Beep on crossing description for All timers
+      expect(root.textContent).toContain(
+        "Plays an instant high-priority synthetic tone when a crossing is detected for all timers."
+      );
 
       // Editing global minLapSec triggers api.updateRules
       const minLapInput = root.querySelector<HTMLInputElement>("input[name='minLapSec']")!;
@@ -433,11 +437,11 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       store.applyRules({ ...store.rules, minLapSec: 6.5 });
       expect(root.querySelector("[data-scope='all'] .channel-custom-icon")).not.toBeNull();
 
-      // Switch scope to Gate 2 ("Split Tunnel") -> shows only Gate 2 SPIKE count ("1 noise spike here this session")
+      // Switch scope to Gate 2 ("Split Tunnel") -> concise 1-line Beep on crossing description for individual timer
       root.querySelector<HTMLButtonElement>("[data-scope='2']")!.click();
-      expect(root.querySelector("[data-count='MIN_LAP']")?.textContent).toBe("");
-      expect(root.querySelector("[data-count='SPIKE']")?.textContent).toContain(
-        "1 noise spike here this session"
+      expect(root.querySelector("[data-count='SPIKE']")).toBeNull();
+      expect(root.textContent).toContain(
+        "Plays an instant high-priority synthetic tone when a crossing is detected at this timer."
       );
 
       // Toggle override on minCrossingSec for Gate 2 -> calls setGateRules(2, { minCrossingSec: 0.12 })
@@ -548,17 +552,30 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       const minCrossingInput = drawerEl.querySelector<HTMLInputElement>('[data-tune-input="minCrossingSec"]')!;
       expect(minCrossingInput.value).toBe("0.12");
 
-      // Step minLapSec up (+0.5 -> 8.5) -> calls setPilotGateRules(1, 1, { minLapSec: 8.5 })
-      drawerEl.querySelector<HTMLButtonElement>('[data-tune-step="1"][data-tune-key="minLapSec"]')!.click();
+      // On desktop (>860px), the Signals Fine-tune box uses the Track-style .rules rows with inline pencil/reset buttons
+      const minLapOverrideToggle = drawerEl.querySelector<HTMLButtonElement>('[data-tune-override-toggle="minLapSec"]');
+      if (minLapOverrideToggle) {
+        minLapOverrideToggle.click();
+        await flushMicrotasks();
+        minLapInput.value = "8.5";
+        minLapInput.dispatchEvent(new Event("change", { bubbles: true }));
+      } else {
+        drawerEl.querySelector<HTMLButtonElement>('[data-tune-step="1"][data-tune-key="minLapSec"]')!.click();
+      }
       await flushMicrotasks();
-      const pilotCall1 = calls.find((c) => c.method === "setPilotGateRules");
+      const pilotCall1 = calls.filter((c) => c.method === "setPilotGateRules").pop();
       expect(pilotCall1).toBeDefined();
       expect(pilotCall1!.args).toEqual([1, 1, { minLapSec: 8.5 }]);
 
-      // Switch scope to "All pilots" -> minLapSec is overridden at H1, showing the pencil icon next to the title
+      // Switch scope to "All pilots" -> minLapSec is overridden at H1
       drawerEl.querySelector<HTMLButtonElement>('[data-tune-scope="gate"]')!.click();
       const minLapCard = drawerEl.querySelector<HTMLElement>('[data-tune-card="minLapSec"]')!;
-      expect(minLapCard.querySelector(".scope-tune-custom-icon")).not.toBeNull();
+      expect(minLapCard.classList.contains("is-overridden")).toBe(true);
+      const crossOverrideToggle = drawerEl.querySelector<HTMLButtonElement>('[data-tune-override-toggle="minCrossingSec"]');
+      if (crossOverrideToggle) {
+        crossOverrideToggle.click();
+        await flushMicrotasks();
+      }
       const crossInputGate = drawerEl.querySelector<HTMLInputElement>('[data-tune-input="minCrossingSec"]')!;
       crossInputGate.value = "0.18";
       crossInputGate.dispatchEvent(new Event("change", { bubbles: true }));
