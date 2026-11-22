@@ -378,7 +378,6 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect(txt).not.toContain("MinChan");
       // Hardware frequencies, Enter/Exit, RSSI, and CROSSING appear cleanly
       expect(txt).toContain("Connection");
-      expect(txt).toContain("Discover");
       expect(txt).toContain("RotorHazard devices");
       expect(txt).not.toContain("Connected RotorHazard devices");
       expect(txt).toContain("Node 1");
@@ -397,7 +396,7 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect(root.querySelector("[data-action='rh-open-manual-creds']")).toBeNull();
       expect(root.querySelector("[data-action='network-disconnect-active']")).not.toBeNull();
 
-      // Once disconnected, IP/Port fields become editable and clicking Connect… opens the inline per-device credentials prompt
+      // Once disconnected, IP/Port fields become editable and Connect + Discover buttons appear
       store.simState!.rotorhazardUnits![0].connected = false;
       store.hydrate(
         makeFullState({
@@ -407,16 +406,20 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       );
       await flushMicrotasks();
       expect(root.querySelector<HTMLInputElement>("[data-field='rh-host']")?.disabled).toBe(false);
+      expect(root.querySelector("[data-action='rh-scan-lan']")).not.toBeNull();
       const openPromptBtn = root.querySelector<HTMLButtonElement>("[data-action='rh-open-manual-creds']")!;
       expect(openPromptBtn).not.toBeNull();
+      expect((openPromptBtn.textContent || "").trim()).toBe("Connect");
       openPromptBtn.click();
       await flushMicrotasks();
+      // Because R1 is password-protected, clicking Connect reveals the inline Username / Password / Authenticate row
       const promptEl = root.querySelector("[data-rh-creds-prompt='1']")!;
       expect(promptEl).not.toBeNull();
-      expect(promptEl.textContent).toContain("Admin Username");
-      expect(promptEl.textContent).toContain("Admin Password");
+      expect(promptEl.querySelector("[data-field='rh-cred-user']")).not.toBeNull();
+      expect(promptEl.querySelector("[data-field='rh-cred-pass']")).not.toBeNull();
       const submitBtn = promptEl.querySelector<HTMLButtonElement>("[data-action='rh-cred-submit']")!;
       expect(submitBtn.classList.contains("btn-armed")).toBe(true);
+      expect((submitBtn.textContent || "").trim()).toBe("Authenticate");
       expect(submitBtn.classList.contains("btn-primary")).toBe(false);
     } finally {
       netView.destroy();
@@ -648,9 +651,10 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect(root.querySelector("#sim-usb [data-field='rh-host']")).toBeNull();
       expect(root.querySelector("#sim-usb [data-field='rh-pass']")).toBeNull();
 
-      // NetworkView renders USB serial port picker (defaulting to SIM-RH-USB1) and live 0..255 Node bars matching RotorHazard Network
+      // NetworkView renders RotorHazard USB without inline serial port / baud dropdowns and displays live 0..255 Node bars
       const netEl = root.querySelector("#net-usb")!;
-      expect(netEl.querySelector("[data-field='rh-usb-port']")).not.toBeNull();
+      expect(netEl.querySelector("[data-field='rh-usb-port']")).toBeNull();
+      expect(netEl.querySelector("[data-field='rh-usb-baud']")).toBeNull();
       const usbVisTxt = netEl.querySelector("[data-slot='rh-usb-sections']")!.textContent ?? "";
       expect(usbVisTxt).toContain("RotorHazard USB devices");
       expect(usbVisTxt).toContain("SIM-RH-USB1");
@@ -662,32 +666,42 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect(usbVisTxt).not.toContain("Scan LAN");
       expect(usbVisTxt).not.toContain("Admin Password");
 
-      const portSel = netEl.querySelector<HTMLSelectElement>("[data-field='rh-usb-port']")!;
-      expect(portSel).not.toBeNull();
-      expect(portSel.value).toBe("SIM-RH-USB1");
-
-      // When the selected USB port is already connected, the unified Connection card renders an active Disconnect button
-      // on the right and the device card below does not duplicate the Disconnect button.
+      // While SIM-RH-USB1 is connected, the unified Connection card renders a single Disconnect USB button
       const connHostEl = netEl.querySelector<HTMLElement>("[data-slot='net-conn-card']")!;
-      const disconnectUsbBtn = connHostEl.querySelector<HTMLButtonElement>("[data-action='rh-disconnect']")!;
+      const disconnectUsbBtn = connHostEl.querySelector<HTMLButtonElement>("[data-action='network-disconnect-active']")!;
       expect(disconnectUsbBtn).not.toBeNull();
       expect(disconnectUsbBtn.disabled).toBe(false);
-      expect(disconnectUsbBtn.textContent ?? "").toContain("Disconnect");
+      expect((disconnectUsbBtn.textContent ?? "").trim()).toBe("Disconnect USB");
       expect(connHostEl.querySelector("[data-action='rh-usb-connect']")).toBeNull();
 
       const usbDeviceCard = netEl.querySelector<HTMLElement>("[data-rh-usb-card]")!;
       expect(usbDeviceCard).not.toBeNull();
       expect(usbDeviceCard.querySelector("[data-action='rh-disconnect']")).toBeNull();
 
-      // Switching the dropdown to an unconnected USB port turns the button back into Connect USB
-      portSel.value = "SIM-RH-USB2";
-      portSel.dispatchEvent(new Event("change", { bubbles: true }));
+      // When disconnected, clicking Connect USB opens the unified .sim-usb-dialog modal to pick a RotorHazard USB port
+      store.simState!.rotorhazardUnits![0].connected = false;
+      store.hydrate(
+        makeFullState({
+          timingHardwareMode: "rotorhazard_usb",
+          simState: store.simState!,
+        })
+      );
       await flushMicrotasks();
 
       const connectUsbBtn = connHostEl.querySelector<HTMLButtonElement>("[data-action='rh-usb-connect']")!;
       expect(connectUsbBtn).not.toBeNull();
       expect(connectUsbBtn.disabled).toBe(false);
       connectUsbBtn.click();
+      await flushMicrotasks();
+
+      const rhUsbDialog = document.querySelector<HTMLElement>(".sim-usb-dialog")!;
+      expect(rhUsbDialog).not.toBeNull();
+      expect(rhUsbDialog.textContent ?? "").toContain("SIM-RH-USB1");
+      expect(rhUsbDialog.textContent ?? "").toContain("SIM-RH-USB2");
+      const rh2Row = rhUsbDialog.querySelector<HTMLElement>('[data-pick-port-id="sim-rh-3"]')!;
+      expect(rh2Row).not.toBeNull();
+      rh2Row.click();
+      rhUsbDialog.querySelector<HTMLButtonElement>('[data-modal="connect"]')!.click();
       await flushMicrotasks();
       expect(
         calls.some(
@@ -697,6 +711,16 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
             (c.args[0] as { action?: string; portName?: string })?.portName === "SIM-RH-USB2"
         )
       ).toBe(true);
+
+      // Restore R1 connected state for the DebugView spectrum scan test below
+      store.simState!.rotorhazardUnits![0].connected = true;
+      store.hydrate(
+        makeFullState({
+          timingHardwareMode: "rotorhazard_usb",
+          simState: store.simState!,
+        })
+      );
+      await flushMicrotasks();
 
       // PilotSlotsEditor renders Pilot, Phonetic name, and Default channel columns (thresholds hidden)
       const pilotsTxt = root.querySelector("#pilots-usb")!.textContent ?? "";

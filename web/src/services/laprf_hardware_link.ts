@@ -10,7 +10,7 @@
 
 import { ApiClient } from "./api_client";
 import { capabilitiesSnapshot, openBackendConnectModal, resolveBackendUrl } from "./capabilities";
-import { isBackendSerialPort, pickUsbPort } from "./sim_serial_port";
+import { bindSimSerialStore, isBackendSerialPort, isSimulatedSerialPort, pickUsbPort } from "./sim_serial_port";
 import { AppStore } from "../state/store";
 
 const SAVED_TARGETS_KEY = "slaprf.laprf.targets.v1";
@@ -194,7 +194,47 @@ export class LapRFHardwareLink {
   ): Promise<{ subnet: string; devices: LapRFDiscoveredDevice[] }> {
     this.lastError = "";
     if (store.simulatorRunning) {
-      return await api.simLapRFDiscover();
+      const res = await api.simLapRFDiscover();
+      if (res.devices.length === 0) {
+        const rawUnits = store.simState?.laprfUnits ?? [];
+        const fallback =
+          rawUnits.length > 0
+            ? rawUnits
+            : [
+                {
+                  timerId: 2,
+                  label: "L1",
+                  host: "192.168.1.2",
+                  port: 5403,
+                  voltageMv: 12200,
+                  poweredOn: true,
+                  connected: false,
+                },
+                {
+                  timerId: 3,
+                  label: "L2",
+                  host: "192.168.1.3",
+                  port: 5403,
+                  voltageMv: 12100,
+                  poweredOn: true,
+                  connected: false,
+                },
+              ];
+        return {
+          subnet: res.subnet || "192.168.1.0/24 (Simulated)",
+          devices: fallback
+            .filter((u) => u.poweredOn)
+            .map((u, idx) => ({
+              host: u.host || `192.168.1.${2 + idx}`,
+              port: u.port || 5403,
+              label: u.label || `L${idx + 1}`,
+              timerId: u.timerId,
+              voltageMv: u.voltageMv || 12200,
+              connected: Boolean(u.poweredOn && u.connected),
+            })),
+        };
+      }
+      return res;
     }
     if (!capabilitiesSnapshot().portable) {
       openBackendConnectModal("real-hardware");
@@ -299,26 +339,22 @@ export class LapRFHardwareLink {
 
   public async connectUsb(store: AppStore, api: ApiClient): Promise<void> {
     this.lastError = "";
-    if (store.simulatorRunning) {
-      const units = store.simState?.laprfUnits ?? [];
-      const target = units.find((u) => !u.connected && u.poweredOn) ?? units.find((u) => u.poweredOn) ?? units[0];
-      if (target) {
-        await api.simLapRFAction({ action: "connect", timerId: target.timerId });
-      } else {
-        await api.simLapRFAction({ action: "add" });
-      }
-      this.notify();
-      return;
-    }
-
-    if (!capabilitiesSnapshot().portable) {
+    if (!store.simulatorRunning && !capabilitiesSnapshot().portable) {
       openBackendConnectModal("real-hardware");
       this.lastError = "Connect to a SlapRF Server to open physical USB serial ports.";
       this.notify();
       throw new Error(this.lastError);
     }
 
+    bindSimSerialStore(store);
     const selected = await pickUsbPort({ showAllPorts: true, transport: "usb", vendor: "laprf" });
+    if (store.simulatorRunning || isSimulatedSerialPort(selected)) {
+      const timerId = isSimulatedSerialPort(selected) ? selected.simulatedTimerId : 2;
+      await api.simLapRFAction({ action: "connect", timerId });
+      this.notify();
+      return;
+    }
+
     if (!isBackendSerialPort(selected)) {
       throw new Error("Expected a native OS USB port from SlapRF Server.");
     }

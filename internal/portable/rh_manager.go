@@ -479,12 +479,7 @@ func (m *rhManager) connectWebSocket(req SavedRHTarget) (RHDiagSnapshot, error) 
 	if req.Port <= 0 {
 		req.Port = DefaultRotorHazardPort
 	}
-	if strings.TrimSpace(req.AdminUser) == "" {
-		req.AdminUser = "admin"
-	}
-	if req.AdminPass == "" {
-		req.AdminPass = "rotorhazard"
-	}
+	req.AdminUser = strings.TrimSpace(req.AdminUser)
 
 	ctxCheck, cancelCheck := context.WithTimeout(context.Background(), 3*time.Second)
 	targetAddr, err := resolveAllowedLapRFAddr(ctxCheck, req.Host, req.Port, true)
@@ -542,20 +537,27 @@ func (m *rhManager) connectWebSocket(req SavedRHTarget) (RHDiagSnapshot, error) 
 	m.activeMode = domain.HardwareModeRotorHazard
 	m.mu.Unlock()
 
-	m.persistTargetsForMode(false)
-	if m.onDirty != nil {
-		m.onDirty()
-	}
-
 	firstDone := make(chan error, 1)
 	go m.runSessionLoop(ctx, sess, firstDone)
 
 	select {
 	case cErr := <-firstDone:
 		if cErr != nil {
-			return m.snapshotOne(sess), cErr
+			cancel()
+			m.mu.Lock()
+			if m.sessions[assignedID] == sess {
+				delete(m.sessions, assignedID)
+			}
+			m.mu.Unlock()
+			m.engine.SetDetectedTimerOnline(assignedID, false)
+			m.persistTargetsForMode(false)
+			return RHDiagSnapshot{}, cErr
 		}
 	case <-time.After(4 * time.Second):
+	}
+	m.persistTargetsForMode(false)
+	if m.onDirty != nil {
+		m.onDirty()
 	}
 	return m.snapshotOne(sess), nil
 }
@@ -606,14 +608,20 @@ func (m *rhManager) runEIOv4SessionOnce(ctx context.Context, sess *rhManagedSess
 		Timeout: 4 * time.Second,
 		Jar:     jar,
 	}
-	authHeader := "Basic " + base64.StdEncoding.EncodeToString([]byte(sess.target.AdminUser+":"+sess.target.AdminPass))
+	hasAuthCreds := sess.target.AdminUser != "" || sess.target.AdminPass != ""
+	authHeader := ""
+	if hasAuthCreds {
+		authHeader = "Basic " + base64.StdEncoding.EncodeToString([]byte(sess.target.AdminUser+":"+sess.target.AdminPass))
+	}
 	baseHTTP := fmt.Sprintf("http://%s/socket.io/?EIO=4&transport=polling", sess.endpoint)
 
 	openReq, err := http.NewRequestWithContext(ctx, http.MethodGet, baseHTTP, nil)
 	if err != nil {
 		return err
 	}
-	openReq.Header.Set("Authorization", authHeader)
+	if authHeader != "" {
+		openReq.Header.Set("Authorization", authHeader)
+	}
 	openResp, err := hc.Do(openReq)
 	if err != nil {
 		return err
@@ -654,7 +662,9 @@ func (m *rhManager) runEIOv4SessionOnce(ctx context.Context, sess *rhManagedSess
 		if pErr != nil {
 			return pErr
 		}
-		postReq.Header.Set("Authorization", authHeader)
+		if authHeader != "" {
+			postReq.Header.Set("Authorization", authHeader)
+		}
 		postReq.Header.Set("Content-Type", "text/plain;charset=UTF-8")
 		postResp, pErr := hc.Do(postReq)
 		if pErr != nil {
@@ -666,7 +676,9 @@ func (m *rhManager) runEIOv4SessionOnce(ctx context.Context, sess *rhManagedSess
 
 	wsURL := fmt.Sprintf("ws://%s/socket.io/?EIO=4&transport=websocket&sid=%s", sess.endpoint, url.QueryEscape(sid))
 	hdr := http.Header{}
-	hdr.Set("Authorization", authHeader)
+	if authHeader != "" {
+		hdr.Set("Authorization", authHeader)
+	}
 	if uParsed, uErr := url.Parse("http://" + sess.endpoint); uErr == nil && jar != nil {
 		var cookieParts []string
 		for _, c := range jar.Cookies(uParsed) {
@@ -727,14 +739,10 @@ func (m *rhManager) runEIOv4SessionOnce(ctx context.Context, sess *rhManagedSess
 	}
 
 	sess.mu.Lock()
-	sess.connected = true
-	sess.lastErr = ""
 	sess.sendFn = func(sioFrame string) {
 		_ = writeWS(sioFrame)
 	}
 	sess.mu.Unlock()
-	m.engine.SetDetectedTimerOnline(sess.target.TimerID, true)
-	m.logf("[RotorHazard] Connected to %s (%s)", sess.endpoint, sess.target.Label)
 
 	sess.client.OnConnected()
 	for _, f := range initialSIOFrames {
@@ -743,6 +751,36 @@ func (m *rhManager) runEIOv4SessionOnce(ctx context.Context, sess *rhManagedSess
 	for _, f := range bufferedFrames {
 		sess.client.FeedSIOFrame(f)
 	}
+
+	authDeadline := time.Now().Add(1200 * time.Millisecond)
+	for !sess.client.Snapshot().AuthKnown && time.Now().Before(authDeadline) {
+		rCtx, rCancel := context.WithTimeout(ctx, 300*time.Millisecond)
+		_, raw, rErr := ws.Read(rCtx)
+		rCancel()
+		if rErr != nil {
+			break
+		}
+		msg := string(raw)
+		switch {
+		case msg == "2":
+			_ = writeWS("3")
+		case msg == "1":
+			return errors.New("RotorHazard closed Engine.IO session")
+		case strings.HasPrefix(msg, "4"):
+			sess.client.FeedSIOFrame(msg)
+		}
+	}
+	if st := sess.client.Snapshot(); st.AuthKnown && !st.AuthOK {
+		return fmt.Errorf("RotorHazard authentication rejected on %s (check Admin Username & Password)", sess.endpoint)
+	}
+
+	sess.mu.Lock()
+	sess.connected = true
+	sess.lastErr = ""
+	sess.mu.Unlock()
+	m.engine.SetDetectedTimerOnline(sess.target.TimerID, true)
+	m.logf("[RotorHazard] Connected to %s (%s)", sess.endpoint, sess.target.Label)
+
 	m.syncOne(sess)
 	reportFirst(nil)
 
@@ -978,6 +1016,14 @@ func (s *Server) handleRHConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	snap, err := s.rhMgr.Connect(req)
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "authentication") {
+			writeJSONNoStore(w, http.StatusOK, map[string]any{
+				"authRequired": true,
+				"error":        err.Error(),
+				"connection":   snap,
+			})
+			return
+		}
 		writeJSONNoStore(w, http.StatusBadGateway, map[string]any{
 			"error":      err.Error(),
 			"connection": snap,

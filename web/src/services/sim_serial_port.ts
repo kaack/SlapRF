@@ -583,9 +583,13 @@ export class SimulatedSerialPort implements SerialPortLike {
   private flashBlockSize = 1024;
   private flashNumBlocks = 0;
   private flashImageBuf: Uint8Array | null = null;
+  public readonly simulatedPortName?: string;
+  public readonly simulatedLabel?: string;
 
-  constructor(timerId: number) {
+  constructor(timerId: number, opts?: { portName?: string; label?: string }) {
     this.simulatedTimerId = timerId;
+    this.simulatedPortName = opts?.portName;
+    this.simulatedLabel = opts?.label;
   }
 
   public getInfo(): { usbVendorId?: number; usbProductId?: number } {
@@ -1421,7 +1425,7 @@ export interface PickUsbPortOptions {
   excludePorts?: SerialPortLike[];
   excludeTimerIds?: number[];
   transport?: "usb" | "ble";
-  vendor?: "slaprf" | "laprf";
+  vendor?: "slaprf" | "laprf" | "rotorhazard";
   alreadyPaired?: boolean;
   preferredPortName?: string;
 }
@@ -1489,6 +1493,102 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
 
   const loadChoices = async (): Promise<PortChoice[]> => {
     if (simMode) {
+      if (opts.vendor === "laprf") {
+        const rawUnits = boundStore?.simState?.laprfUnits ?? [];
+        const fallbackUnits =
+          rawUnits.length > 0
+            ? rawUnits
+            : [
+                {
+                  timerId: 2,
+                  label: "L1",
+                  portName: "SIM-LAPRF-USB1",
+                  voltageMv: 12200,
+                  poweredOn: true,
+                  connected: false,
+                },
+                {
+                  timerId: 3,
+                  label: "L2",
+                  portName: "SIM-LAPRF-USB2",
+                  voltageMv: 12100,
+                  poweredOn: true,
+                  connected: false,
+                },
+              ];
+        return fallbackUnits
+          .filter(
+            (u) =>
+              u.poweredOn &&
+              !u.connected &&
+              !excludeTimerIds.has(u.timerId) &&
+              !unpairedSimTimerIds.has(u.timerId)
+          )
+          .map((u, idx) => {
+            const portName = u.portName?.trim() || `SIM-LAPRF-USB${idx + 1}`;
+            const lbl = u.label?.trim() || `L${idx + 1}`;
+            const vStr = u.voltageMv && u.voltageMv > 0 ? ` (${(u.voltageMv / 1000).toFixed(1)} V)` : "";
+            return {
+              id: `sim-laprf-${u.timerId}`,
+              label: `${portName} · Immersive RC LapRF 8-Way · ${lbl}${vStr}`,
+              createPort: () => new SimulatedSerialPort(u.timerId, { portName }),
+              simTimerId: u.timerId,
+            };
+          });
+      }
+      if (opts.vendor === "rotorhazard") {
+        const rawUnits = boundStore?.simState?.rotorhazardUnits ?? [];
+        const fallbackUnits =
+          rawUnits.length > 0
+            ? rawUnits
+            : [
+                {
+                  timerId: 2,
+                  label: "R1",
+                  portName: "SIM-RH-USB1",
+                  nodeCount: 8,
+                  baudRate: 115200,
+                  apiLevel: 36,
+                  poweredOn: true,
+                  connected: false,
+                },
+                {
+                  timerId: 3,
+                  label: "R2",
+                  portName: "SIM-RH-USB2",
+                  nodeCount: 8,
+                  baudRate: 115200,
+                  apiLevel: 36,
+                  poweredOn: true,
+                  connected: false,
+                },
+              ];
+        return fallbackUnits
+          .filter(
+            (u) =>
+              u.poweredOn &&
+              !u.connected &&
+              !excludeTimerIds.has(u.timerId) &&
+              !unpairedSimTimerIds.has(u.timerId)
+          )
+          .map((u, idx) => {
+            const portName = u.portName?.trim() || `SIM-RH-USB${idx + 1}`;
+            const rawLbl = u.label?.trim() || "";
+            const lbl = rawLbl
+              ? /^rh(\d+)$/i.test(rawLbl)
+                ? `R${rawLbl.slice(2)}`
+                : rawLbl
+              : `R${Math.max(1, u.timerId - 1)}`;
+            const nodes = u.nodeCount === 4 ? 4 : 8;
+            const baud = u.baudRate || 115200;
+            return {
+              id: `sim-rh-${u.timerId}`,
+              label: `${portName} · RotorHazard USB Node (${nodes} nodes · ${baud} baud) · ${lbl}`,
+              createPort: () => new SimulatedSerialPort(u.timerId, { portName }),
+              simTimerId: u.timerId,
+            };
+          });
+      }
       const timers = listSimulatedTimers().filter(
         (t) => t.poweredOn && !excludeTimerIds.has(t.timerId) && !unpairedSimTimerIds.has(t.timerId)
       );
@@ -1512,9 +1612,11 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
       const endpoint =
         opts.vendor === "laprf"
           ? `/v1/laprf/usb/ports?all=${showAllRealPorts ? "1" : "0"}`
-          : isBleMode
-            ? "/v1/slaprf/bluetooth/ports"
-            : `/v1/slaprf/usb/ports?all=${showAllRealPorts ? "1" : "0"}`;
+          : opts.vendor === "rotorhazard"
+            ? `/v1/rotorhazard/usb/ports?all=${showAllRealPorts ? "1" : "0"}`
+            : isBleMode
+              ? "/v1/slaprf/bluetooth/ports"
+              : `/v1/slaprf/usb/ports?all=${showAllRealPorts ? "1" : "0"}`;
       const res = await fetch(resolveBackendUrl(endpoint), { cache: "no-store" });
       if (!res.ok) return [];
       const data = (await res.json()) as BackendPortsResponse;
@@ -1808,4 +1910,264 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
 
 export function pickSimulatedUsbPort(excludeTimerIds: number[] = []): Promise<SimulatedSerialPort> {
   return pickUsbPort({ excludeTimerIds }) as Promise<SimulatedSerialPort>;
+}
+
+export interface DiscoveredNetworkChoice<T> {
+  id: string;
+  label: string;
+  value: T;
+  simTimerId?: number;
+}
+
+export interface PickDiscoveredNetworkDeviceOptions<T> {
+  title: string;
+  listAriaLabel?: string;
+  scanningText?: string;
+  emptyText?: string;
+  loadChoices: () => Promise<Array<DiscoveredNetworkChoice<T>>>;
+}
+
+/**
+ * Opens the unified `.sim-usb-dialog` picker modal for LAN discovery (`LapRF 8-Way (Network)` and `RotorHazard (Network)`).
+ */
+export async function pickDiscoveredNetworkDevice<T>(
+  opts: PickDiscoveredNetworkDeviceOptions<T>
+): Promise<T> {
+  if (activePickerCancel) {
+    activePickerCancel();
+    activePickerCancel = null;
+  }
+  document.querySelectorAll(".confirm-modal-backdrop").forEach((el) => el.remove());
+
+  const simMode = isSimulatedUsbMode();
+  let choices: Array<DiscoveredNetworkChoice<T>> = [];
+  let scanning = true;
+
+  return new Promise<T>((resolve, reject) => {
+    const pickInitialId = (list: Array<DiscoveredNetworkChoice<T>>): string | null =>
+      list[0]?.id ?? null;
+
+    let selectedId: string | null = null;
+    let closed = false;
+
+    const backdrop = document.createElement("div");
+    backdrop.className = "slaprf-modal-backdrop confirm-modal-backdrop";
+
+    const renderRowsHtml = (): string => {
+      if (scanning && choices.length === 0) {
+        return `<div class="sim-usb-port-empty sim-usb-port-scanning">
+          <span>${esc(opts.scanningText || "Scanning local network…")}</span>
+          <div class="slaprf-indeterminate-track" role="progressbar" aria-label="Scanning">
+            <div class="slaprf-indeterminate-bar"></div>
+          </div>
+        </div>`;
+      }
+      if (choices.length === 0) {
+        return `<div class="sim-usb-port-empty">${esc(
+          opts.emptyText ||
+            (simMode
+              ? "No powered simulated network timers available"
+              : "No timing devices found on the local network")
+        )}</div>`;
+      }
+      return choices
+        .map((c) => {
+          const isSel = c.id === selectedId;
+          const canForget = simMode && c.simTimerId !== undefined;
+          const deleteBtn = canForget
+            ? `<button
+                type="button"
+                class="sim-usb-port-delete"
+                data-unpair-port-id="${esc(c.id)}"
+                title="Hide device"
+                aria-label="Hide ${esc(c.label)}"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                  <path d="M10 11v6"></path>
+                  <path d="M14 11v6"></path>
+                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>
+                </svg>
+              </button>`
+            : "";
+          return `
+            <div
+              role="option"
+              tabindex="0"
+              aria-selected="${isSel ? "true" : "false"}"
+              class="sim-usb-port-row ${isSel ? "is-selected" : ""}"
+              data-pick-port-id="${esc(c.id)}"
+            >
+              <span class="sim-usb-port-label">${esc(c.label)}</span>
+              ${deleteBtn}
+            </div>`;
+        })
+        .join("");
+    };
+
+    const moreBtnLabel = () => (simMode ? "More devices…" : scanning ? "Scanning…" : "Scan again");
+    const listAriaLabel = opts.listAriaLabel || "Discovered network timers";
+
+    backdrop.innerHTML = `
+      <div class="slaprf-modal card sim-usb-dialog" role="dialog" aria-modal="true" aria-labelledby="sim-usb-picker-title">
+        <div class="slaprf-modal-head">
+          <div class="slaprf-modal-title-row">
+            <span class="slaprf-modal-icon">${icons.wifi(17)}</span>
+            <h3 id="sim-usb-picker-title">${esc(opts.title)}</h3>
+          </div>
+          <button type="button" class="btn btn-ghost btn-xs" data-modal="cancel" aria-label="Close">
+            ${icons.close(15)}
+          </button>
+        </div>
+        <div class="slaprf-modal-body">
+          <div class="sim-usb-port-list" role="listbox" aria-label="${esc(listAriaLabel)}">
+            ${renderRowsHtml()}
+          </div>
+        </div>
+        <div class="slaprf-modal-foot">
+          <button type="button" class="btn btn-ghost" data-modal="request-native" ${scanning ? "disabled" : ""} style="margin-right:auto">${simMode ? icons.plus(15) : icons.reset(15)}<span data-role="more-ports-label">${esc(moreBtnLabel())}</span></button>
+          <button type="button" class="btn btn-ghost" data-modal="cancel">Cancel</button>
+          <button type="button" class="btn btn-armed" data-modal="connect" ${selectedId === null || scanning ? "disabled" : ""}>
+            ${icons.wifi(15)}
+            <span>Connect</span>
+          </button>
+        </div>
+      </div>`;
+
+    const listEl = backdrop.querySelector<HTMLElement>(".sim-usb-port-list");
+    const connectBtn = backdrop.querySelector<HTMLButtonElement>('[data-modal="connect"]');
+    const moreBtn = backdrop.querySelector<HTMLButtonElement>('[data-modal="request-native"]');
+    const moreLabelEl = backdrop.querySelector<HTMLElement>('[data-role="more-ports-label"]');
+
+    const syncButtons = () => {
+      if (connectBtn) connectBtn.disabled = selectedId === null || scanning;
+      if (moreBtn) moreBtn.disabled = scanning;
+      if (moreLabelEl) moreLabelEl.textContent = moreBtnLabel();
+    };
+
+    const refreshListDom = () => {
+      if (closed || !listEl) return;
+      if (selectedId === null || !choices.some((c) => c.id === selectedId)) {
+        selectedId = pickInitialId(choices);
+      }
+      listEl.innerHTML = renderRowsHtml();
+      syncButtons();
+    };
+
+    const filterChoices = (raw: Array<DiscoveredNetworkChoice<T>>) =>
+      raw.filter((c) => c.simTimerId === undefined || !unpairedSimTimerIds.has(c.simTimerId));
+
+    const runAsyncScan = () => {
+      scanning = true;
+      refreshListDom();
+      void opts
+        .loadChoices()
+        .then((next) => {
+          if (closed) return;
+          choices = filterChoices(next);
+        })
+        .catch(() => {
+          if (closed) return;
+          choices = [];
+        })
+        .finally(() => {
+          if (closed) return;
+          scanning = false;
+          refreshListDom();
+        });
+    };
+
+    const updateSelection = (id: string) => {
+      selectedId = id;
+      backdrop.querySelectorAll<HTMLElement>("[data-pick-port-id]").forEach((el) => {
+        const active = el.dataset.pickPortId === id;
+        el.classList.toggle("is-selected", active);
+        el.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      syncButtons();
+    };
+
+    const cleanup = () => {
+      closed = true;
+      if (activePickerCancel === cancel) {
+        activePickerCancel = null;
+      }
+      document.removeEventListener("keydown", onKey, true);
+      backdrop.remove();
+    };
+
+    const cancel = () => {
+      cleanup();
+      reject(new Error("No device selected"));
+    };
+    activePickerCancel = cancel;
+
+    const confirmSelection = () => {
+      const chosen = choices.find((c) => c.id === selectedId);
+      if (!chosen) return;
+      cleanup();
+      resolve(chosen.value);
+    };
+
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        cancel();
+      } else if (ev.key === "Enter" && selectedId !== null && !scanning) {
+        ev.preventDefault();
+        confirmSelection();
+      }
+    };
+
+    backdrop.addEventListener("click", (ev) => {
+      const target = ev.target as HTMLElement;
+      if (target === backdrop || target.closest('[data-modal="cancel"]')) {
+        cancel();
+        return;
+      }
+      if (target.closest('[data-modal="connect"]')) {
+        confirmSelection();
+        return;
+      }
+      const unpairBtnEl = target.closest<HTMLButtonElement>("[data-unpair-port-id]");
+      if (unpairBtnEl && unpairBtnEl.dataset.unpairPortId) {
+        ev.stopPropagation();
+        const targetId = unpairBtnEl.dataset.unpairPortId;
+        const chosen = choices.find((c) => c.id === targetId);
+        if (simMode && chosen?.simTimerId !== undefined) {
+          unpairedSimTimerIds.add(chosen.simTimerId);
+          choices = filterChoices(choices);
+          refreshListDom();
+        }
+        return;
+      }
+      if (target.closest('[data-modal="request-native"]')) {
+        if (scanning) return;
+        if (simMode) {
+          unpairedSimTimerIds.clear();
+        }
+        runAsyncScan();
+        return;
+      }
+      const row = target.closest<HTMLElement>("[data-pick-port-id]");
+      if (row && row.dataset.pickPortId) {
+        updateSelection(row.dataset.pickPortId);
+      }
+    });
+
+    backdrop.addEventListener("dblclick", (ev) => {
+      const target = ev.target as HTMLElement;
+      if (target.closest("[data-unpair-port-id]")) return;
+      const row = target.closest<HTMLElement>("[data-pick-port-id]");
+      if (row && row.dataset.pickPortId) {
+        updateSelection(row.dataset.pickPortId);
+        confirmSelection();
+      }
+    });
+
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(backdrop);
+    runAsyncScan();
+  });
 }

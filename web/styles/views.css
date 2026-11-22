@@ -26249,17 +26249,17 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
 }
 
 .net-conn-field.is-mode {
-  width: 212px;
+  width: 196px;
   flex: 0 0 auto;
 }
 
 .net-conn-field.is-ip {
-  width: 138px;
+  width: 128px;
   flex: 0 0 auto;
 }
 
 .net-conn-field.is-port-num {
-  width: 78px;
+  width: 68px;
   flex: 0 0 auto;
 }
 

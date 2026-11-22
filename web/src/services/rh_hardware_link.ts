@@ -15,6 +15,7 @@
 import { AppStore } from "../state/store";
 import { ApiClient } from "./api_client";
 import { capabilitiesSnapshot, openBackendConnectModal, resolveBackendUrl } from "./capabilities";
+import { bindSimSerialStore, isBackendSerialPort, isSimulatedSerialPort, pickUsbPort } from "./sim_serial_port";
 
 const SAVED_RH_TARGETS_KEY = "slaprf.rh.targets.v1";
 
@@ -288,6 +289,49 @@ export class RotorHazardHardwareLink {
     this.lastError = "";
     if (store.simulatorRunning) {
       const res = await api.simRotorHazardDiscover();
+      if (res.devices.length === 0) {
+        const rawUnits = store.simState?.rotorhazardUnits ?? [];
+        const fallback =
+          rawUnits.length > 0
+            ? rawUnits
+            : [
+                {
+                  timerId: 2,
+                  label: "R1",
+                  host: "192.168.1.101",
+                  port: DEFAULT_RH_PORT,
+                  nodeCount: 8,
+                  serverVersion: "4.5.1",
+                  poweredOn: true,
+                  connected: false,
+                },
+                {
+                  timerId: 3,
+                  label: "R2",
+                  host: "192.168.1.102",
+                  port: DEFAULT_RH_PORT,
+                  nodeCount: 8,
+                  serverVersion: "4.5.1",
+                  poweredOn: true,
+                  connected: false,
+                },
+              ];
+        this.notify();
+        return {
+          subnet: res.subnet || "192.168.1.0/24 (Simulated)",
+          devices: fallback
+            .filter((u) => u.poweredOn)
+            .map((u, idx) => ({
+              host: u.host || u.hostIp || `192.168.1.${101 + idx}`,
+              port: u.port || DEFAULT_RH_PORT,
+              label: u.label || `R${idx + 1}`,
+              timerId: u.timerId,
+              nodeCount: u.nodeCount || 8,
+              serverVersion: u.serverVersion || "4.5.1",
+              connected: Boolean(u.poweredOn && u.connected),
+            })),
+        };
+      }
       this.notify();
       return res;
     }
@@ -343,8 +387,8 @@ export class RotorHazardHardwareLink {
   ): Promise<void> {
     const cleanHost = opts.host.trim();
     const cleanPort = opts.port && opts.port > 0 ? Math.round(opts.port) : DEFAULT_RH_PORT;
-    const adminUser = (opts.adminUser ?? DEFAULT_RH_ADMIN_USER).trim();
-    const adminPass = opts.adminPass ?? DEFAULT_RH_ADMIN_PASS;
+    const adminUser = (opts.adminUser ?? "").trim();
+    const adminPass = opts.adminPass ?? "";
 
     if (!cleanHost) {
       this.lastError = "Enter a RotorHazard IP address or hostname (e.g. 192.168.1.101).";
@@ -354,6 +398,19 @@ export class RotorHazardHardwareLink {
 
     this.lastError = "";
     if (store.simulatorRunning) {
+      const units = store.simState?.rotorhazardUnits ?? [];
+      const u = units.find(
+        (x) =>
+          (opts.preferredTimerId && x.timerId === opts.preferredTimerId) ||
+          ((x.host || x.hostIp) === cleanHost && (x.port || DEFAULT_RH_PORT) === cleanPort)
+      );
+      if (u && (u.adminUser || u.adminPass)) {
+        if (adminUser !== (u.adminUser ?? "") || adminPass !== (u.adminPass ?? "")) {
+          throw new Error(
+            `RotorHazard authentication rejected on ${cleanHost}:${cleanPort} (check Admin Username & Password)`
+          );
+        }
+      }
       await api.simRotorHazardAction({
         action: "connect-host",
         host: cleanHost,
@@ -386,13 +443,14 @@ export class RotorHazardHardwareLink {
       }),
     });
     const payload = (await resp.json().catch(() => ({}))) as {
+      authRequired?: boolean;
       error?: string;
       connection?: RHClientDiagSnapshot;
     };
     await this.refreshStatus();
     await api.refresh().catch(() => undefined);
 
-    if (!resp.ok) {
+    if (!resp.ok || payload.authRequired || payload.error) {
       const msg = payload.error || `Could not connect to RotorHazard device at ${cleanHost}:${cleanPort}.`;
       this.lastError = msg;
       this.notify();
@@ -472,6 +530,41 @@ export class RotorHazardHardwareLink {
       ...p,
       connected: connectedPorts.has(p.name.toUpperCase()),
     }));
+  }
+
+  public async connectUsb(store: AppStore, api: ApiClient): Promise<void> {
+    this.lastError = "";
+    if (!store.simulatorRunning && !capabilitiesSnapshot().portable) {
+      openBackendConnectModal("real-hardware");
+      this.lastError = "Connect to a SlapRF Server to link physical RotorHazard USB devices.";
+      this.notify();
+      throw new Error(this.lastError);
+    }
+
+    bindSimSerialStore(store);
+    const selected = await pickUsbPort({ showAllPorts: true, transport: "usb", vendor: "rotorhazard" });
+    if (store.simulatorRunning || isSimulatedSerialPort(selected)) {
+      const simTimerId = isSimulatedSerialPort(selected) ? selected.simulatedTimerId : 2;
+      const units = store.simState?.rotorhazardUnits ?? [];
+      const u = units.find((x) => x.timerId === simTimerId);
+      const portName =
+        (isSimulatedSerialPort(selected) && selected.simulatedPortName) ||
+        u?.portName?.trim() ||
+        `SIM-RH-USB${Math.max(1, simTimerId - 1)}`;
+      await this.connectUSBDevice(store, api, {
+        portName,
+        preferredLabel: u?.label,
+        preferredTimerId: simTimerId,
+      });
+      return;
+    }
+
+    if (!isBackendSerialPort(selected)) {
+      throw new Error("Expected a native OS USB port from SlapRF Server.");
+    }
+    await this.connectUSBDevice(store, api, {
+      portName: selected.portName,
+    });
   }
 
   public async connectUSBDevice(

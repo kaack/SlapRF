@@ -711,161 +711,102 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       });
       await flushMicrotasks();
 
-      const origMatchMedia = window.matchMedia;
-      try {
-        // 2. Desktop (> 760px): connected pill has no inline 'x' or side-by-side Forget button; clicking opens modal
-        window.matchMedia = ((q: string) => ({
-          matches: false,
-          media: q,
-          onchange: null,
-          addListener: () => undefined,
-          removeListener: () => undefined,
-          addEventListener: () => undefined,
-          removeEventListener: () => undefined,
-          dispatchEvent: () => false,
-        })) as typeof window.matchMedia;
+      // 2. When connected in Bluetooth mode, Connection card renders inline Disconnect and Forget Device buttons side by side (no modal)
+      const disconnectBtn = connSlot.querySelector<HTMLButtonElement>('[data-action="disconnect-usb-slot"]')!;
+      const forgetBtn = connSlot.querySelector<HTMLButtonElement>('[data-action="forget-ble-device"]')!;
+      expect(disconnectBtn).not.toBeNull();
+      expect((disconnectBtn.textContent || "").trim()).toBe("Disconnect");
+      expect(forgetBtn).not.toBeNull();
+      expect((forgetBtn.textContent || "").trim()).toBe("Forget Device");
+      expect(document.querySelector(".device-conn-modal")).toBeNull();
+      expect(document.querySelector(".device-conn-drawer")).toBeNull();
 
-        expect(connSlot.querySelector('[data-action="disconnect-usb-slot"]')).toBeNull();
-        expect(connSlot.querySelector('[data-action="forget-ble-device"]')).toBeNull();
-        const pillBtn = connSlot.querySelector<HTMLButtonElement>('[data-action="open-usb-slot-actions"]')!;
-        expect(pillBtn).not.toBeNull();
+      // 3. Click Disconnect -> remembers pairing and shows "Connect" (not "Pair Device")
+      disconnectBtn.click();
+      await flushMicrotasks();
+      await new Promise((r) => window.setTimeout(r, 30));
 
-        pillBtn.click();
-        await flushMicrotasks();
+      const connectBtnAfterDisconnect = connSlot.querySelector<HTMLButtonElement>('[data-action="connect-add"]')!;
+      expect(connectBtnAfterDisconnect).not.toBeNull();
+      expect((connectBtnAfterDisconnect.textContent || "").trim()).toBe("Connect");
+      expect(connSlot.querySelector('[data-action="forget-ble-device"]')).toBeNull();
 
-        const desktopModal = document.querySelector<HTMLElement>(".device-conn-modal")!;
-        expect(desktopModal).not.toBeNull();
-        expect(document.querySelector(".device-conn-drawer")).toBeNull();
-        expect(desktopModal.querySelector(".slaprf-modal-icon")).toBeNull();
-        expect((desktopModal.querySelector(".device-conn-head-titles h3")?.textContent || "").trim()).toBe(
-          "H1 BE7C0001"
-        );
-        expect(desktopModal.querySelector(".slaprf-modal-head [data-conn-sheet-close]")).not.toBeNull();
-        expect(desktopModal.querySelector(".slaprf-modal-foot [data-conn-sheet-close]")).toBeNull();
-        const disconnectAction = desktopModal.querySelector<HTMLButtonElement>(
-          '.slaprf-modal-foot [data-conn-action="disconnect"]'
-        )!;
-        const forgetActionDesktop = desktopModal.querySelector<HTMLButtonElement>(
-          '.slaprf-modal-foot [data-conn-action="forget"]'
-        )!;
-        expect(disconnectAction).not.toBeNull();
-        expect(forgetActionDesktop).not.toBeNull();
-        expect(forgetActionDesktop.textContent || "").toContain("Forget Device");
+      // 3b. Clicking Connect when already paired STILL opens selection dialog ("Connect Bluetooth Device")
+      // and disables the button + renders the side-to-side indeterminate bar while Connecting...
+      connectBtnAfterDisconnect.click();
+      await flushMicrotasks();
+      await new Promise((r) => window.setTimeout(r, 15));
 
-        // 3. Click Disconnect in modal -> remembers pairing and shows "Connect" (not "Pair Device")
-        disconnectAction.click();
-        await flushMicrotasks();
-        await new Promise((r) => window.setTimeout(r, 30));
+      const pickDialog = document.querySelector<HTMLElement>(".sim-usb-dialog")!;
+      expect(pickDialog).not.toBeNull();
+      expect(pickDialog.textContent || "").toContain("Connect Bluetooth Device");
+      const modalConnectBtn = pickDialog.querySelector<HTMLButtonElement>('[data-modal="connect"]')!;
+      expect((modalConnectBtn.textContent || "").trim()).toBe("Connect");
+      modalConnectBtn.click();
+      await flushMicrotasks();
 
-        const connectBtnAfterDisconnect = connSlot.querySelector<HTMLButtonElement>('[data-action="connect-add"]')!;
-        expect(connectBtnAfterDisconnect).not.toBeNull();
-        expect((connectBtnAfterDisconnect.textContent || "").trim()).toBe("Connect");
-        expect(connSlot.querySelector('[data-action="forget-ble-device"]')).toBeNull();
+      const busyBtn = connSlot.querySelector<HTMLButtonElement>('[data-action="connect-add"]')!;
+      expect(busyBtn.disabled).toBe(true);
+      expect(busyBtn.textContent || "").toContain("Connecting…");
+      expect(connSlot.querySelector(".slaprf-indeterminate-bar")).not.toBeNull();
+      expect(connSlot.querySelector('[data-action="cancel-connect"]')).not.toBeNull();
+      expect(connSlot.querySelector(".debug-usb-busy-status")?.textContent || "").toContain(
+        "Waiting for Bluetooth LE connection…"
+      );
 
-        // 3b. Clicking Connect when already paired STILL opens selection dialog ("Connect Bluetooth Device")
-        // and disables the button + renders the side-to-side indeterminate bar while Connecting...
-        connectBtnAfterDisconnect.click();
-        await flushMicrotasks();
-        await new Promise((r) => window.setTimeout(r, 15));
+      await new Promise((r) => window.setTimeout(r, 60));
+      await flushMicrotasks();
 
-        const pickDialog = document.querySelector<HTMLElement>(".sim-usb-dialog")!;
-        expect(pickDialog).not.toBeNull();
-        expect(pickDialog.textContent || "").toContain("Connect Bluetooth Device");
-        const modalConnectBtn = pickDialog.querySelector<HTMLButtonElement>('[data-modal="connect"]')!;
-        expect((modalConnectBtn.textContent || "").trim()).toBe("Connect");
-        modalConnectBtn.click();
-        await flushMicrotasks();
+      // 4. Reconnect and click inline Forget Device -> disconnects and clears pairing -> "Pair Device"
+      usbPool.applyBackendPoolSnapshot({
+        debugSlotIndex: 0,
+        slots: [
+          {
+            slotIndex: 0,
+            connected: true,
+            portName: "ble:BE7C0001",
+            probing: false,
+            reconnecting: false,
+            reconnectAttempt: 0,
+            maxReconnectAttempts: 5,
+            reconnectFailed: false,
+            isOtherDevice: false,
+            lastStatus: bleStatus,
+          },
+        ],
+        knownTimers: [
+          {
+            fp: "BE7C0001",
+            role: "hub",
+            label: "H1",
+            pairedBle: true,
+            lastSeenMs: Date.now(),
+          },
+        ],
+      });
+      await flushMicrotasks();
 
-        const busyBtn = connSlot.querySelector<HTMLButtonElement>('[data-action="connect-add"]')!;
-        expect(busyBtn.disabled).toBe(true);
-        expect(busyBtn.textContent || "").toContain("Connecting…");
-        expect(connSlot.querySelector(".slaprf-indeterminate-bar")).not.toBeNull();
-        expect(connSlot.querySelector('[data-action="cancel-connect"]')).not.toBeNull();
-        expect(connSlot.querySelector(".debug-usb-busy-status")?.textContent || "").toContain(
-          "Waiting for Bluetooth LE connection…"
-        );
+      connSlot.querySelector<HTMLButtonElement>('[data-action="forget-ble-device"]')!.click();
+      await new Promise((r) => window.setTimeout(r, 120));
+      await flushMicrotasks();
 
-        await new Promise((r) => window.setTimeout(r, 60));
-        await flushMicrotasks();
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "DELETE" &&
+            c.url.includes("/v1/slaprf/bluetooth/connections/0") &&
+            c.url.includes("forget=1")
+        )
+      ).toBe(true);
+      expect(calls.some((c) => c.method === "DELETE" && c.url.includes("/v1/slaprf/known-timers/BE7C0001"))).toBe(
+        true
+      );
+      expect(calls.some((c) => c.url.includes("/v1/slaprf/usb/"))).toBe(false);
 
-        // 4. Mobile (<= 760px): clicking connected pill opens bottom sheet drawer; Forget Device clears pairing -> "Pair Device"
-        window.matchMedia = ((q: string) => ({
-          matches: q.includes("max-width: 760px"),
-          media: q,
-          onchange: null,
-          addListener: () => undefined,
-          removeListener: () => undefined,
-          addEventListener: () => undefined,
-          removeEventListener: () => undefined,
-          dispatchEvent: () => false,
-        })) as typeof window.matchMedia;
-
-        usbPool.applyBackendPoolSnapshot({
-          debugSlotIndex: 0,
-          slots: [
-            {
-              slotIndex: 0,
-              connected: true,
-              portName: "ble:BE7C0001",
-              probing: false,
-              reconnecting: false,
-              reconnectAttempt: 0,
-              maxReconnectAttempts: 5,
-              reconnectFailed: false,
-              isOtherDevice: false,
-              lastStatus: bleStatus,
-            },
-          ],
-          knownTimers: [
-            {
-              fp: "BE7C0001",
-              role: "hub",
-              label: "H1",
-              pairedBle: true,
-              lastSeenMs: Date.now(),
-            },
-          ],
-        });
-        await flushMicrotasks();
-
-        connSlot.querySelector<HTMLButtonElement>('[data-action="open-usb-slot-actions"]')!.click();
-        await flushMicrotasks();
-
-        const mobileDrawer = document.querySelector<HTMLElement>(".device-conn-drawer")!;
-        expect(mobileDrawer).not.toBeNull();
-        expect((mobileDrawer.querySelector(".device-conn-head-titles strong")?.textContent || "").trim()).toBe(
-          "H1 BE7C0001"
-        );
-        expect(mobileDrawer.querySelector(".mre-sheet-head [data-conn-sheet-close]")).toBeNull();
-        expect(mobileDrawer.querySelector(".mre-sheet-foot [data-conn-sheet-close]")).toBeNull();
-        const forgetBtnMobile = mobileDrawer.querySelector<HTMLButtonElement>(
-          '.mre-sheet-foot [data-conn-action="forget"]'
-        )!;
-        expect(forgetBtnMobile).not.toBeNull();
-        forgetBtnMobile.click();
-        await new Promise((r) => window.setTimeout(r, 120));
-        await flushMicrotasks();
-
-        expect(
-          calls.some(
-            (c) =>
-              c.method === "DELETE" &&
-              c.url.includes("/v1/slaprf/bluetooth/connections/0") &&
-              c.url.includes("forget=1")
-          )
-        ).toBe(true);
-        expect(calls.some((c) => c.method === "DELETE" && c.url.includes("/v1/slaprf/known-timers/BE7C0001"))).toBe(
-          true
-        );
-        expect(calls.some((c) => c.url.includes("/v1/slaprf/usb/"))).toBe(false);
-
-        const finalConnectBtn = connSlot.querySelector<HTMLButtonElement>('[data-action="connect-add"]')!;
-        expect((finalConnectBtn.textContent || "").trim()).toBe("Pair Device");
-        const modeSelectAfterForget = netRoot.querySelector<HTMLSelectElement>('select[data-field="network-hardware-mode"]')!;
-        expect(modeSelectAfterForget.disabled).toBe(false);
-      } finally {
-        window.matchMedia = origMatchMedia;
-      }
+      const finalConnectBtn = connSlot.querySelector<HTMLButtonElement>('[data-action="connect-add"]')!;
+      expect((finalConnectBtn.textContent || "").trim()).toBe("Pair Device");
+      const modeSelectAfterForget = netRoot.querySelector<HTMLSelectElement>('select[data-field="network-hardware-mode"]')!;
+      expect(modeSelectAfterForget.disabled).toBe(false);
     } finally {
       document.querySelectorAll(".slaprf-modal-backdrop, .device-conn-drawer-overlay").forEach((el) => el.remove());
       netView?.destroy();
@@ -950,11 +891,11 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       const extSlot = netRoot.querySelector<HTMLElement>('[data-slot="external-conn-actions"]')!;
       expect(laprfConnSlot.style.display).toBe("flex");
       expect(laprfConnSlot.querySelector('[data-field="laprf-host"]')).not.toBeNull();
-      expect(extSlot.textContent || "").toContain("Connect Ethernet");
+      expect(extSlot.textContent || "").toContain("Connect");
+      expect(extSlot.textContent || "").toContain("Discover");
       expect(connCard.querySelector('[data-action="laprf-connect-usb"]')).toBeNull();
       assertSameRowRightAligned('[data-action="laprf-connect-eth"]', false);
-      const laprfDiscoverSec = netRoot.querySelector<HTMLElement>('[data-slot="laprf-sections"] [data-section-anchor="discover"]')!;
-      expect(laprfDiscoverSec.hidden).toBe(false);
+      expect(netRoot.querySelector('[data-slot="laprf-sections"] [data-section-anchor="discover"]')).toBeNull();
 
       sel = getSelect();
       sel.value = "laprf_usb";
@@ -962,11 +903,20 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       await flushMicrotasks();
       expect(store.timingHardwareMode).toBe("laprf_usb");
       expect(laprfConnSlot.style.display).toBe("none");
-      expect(laprfDiscoverSec.hidden).toBe(true);
       expect(extSlot.style.display).toBe("flex");
       expect(extSlot.querySelector('[data-action="laprf-connect-usb"]')).not.toBeNull();
       expect(extSlot.textContent || "").toContain("Connect USB");
       assertSameRowRightAligned('[data-action="laprf-connect-usb"]');
+
+      // Clicking Connect USB in LapRF 8-Way (USB) opens the unified .sim-usb-dialog modal
+      extSlot.querySelector<HTMLButtonElement>('[data-action="laprf-connect-usb"]')!.click();
+      await flushMicrotasks();
+      const laprfUsbModal = document.querySelector<HTMLElement>(".sim-usb-dialog")!;
+      expect(laprfUsbModal).not.toBeNull();
+      expect(laprfUsbModal.textContent || "").toContain("SIM-LAPRF-USB1");
+      expect(laprfUsbModal.textContent || "").toContain("SIM-LAPRF-USB2");
+      laprfUsbModal.querySelector<HTMLButtonElement>('[data-modal="cancel"]')!.click();
+      await flushMicrotasks();
 
       // 2. Switch inline to SlapRF (Bluetooth) -> button changes to "Pair Device" on the right of the same row
       sel = getSelect();
