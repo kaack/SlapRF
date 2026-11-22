@@ -23,8 +23,8 @@ For architecture, RF link schedules, binary wire protocols, DSP, and timing rule
 
 SlapRF uses a **single-toolchain Go build** with no Node.js install needed:
 
-- **Required**: **[Go 1.24+](https://go.dev/dl/)**
-  - `cmd/build-web`, `cmd/build-portable`, `cmd/build-android`, and `cmd/devserver` use the Go [`esbuild`](https://github.com/evanw/esbuild) library (`internal/devbundle`) to bundle `web/src/**/*.ts` into `dist/app.js`.
+- **Required**: **[Go 1.25+](https://go.dev/dl/)**
+  - `cmd/build-web`, `cmd/build-docs`, `cmd/build-portable`, `cmd/build-android`, and `cmd/devserver` use the Go [`esbuild`](https://github.com/evanw/esbuild) library (`internal/devbundle`) to bundle `web/src/**/*.ts` into `dist/app.js`.
   - You do not need `node`, `npm`, `pnpm`, `webpack`, or `vite` to edit TypeScript, CSS, or Go code.
 - **Optional (Android APK Only)**: **JDK 17** and **Android SDK Platform 35 / Build-Tools 35.0.0 / NDK r27** (used by `cmd/build-android` without Gradle).
 - **Optional (Firmware C Source Only)**: **Espressif ESP-IDF v5.5.1** (`idf.py` with `esp32c5` target support). Only needed when editing `firmware/` C code locally. CI (`.github/workflows/firmware.yml`) compiles `slaprf-xiao-c5.bin` and `slaprf-xiao-c5-ble.bin`. Per-board settings (role, timer label, fingerprint, 5.8 GHz channels) are patched into the `SLAPRF02` config block at flash time.
@@ -33,7 +33,7 @@ SlapRF uses a **single-toolchain Go build** with no Node.js install needed:
 
 ```bash
 go version
-# Expected: go version go1.24.x ...
+# Expected: go version go1.25.x ...
 ```
 
 Clone the repository and download Go dependencies:
@@ -57,23 +57,25 @@ SlapRF/
 │   ├── build-portable/  # Builds cmd/slaprf/site and compiles the standalone slaprf executable
 │   ├── build-android/   # Builds cmd/slaprf-android/site, libslaprf.so, Java shims, and signed APK
 │   ├── build-web/       # Static site & WASM demo builder (outputs ./_site)
+│   ├── build-docs/      # Hugo documentation & standalone WebSerial flasher builder
 │   ├── slaprf-wasm/     # Go -> WebAssembly entry point for the slaprf.app browser demo
 │   └── devserver/       # Dev server (:8090) that rebuilds TS and WASM on the fly
 ├── internal/
-│   ├── api/             # /api/* HTTP and WebSocket handlers
+│   ├── api/             # /v1/* HTTP REST and WebSocket handlers
 │   ├── devbundle/       # Asset builder: esbuild TS bundle, wasm_exec.js, slaprf.wasm
 │   ├── domain/          # Shared data models (pilots, gates, telemetry frames, timing rules, race brackets)
 │   ├── dsp/             # 8-channel 5.8 GHz EMA filter, hysteresis detector, parabolic peak fitter
 │   ├── firmware/        # SLAPRF02 config patcher for XIAO ESP32-C5 images and firmware constants
 │   ├── ingest/          # Multi-gate RF simulator & Hub frame decoder (hub_frames.go)
-│   ├── laprf/           # ImmersionRC LapRF 8-Way binary protocol client & emulator (TCP :5403)
+│   ├── laprf/           # ImmersionRC LapRF 8-Way LAN TCP (:5403), USB serial (laprf/usb), & emulator
 │   ├── multigp/         # MultiGP WebService API client and race sync
 │   ├── portable/        # Native Go server host, WebSocket stream hub, and hardware coordinator
 │   ├── race/            # Tournament bracket generator and stage/heat resolver
-│   ├── rotorhazard/     # RotorHazard USB serial & LAN HTTP/Socket.IO client
+│   ├── rotorhazard/     # RotorHazard LAN HTTP/Socket.IO & USB serial (rotorhazard/usb) clients
+│   ├── serialport/      # Shared cross-platform USB serial discovery and port transport
+│   ├── slaprf/          # SlapRF USB (slaprf/usb) and Bluetooth LE Hub (slaprf/bluetooth) drivers
 │   ├── storage/         # Persistent transactional bbolt store (slaprf.db)
-│   ├── tracker/         # Multi-gate timing engine, 3-tier crossing rules, section split math, demo showcase
-│   └── usb/             # Native USB serial and Bluetooth LE Hub discovery and console transport
+│   └── tracker/         # Multi-gate timing engine, 3-tier crossing rules, section split math, demo showcase
 ├── web/
 │   ├── embed.go         # Embeds index.html, styles/, src/, and firmware/
 │   ├── index.html       # SPA entry HTML & boot loader

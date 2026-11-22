@@ -77,9 +77,9 @@ Download the latest native SlapRF release from [GitHub Releases](https://github.
      ```bash
      sudo usermod -aG dialout $USER
      ```
-     To grant immediate access on XIAO ESP32-C5 (`303a:1001`) without logging out, add a `udev` rule:
+     To grant immediate access on XIAO ESP32-C5 (`303a:1001`) without logging out, add a `udev` rule ordered before `73-seat-late.rules`:
      ```bash
-     echo 'SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="303a", ENV{ID_MODEL_ID}=="1001", MODE="0660", GROUP="dialout", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/99-slaprf-esp32c5.rules
+     echo 'SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="303a", ENV{ID_MODEL_ID}=="1001", MODE="0660", GROUP="dialout", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/70-slaprf-esp32c5.rules
      sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=tty
      ```
   4. For Bluetooth Hub (`slaprf_ble`) mode, SlapRF powers on BlueZ automatically and selects the first active adapter. If your PC has multiple Bluetooth controllers (such as motherboard Bluetooth plus a USB dongle), set `SLAPRF_BLE_ADAPTER=hci1` to pick a specific adapter.

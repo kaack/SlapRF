@@ -46,7 +46,7 @@ flowchart TB
         VTX["Up to 8x 5.8 GHz Drone VTXs\n(Raceband, Fatshark, Boscam, IMD6)"]
         Spokes["SlapRF Spoke Timers T1 to T6\n- 100 Hz 8-ch 5.8 GHz sweep (0.5 dB)\n- 4-sample sliding window\n- No on-board lap math"]
         Hub["SlapRF Hub Timer H1\n- Bluetooth Hub (at Start/Finish gate)\n  or USB Hub (at bench or gate)\n- 50 Hz ESP-NOW Sync Beacon (Ch 1)"]
-        OtherHW["External Timing Hardware\n- RotorHazard (USB serial or LAN :5000)\n- ImmersionRC LapRF 8-Way (LAN TCP :5403)"]
+        OtherHW["External Timing Hardware\n- RotorHazard (USB serial or LAN :5000)\n- ImmersionRC LapRF 8-Way (USB serial or LAN TCP :5403)"]
 
         VTX -. "5.8 GHz RF" .-> Spokes
         VTX -. "5.8 GHz RF" .-> Hub
@@ -75,7 +75,7 @@ flowchart TB
         Demo["Hosted Browser Demo (https://slaprf.app)\n- Runs slaprf.wasm TrackSimulator + IndexedDB"]
     end
 
-    HTTP <-->|"REST /api/* + /api/ws/stream"| SPA
+    HTTP <-->|"REST /v1/* + /v1/ws/stream"| SPA
 ```
 
 ---

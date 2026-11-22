@@ -31,7 +31,7 @@ Open **Practice**, select or create a practice session, and open its **Track** t
 
 ### Fly & Calibrate
 
-In your **Practice** session, open **Pilots** to assign active pilot channels, tap **Start**, and switch to **Signals**. Arm your quad, fly 2 to 3 clean passes through the Start / Finish gate at normal race speed, then tap **Calibrate**. SlapRF inspects your signal peaks and noise floor and sets the Enter and Exit dBm levels automatically.
+In your **Practice** session, open **Pilots** to assign active pilot channels, tap **Start**, and switch to **Signals**. Arm your quad, fly 2 to 3 clean passes through the Start / Finish gate at normal race speed, select your gate timer (or locate its row below the scope on mobile), and tap **Calibrate** once it appears. SlapRF inspects your signal peaks and noise floor and sets the Enter and Exit dBm levels automatically.
 
 {{% /steps %}}
 
@@ -45,7 +45,7 @@ Most setups need no manual adjustment after tapping **Calibrate**. To fine-tune 
 | Exit Threshold (`dBm`) | Signal level that closes the crossing window (`6` to `12 dBm` below Enter prevents double-triggers). |
 | Min Lap Time (`s`) | Minimum seconds between consecutive valid laps for the same pilot. |
 
-Any timer chip or global rule with custom overrides shows a small blue pencil indicator. Tap **Clear calibration** at any time to restore default values.
+Any timer with custom threshold or timing overrides displays a sky-blue indicator in **Signals** and **Track**. Tap **Clear calibration** on that timer at any time to restore default values.
 
 ## Audio Callouts
 

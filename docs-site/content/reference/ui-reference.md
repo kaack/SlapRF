@@ -14,8 +14,11 @@ Reference guide to the screens, live signal scope controls, and crossing detecti
 | Pilots | Pilot directory with callsigns, phonetic TTS spellings, and default 5.8 GHz channels (`Raceband`, `Fatshark`, `Boscam`, `IMD6`). |
 | Network | Timing system selector (`SlapRF (USB)`, `SlapRF (Bluetooth)`, `LapRF 8-Way (Network)`, `LapRF 8-Way (USB)`, `RotorHazard (Network)`, `RotorHazard (USB)`), connection manager, topology graph, and live RSSI monitor. |
 | Flasher | Built-in wizard (on Android and desktop) for flashing Hub and Spoke firmware, inspecting board configuration, or factory-erasing boards over USB-C. |
+| Debug | Live 5.8 GHz spectrum and waterfall analyzer, raw USB/Bluetooth timer console, and RF health checks. |
 | Simulator | Multi-pilot 5.8 GHz physics track simulator for testing track layouts, threshold behavior, and race brackets without hardware. |
 | Settings | Datasource (Demo vs. SlapRF Server and Simulator toggle), MultiGP API key, Announcer voice & horn levels, LapRF 8-Way emulator, Authentication, and `.json` database backup/restore. |
+
+On mobile, swipe left or right across the screen to move between **Races**, **Practice**, **Pilots**, **Network**, and secondary screens, or tap **More** on the right side of the bottom bar.
 
 ## Signals Controls
 
@@ -26,8 +29,8 @@ Available inside **Practice -> Signals** and **Race -> Signals**:
 | `Prev \| Live \| Next` | Pause and scrub backward or forward through recorded RSSI history, or return to live streaming. |
 | `Auto X` | Switch the horizontal scope span between `1 s`, `15 s`, `60 s`, `5 min`, `10 min`, or automatic fit. |
 | `Auto Y` | Toggle automatic vertical dBm range fitting versus full dBm scale. |
-| Timer Chips | Filter by `All`, `H1`, or `T1`-`T6` to view or edit Enter and Exit lines. A blue pencil icon marks chips with custom overrides. |
-| `Calibrate` | Compute optimal Enter and Exit dBm levels from recent flight passes, or tap `Clear calibration` to restore defaults. |
+| Timer Chips / Rows | Filter by `All`, `H1`, or `T1`-`T6` to inspect Enter and Exit lines. Select an individual timer (or use its row actions on mobile) to calibrate or open **Fine-tune**. |
+| `Calibrate` | Appears for a selected timer once flight pass data is recorded. Computes Enter and Exit dBm levels from recent passes, with `Clear calibration` to restore defaults. |
 
 ## Crossing Rules
 
