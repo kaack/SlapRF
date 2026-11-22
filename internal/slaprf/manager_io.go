@@ -375,6 +375,9 @@ func (m *Manager) closeSlotInternal(slot *connSlot, clearPortName bool) error {
 		case <-time.After(800 * time.Millisecond):
 		}
 	}
+	if slot == m.slots[0] && m.cfg.Engine != nil {
+		m.cfg.Engine.SetAllTimersOffline()
+	}
 	return closeErr
 }
 
@@ -458,6 +461,9 @@ func (m *Manager) probeInitialStatus(slot *connSlot, timeout time.Duration) (map
 		authRej := slot.authRejected
 		rejErr := slot.lastError
 		slot.mu.Unlock()
+		if slot == m.slots[0] && m.cfg.Engine != nil {
+			m.cfg.Engine.SetAllTimersOffline()
+		}
 		if authRej {
 			if rejErr == "" {
 				rejErr = m.defaultAuthMismatchMsg()
@@ -817,6 +823,9 @@ func (m *Manager) runSlotLoops(ctx context.Context, slot *connSlot, port firmwar
 			}
 		}
 		slot.mu.Unlock()
+		if slot == m.slots[0] && m.cfg.Engine != nil {
+			m.cfg.Engine.SetAllTimersOffline()
+		}
 		if authRej {
 			if rejMsg == "" {
 				rejMsg = m.defaultAuthMismatchMsg()
@@ -907,6 +916,9 @@ func (m *Manager) attemptAutoReconnect(slot *connSlot, portName string) {
 		slot.mu.Lock()
 		authRej := slot.authRejected
 		slot.mu.Unlock()
+		if slot == m.slots[0] && m.cfg.Engine != nil {
+			m.cfg.Engine.SetAllTimersOffline()
+		}
 		if authRej {
 			return
 		}
@@ -1597,9 +1609,24 @@ func (m *Manager) registerConnectedHubInEngine(st map[string]any, cfg *firmware.
 					if sp, ok := item.(map[string]any); ok {
 						spFp, _ := sp["fp"].(string)
 						spLabel, _ := sp["label"].(string)
-						if spFp != "" && !strings.HasPrefix(spFp, "53504B") && !m.cfg.Engine.IsDeletedSpokeFingerprint(spFp) {
-							if tid, err := m.cfg.Engine.RegisterTimerHello(spFp, false, spLabel); err == nil && tid != 0 {
-								m.cfg.Engine.MarkTimerSeen(tid)
+						frames, hasFrames := asInt(sp["frames"])
+						msAgo, hasMsAgo := asInt(sp["msAgo"])
+						if hasMsAgo && msAgo >= 0x80000000 {
+							msAgo = 0
+						}
+						spokeActive := (!hasFrames || frames > 0) && (!hasMsAgo || msAgo < 5000)
+						if spFp != "" && !strings.HasPrefix(spFp, "53504B") {
+							if spokeActive {
+								m.cfg.Engine.ClearDeletedSpokeFingerprint(spFp)
+							}
+							if !m.cfg.Engine.IsDeletedSpokeFingerprint(spFp) {
+								if tid, err := m.cfg.Engine.RegisterTimerHello(spFp, false, spLabel); err == nil && tid != 0 {
+									if spokeActive {
+										m.cfg.Engine.MarkTimerSeen(tid)
+									} else {
+										m.cfg.Engine.SetDetectedTimerOnline(tid, false)
+									}
+								}
 							}
 						}
 					}

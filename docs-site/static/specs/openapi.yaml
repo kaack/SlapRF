@@ -731,6 +731,14 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
                 error: "timer not found"
+        "409":
+          description: Timer is currently active and connected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "timer is active; disconnect it before removing"
 
   "/v1/practice:reset":
     post:

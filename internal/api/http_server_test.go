@@ -67,3 +67,46 @@ func TestStateAPI(t *testing.T) {
 		t.Fatalf("expected real-world Pilot 1 callsign, got %+v", realState.Pilots)
 	}
 }
+
+func TestDeleteTimerRejectsActiveAndRestoresOnReconnect(t *testing.T) {
+	engine := tracker.NewEngine()
+	sim := ingest.NewTrackSimulator(engine)
+	laprfSrv := laprf.NewServer(engine)
+	srv := NewServer(engine, sim, laprfSrv)
+	handler := srv.Handler()
+
+	// 1. Active/connected timer cannot be deleted via DELETE /v1/timers/2 -> 409 Conflict
+	reqDelOnline := httptest.NewRequest(http.MethodDelete, "/v1/timers/2", nil)
+	recDelOnline := httptest.NewRecorder()
+	handler.ServeHTTP(recDelOnline, reqDelOnline)
+	if recDelOnline.Code != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict deleting active timer, got %d: %s", recDelOnline.Code, recDelOnline.Body.String())
+	}
+
+	// 2. Disconnect all timers (simulating unplugged Hub) -> DELETE /v1/timers/2 succeeds (garbage collection)
+	engine.SetAllTimersOffline()
+	reqDelOffline := httptest.NewRequest(http.MethodDelete, "/v1/timers/2", nil)
+	recDelOffline := httptest.NewRecorder()
+	handler.ServeHTTP(recDelOffline, reqDelOffline)
+	if recDelOffline.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK dismissing offline timer, got %d: %s", recDelOffline.Code, recDelOffline.Body.String())
+	}
+	for _, tm := range engine.DetectedTimersSnapshot() {
+		if tm.TimerID == 2 {
+			t.Fatalf("expected timer 2 removed from detected timers while offline")
+		}
+	}
+
+	// 3. Reconnecting the Hub (BuildHubHelloStream) re-detects timer 2 as an available unassigned timer!
+	_ = sim.BuildHubHelloStream()
+	foundRestored := false
+	for _, tm := range engine.DetectedTimersSnapshot() {
+		if tm.TimerID == 2 {
+			foundRestored = true
+			break
+		}
+	}
+	if !foundRestored {
+		t.Fatalf("expected timer 2 to reappear in detected timers once Hub reconnects")
+	}
+}

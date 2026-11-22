@@ -561,9 +561,13 @@ func (s *Server) handleDeleteTimer(w http.ResponseWriter, r *http.Request) {
 	}
 	var err error
 	if s.simulator.IsRunning() {
-		err = s.simulator.DeleteTimer(timerID)
+		err = s.simulator.DismissDisconnectedTimer(timerID)
 	} else {
-		err = s.realEngine.DeleteDetectedTimer(timerID)
+		if s.realEngine.IsTimerActivelyOnline(timerID) {
+			err = tracker.ErrTimerStillActive
+		} else {
+			err = s.realEngine.DeleteDetectedTimer(timerID)
+		}
 	}
 	if err != nil {
 		writeEngineError(w, err)

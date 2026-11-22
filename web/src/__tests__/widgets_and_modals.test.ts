@@ -451,6 +451,56 @@ describe("widgets/Toast & TimingRulesEditor", () => {
     }
   });
 
+  it("shows right-aligned X dismiss button only on disconnected timers in TimingRulesEditor and calls deleteTimer", async () => {
+    const store = makeStore({
+      timingHardwareMode: "rotorhazard",
+      gates: [
+        makeGate(1, { name: "R1", assignedTimerId: 1, online: true, firmwareVersion: "RotorHazard" }),
+        makeGate(2, { name: "R2", assignedTimerId: 2, online: false, firmwareVersion: "RotorHazard" }),
+      ],
+      timers: [
+        {
+          timerId: 1,
+          timerLabel: "R1",
+          color: "#38bdf8",
+          isHub: false,
+          batteryMv: 0,
+          batteryPct: 0,
+          firmwareVersion: "RotorHazard",
+          online: true,
+        },
+        {
+          timerId: 2,
+          timerLabel: "R2",
+          color: "#f472b6",
+          isHub: false,
+          batteryMv: 0,
+          batteryPct: 0,
+          firmwareVersion: "RotorHazard",
+          online: false,
+        },
+      ],
+    });
+    const { api, calls } = makeMockApiClient(store);
+    const root = mountHtml(`<div id="rules-dismiss-host"></div>`);
+    const editor = new TimingRulesEditor(root.querySelector("#rules-dismiss-host")!, store, api);
+
+    try {
+      // Connected timer #1 must NOT show a dismiss X button
+      expect(root.querySelector("[data-dismiss-gate='1']")).toBeNull();
+      // Disconnected timer #2 MUST show a right-aligned dismiss X button
+      const dismissBtn = root.querySelector<HTMLElement>("[data-dismiss-gate='2']")!;
+      expect(dismissBtn).not.toBeNull();
+      dismissBtn.click();
+      await flushMicrotasks();
+      const delCall = calls.find((c) => c.method === "deleteTimer");
+      expect(delCall).toBeDefined();
+      expect(delCall!.args[0]).toBe(2);
+    } finally {
+      editor.destroy();
+    }
+  });
+
   it("opens Signals fine-tuning drawer per timer with 3-tier scope toggle, minLapSec, maxLapSec, minCrossingSec, and beepOnCross", async () => {
     const store = makeStore({
       gates: [

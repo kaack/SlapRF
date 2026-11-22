@@ -3,6 +3,7 @@ import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import { playSyntheticCrossingBeep } from "../services/crossing_beep";
+import { usbPool } from "../services/timer_console";
 import { gateColor, gateLabel } from "../state/selectors";
 import { AppStore } from "../state/store";
 import {
@@ -14,6 +15,7 @@ import {
   TrackNode,
 } from "../types/models";
 import { FILTER_LABELS } from "./markup";
+import { isTrackTimerActive } from "./TrackEditor";
 
 interface RuleSpec {
   key: NumericGateRuleKey;
@@ -134,6 +136,15 @@ export class TimingRulesEditor extends Component {
     });
     this.listen(el, "keydown", (e) => {
       const target = e.target;
+      if (target instanceof HTMLElement) {
+        const dismissEl = target.closest<HTMLElement>("[data-dismiss-gate]");
+        if (dismissEl && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          e.stopPropagation();
+          void this.handleDismissGateButton(dismissEl);
+          return;
+        }
+      }
       if (!(target instanceof HTMLInputElement)) return;
       if (e.key === "Enter") {
         e.preventDefault();
@@ -209,6 +220,14 @@ export class TimingRulesEditor extends Component {
           void this.stepTuneRule(key, dir);
           return;
         }
+      }
+
+      const dismissBtn = target.closest<HTMLElement>("[data-dismiss-gate]");
+      if (dismissBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        void this.handleDismissGateButton(dismissBtn);
+        return;
       }
 
       const scope = target.closest<HTMLElement>("[data-scope]");
@@ -291,14 +310,33 @@ export class TimingRulesEditor extends Component {
       }
     });
     // Re-render on rule / gate / session / race changes, unless the user is actively typing in an input.
-    this.onDispose(
-      store.subscribe(["rules", "config", "practice", "race"], () => {
-        if (this.scope !== null && !store.node(this.scope)) this.scope = null;
-        const active = document.activeElement;
-        const editing = active instanceof HTMLInputElement && this.el.contains(active);
-        if (!editing) this.render();
+    const refreshIfIdle = () => {
+      if (this.scope !== null && !store.node(this.scope)) {
+        this.scope = null;
+        if (this.mobileDrawerOpen) {
+          this.mobileDrawerOpen = false;
+          this.mobileDrawerClosing = false;
+          this.mobileDrawerEl.classList.remove("is-closing");
+          this.mobileDrawerEl.classList.add("is-mobile-closed");
+        }
+      }
+      const active = document.activeElement;
+      const editing = active instanceof HTMLInputElement && this.el.contains(active);
+      if (!editing) this.render();
+    };
+    this.onDispose(store.subscribe(["rules", "config", "status", "practice", "race"], refreshIfIdle));
+    const unsubPool = usbPool.onChange(refreshIfIdle);
+    const unsubSlots = usbPool.slots.map((c) =>
+      c.subscribe({
+        onConnect: refreshIfIdle,
+        onStatus: refreshIfIdle,
+        onDisconnect: refreshIfIdle,
       })
     );
+    this.onDispose(() => {
+      unsubPool();
+      unsubSlots.forEach((fn) => fn());
+    });
     this.onDispose(store.subscribe(["crossings"], () => this.renderCounts()));
     this.listen(window, "resize", () => this.syncScopeLayout());
     if (typeof ResizeObserver !== "undefined") {
@@ -430,10 +468,38 @@ export class TimingRulesEditor extends Component {
     });
   }
 
+  private async handleDismissGateButton(btn: HTMLElement): Promise<void> {
+    if (this.isReadOnlyFn()) return;
+    const gateId = Number(btn.dataset.dismissGate);
+    const timerId = Number(btn.dataset.dismissTimer || "0");
+    const fp = btn.dataset.dismissFp || "";
+    const label = btn.dataset.dismissLabel || "";
+    if (this.scope === gateId) {
+      this.scope = null;
+      try {
+        window.localStorage.setItem(RULES_SCOPE_STORAGE_KEY, "all");
+      } catch {
+        // Ignore storage access errors
+      }
+      if (this.mobileDrawerOpen) {
+        this.mobileDrawerOpen = false;
+        this.mobileDrawerClosing = false;
+        this.mobileDrawerEl.classList.remove("is-closing");
+        this.mobileDrawerEl.classList.add("is-mobile-closed");
+      }
+    }
+    if (timerId > 0) {
+      await this.api.deleteTimer(timerId, fp, label);
+    } else if (gateId > 0) {
+      await this.api.removeTrackNode(gateId);
+    }
+  }
+
   private render(): void {
     const r = this.store.rules;
     const gate = this.scope === null ? undefined : this.store.node(this.scope);
     const overrides = this.overridesOf(gate);
+    const readOnly = this.isReadOnlyFn();
 
     let globalOvrCount = r.beepOnCross ? 1 : 0;
     for (const s of RULES) {
@@ -456,13 +522,33 @@ export class TimingRulesEditor extends Component {
         for (const s of RULES) {
           if (ovr[s.key] !== undefined) n++;
         }
+        const assignedId = p.assignedTimerId ?? 0;
+        const tiedTimer = assignedId > 0 ? this.store.detectedTimers.find((d) => d.timerId === assignedId) : undefined;
+        const isOnline = assignedId > 0 ? isTrackTimerActive(this.store, tiedTimer, p) : false;
+        const canDismiss = !isOnline && !readOnly;
+        const label = gateLabel(this.store, p.gateId);
         const on = showActive && this.scope === p.gateId;
         const dim = showActive && this.scope !== p.gateId;
-        return `<button type="button" class="channel ${on ? "is-focus" : ""} ${dim ? "is-dim" : ""}" data-scope="${p.gateId}"
+        return `<button type="button" class="channel ${on ? "is-focus" : ""} ${dim ? "is-dim" : ""} ${canDismiss ? "has-dismiss" : ""}" data-scope="${p.gateId}"
                   title="${n ? `${n} rule${n > 1 ? "s" : ""} overridden at this timer` : "Uses the global rules"}">
                   <span class="dot" style="--c:${gateColor(this.store, p.gateId)}"></span>
-                  <span class="channel-name">${esc(gateLabel(this.store, p.gateId))}</span>
+                  <span class="channel-name">${esc(label)}</span>
                   ${n ? `<span class="channel-custom-icon" title="Customized" aria-label="Customized">${icons.pencil(12)}</span>` : ""}
+                  ${
+                    canDismiss
+                      ? `<span
+                          role="button"
+                          tabindex="0"
+                          class="channel-dismiss-btn"
+                          data-dismiss-gate="${p.gateId}"
+                          data-dismiss-timer="${assignedId}"
+                          data-dismiss-fp="${esc(tiedTimer?.fingerprint || "")}"
+                          data-dismiss-label="${esc(label)}"
+                          title="Remove disconnected timer ${esc(label)}"
+                          aria-label="Remove disconnected timer ${esc(label)}"
+                        >${icons.close(13)}</span>`
+                      : ""
+                  }
                 </button>`;
       }),
     ].join("");
@@ -497,7 +583,6 @@ export class TimingRulesEditor extends Component {
       ? this.renderGateBeepRow(r, overrides)
       : this.renderGlobalBeepRow(r);
 
-    const readOnly = this.isReadOnlyFn();
     const foot = readOnly
       ? `<p class="note">Recorded timing rules for this closed race · reopen the race to modify rules.</p>`
       : gate

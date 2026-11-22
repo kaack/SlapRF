@@ -14,12 +14,13 @@ import (
 const maxTimers = 7 // One Hub plus up to 6 Spokes
 
 var (
-	ErrUnknownGate     = errors.New("unknown gate")
-	ErrInvalidTimerID  = errors.New("timer ID must be between 1 and 7")
-	ErrGateNameTooLong = errors.New("gate name is too long")
-	ErrInvalidGateRole = errors.New("unknown gate role")
-	ErrMinOneGate      = errors.New("at least one gate must remain on the course")
-	ErrHubExists       = errors.New("a Hub is already registered (one Hub per course)")
+	ErrUnknownGate       = errors.New("unknown gate")
+	ErrInvalidTimerID    = errors.New("timer ID must be between 1 and 7")
+	ErrGateNameTooLong   = errors.New("gate name is too long")
+	ErrInvalidGateRole   = errors.New("unknown gate role")
+	ErrMinOneGate        = errors.New("at least one gate must remain on the course")
+	ErrHubExists         = errors.New("a Hub is already registered (one Hub per course)")
+	ErrTimerStillActive  = errors.New("timer is active; disconnect it before removing")
 )
 
 // ProvisionRequest describes a timer that was just flashed (or registered) by the flasher.
@@ -1019,6 +1020,20 @@ func (e *Engine) ClearDeletedSpokeFingerprint(fingerprint string) {
 		delete(e.deletedSpokeFp, fp)
 	}
 	e.mu.Unlock()
+}
+
+// IsTimerActivelyOnline reports whether `timerID` is currently registered and actively online.
+func (e *Engine) IsTimerActivelyOnline(timerID uint8) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	d, ok := e.detected[timerID]
+	if !ok || !d.Online {
+		return false
+	}
+	if !e.isSimEngine && !d.IsHub && d.FirmwareVersion != "LapRF" && d.FirmwareVersion != "RotorHazard" && !d.LastSeenAt.IsZero() && time.Since(d.LastSeenAt) > 6*time.Second {
+		return false
+	}
+	return true
 }
 
 // DeleteDetectedTimer removes a timer from `e.detected` and deletes any gate assigned to it from the track.

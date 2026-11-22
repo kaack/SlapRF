@@ -132,6 +132,7 @@ type TrackSimulator struct {
 	pilotStates         []simPilotState
 	poweredOffTimers    map[uint8]bool
 	unflashedBoards     map[uint8]SimBoardBlankState
+	dismissedBoards     map[uint8]domain.DetectedTimer
 	timerRuntimes       map[uint8]*simTimerRuntime
 	laprfUnits          []simLapRFUnitState
 	rhUnits             []*simRHUnitState
@@ -171,6 +172,7 @@ func NewTrackSimulator(engine *tracker.Engine) *TrackSimulator {
 		trackLengthMeters:  360.0, // 360m 4-gate technical race track (~13-15s lap time)
 		poweredOffTimers:   make(map[uint8]bool),
 		unflashedBoards:    make(map[uint8]SimBoardBlankState),
+		dismissedBoards:    make(map[uint8]domain.DetectedTimer),
 		timerRuntimes:      make(map[uint8]*simTimerRuntime),
 		rng:                rand.New(rand.NewSource(time.Now().UnixNano())),
 		stopCh:             make(chan struct{}),
@@ -325,6 +327,25 @@ func (s *TrackSimulator) buildHubHelloBytesLocked(detected []domain.DetectedTime
 // BuildHubHelloStream returns the initial [0x1E][len][36-byte HELLO] records for the Hub and all
 // powered-on Spokes when the simulated Hub's USB port is opened.
 func (s *TrackSimulator) BuildHubHelloStream() []byte {
+	s.mu.Lock()
+	var toRestore []domain.DetectedTimer
+	if s.running {
+		for id, d := range s.dismissedBoards {
+			if !s.poweredOffTimers[id] {
+				toRestore = append(toRestore, d)
+			}
+		}
+		for _, d := range toRestore {
+			delete(s.dismissedBoards, d.TimerID)
+		}
+	}
+	s.mu.Unlock()
+
+	for _, d := range toRestore {
+		s.engine.ClearDeletedSpokeFingerprint(d.Fingerprint)
+		_ = s.engine.FlashSimBoard(d.TimerID, d.IsHub, d.TimerLabel, d.Fingerprint, d.FirmwareVersion, d.Color)
+	}
+
 	detected := s.engine.DetectedTimersSnapshot()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -838,8 +859,14 @@ func (s *TrackSimulator) ToggleTimerPower(timerID uint8) bool {
 		}
 	}
 	s.mu.Lock()
+	if !isHub {
+		if d, ok := s.dismissedBoards[timerID]; ok && d.IsHub {
+			isHub = true
+		}
+	}
 	currentlyOff := s.poweredOffTimers[timerID]
 	nextOff := !currentlyOff
+	var restoreBoard *domain.DetectedTimer
 	if nextOff {
 		s.poweredOffTimers[timerID] = true
 		if rt, ok := s.timerRuntimes[timerID]; ok {
@@ -848,10 +875,27 @@ func (s *TrackSimulator) ToggleTimerPower(timerID uint8) bool {
 		}
 	} else {
 		delete(s.poweredOffTimers, timerID)
+		if d, ok := s.dismissedBoards[timerID]; ok {
+			cp := d
+			restoreBoard = &cp
+			delete(s.dismissedBoards, timerID)
+		}
 		s.hellosSent = false
 	}
 	hasHubSink := s.hubFrameSink != nil
 	s.mu.Unlock()
+
+	if restoreBoard != nil {
+		s.engine.ClearDeletedSpokeFingerprint(restoreBoard.Fingerprint)
+		_ = s.engine.FlashSimBoard(
+			restoreBoard.TimerID,
+			restoreBoard.IsHub,
+			restoreBoard.TimerLabel,
+			restoreBoard.Fingerprint,
+			restoreBoard.FirmwareVersion,
+			restoreBoard.Color,
+		)
+	}
 
 	if nextOff {
 		if isHub && hasHubSink {
@@ -863,6 +907,45 @@ func (s *TrackSimulator) ToggleTimerPower(timerID uint8) bool {
 		s.engine.SetDetectedTimerOnline(timerID, true)
 	}
 	return !nextOff
+}
+
+// DismissDisconnectedTimer garbage-collects an offline timer from the engine and tracks without
+// destroying the underlying simulated hardware board (so it reappears if reconnected/powered on).
+func (s *TrackSimulator) DismissDisconnectedTimer(timerID uint8) error {
+	s.mu.Lock()
+	if _, wasUnflashed := s.unflashedBoards[timerID]; wasUnflashed {
+		delete(s.unflashedBoards, timerID)
+		s.mu.Unlock()
+		return nil
+	}
+	poweredOff := s.poweredOffTimers[timerID]
+	s.mu.Unlock()
+
+	detected := s.engine.DetectedTimersSnapshot()
+	var found *domain.DetectedTimer
+	for i := range detected {
+		if detected[i].TimerID == timerID {
+			found = &detected[i]
+			break
+		}
+	}
+	if found == nil {
+		return nil
+	}
+	if found.Online && !poweredOff {
+		return tracker.ErrTimerStillActive
+	}
+	if found.FirmwareVersion != "RotorHazard" && found.FirmwareVersion != "LapRF" {
+		s.mu.Lock()
+		if s.dismissedBoards == nil {
+			s.dismissedBoards = make(map[uint8]domain.DetectedTimer)
+		}
+		cp := *found
+		cp.Online = false
+		s.dismissedBoards[timerID] = cp
+		s.mu.Unlock()
+	}
+	return s.engine.DeleteDetectedTimer(timerID)
 }
 
 // DeleteTimer removes a simulated hardware board from the simulation and engine.
@@ -878,6 +961,7 @@ func (s *TrackSimulator) DeleteTimer(timerID uint8) error {
 	s.mu.Lock()
 	delete(s.poweredOffTimers, timerID)
 	delete(s.timerRuntimes, timerID)
+	delete(s.dismissedBoards, timerID)
 	_, wasUnflashed := s.unflashedBoards[timerID]
 	delete(s.unflashedBoards, timerID)
 	hasHubSink := s.hubFrameSink != nil
@@ -898,9 +982,12 @@ func (s *TrackSimulator) AddBlankBoard() (uint8, error) {
 	detected := s.engine.DetectedTimersSnapshot()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	used := make(map[uint8]bool, len(detected)+len(s.unflashedBoards))
+	used := make(map[uint8]bool, len(detected)+len(s.unflashedBoards)+len(s.dismissedBoards))
 	for _, d := range detected {
 		used[d.TimerID] = true
+	}
+	for id := range s.dismissedBoards {
+		used[id] = true
 	}
 	for id := range s.unflashedBoards {
 		used[id] = true
@@ -944,9 +1031,13 @@ func (s *TrackSimulator) EraseBoard(timerID uint8) error {
 		}
 	}
 	s.mu.Lock()
+	if b, ok := s.dismissedBoards[timerID]; ok && b.Color != "" {
+		color = b.Color
+	}
 	if b, ok := s.unflashedBoards[timerID]; ok && b.Color != "" {
 		color = b.Color
 	}
+	delete(s.dismissedBoards, timerID)
 	s.unflashedBoards[timerID] = SimBoardBlankState{
 		TimerID: timerID,
 		Color:   color,
@@ -974,9 +1065,13 @@ func (s *TrackSimulator) FlashBoard(timerID uint8, role, label, fingerprint, fwV
 	isHub := strings.EqualFold(strings.TrimSpace(role), "hub")
 	s.mu.Lock()
 	color := domain.DefaultTimerColor(timerID)
+	if b, ok := s.dismissedBoards[timerID]; ok && b.Color != "" {
+		color = b.Color
+	}
 	if b, ok := s.unflashedBoards[timerID]; ok && b.Color != "" {
 		color = b.Color
 	}
+	delete(s.dismissedBoards, timerID)
 	delete(s.unflashedBoards, timerID)
 	delete(s.timerRuntimes, timerID)
 	s.hellosSent = false
@@ -1160,6 +1255,36 @@ func (s *TrackSimulator) Snapshot() domain.SimState {
 				BatteryPct:       d.BatteryPct,
 				NoiseFloorDbm:    d.NoiseFloorDbm,
 				LastRSSI:         lastRSSI,
+			})
+		}
+		for id, d := range s.dismissedBoards {
+			if flashedIDs[id] {
+				continue
+			}
+			flashedIDs[id] = true
+			poweredOn := !s.poweredOffTimers[id]
+			fw := d.FirmwareVersion
+			if fw == "" {
+				fw = domain.LatestFirmwareVersion
+			}
+			tLabel := d.TimerLabel
+			if tLabel == "" {
+				tLabel = domain.DefaultTimerLabel(id, d.IsHub)
+			}
+			simTimers = append(simTimers, domain.SimTimerState{
+				TimerID:          id,
+				TimerLabel:       tLabel,
+				Color:            d.Color,
+				IsHub:            d.IsHub,
+				Unflashed:        false,
+				FirmwareVersion:  fw,
+				Fingerprint:      d.Fingerprint,
+				PoweredOn:        poweredOn,
+				Online:           false,
+				AssignedGateName: "",
+				BatteryMv:        d.BatteryMv,
+				BatteryPct:       d.BatteryPct,
+				NoiseFloorDbm:    d.NoiseFloorDbm,
 			})
 		}
 		for id, blank := range s.unflashedBoards {

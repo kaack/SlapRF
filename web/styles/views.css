@@ -495,7 +495,7 @@ body.is-gate-dragging * {
   -ms-overflow-style: none;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
-  padding: 4px;
+  padding: 6px 6px 4px 4px;
 }
 .gate-unassigned-list::-webkit-scrollbar {
   display: none;
@@ -547,6 +547,29 @@ body.is-gate-dragging * {
   filter: grayscale(1);
   opacity: 0.94;
 }
+.unassigned-puck-dismiss {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 3;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  transition: background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+.unassigned-puck-dismiss:hover {
+  background: var(--surface-3);
+  color: var(--text);
+  border-color: var(--text-3);
+}
 @media (max-width: 860px) {
   .gate-unassigned-tray {
     margin-top: 10px;
@@ -557,7 +580,7 @@ body.is-gate-dragging * {
   }
   .gate-unassigned-list {
     width: 100%;
-    padding: 3px 2px;
+    padding: 6px 6px 4px 2px;
     gap: 8px;
   }
   .unassigned-timer-token {
@@ -2751,10 +2774,30 @@ html[data-theme="light"] .bar-time {
 .rules-scope-grid > .channel {
   min-width: 0;
 }
+.rules-scope-grid > .channel.has-dismiss {
+  padding-right: 6px;
+}
 .rules-scope-grid > .channel > .channel-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.channel-dismiss-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+.channel-dismiss-btn:hover {
+  background: var(--surface-3);
+  color: var(--text);
 }
 @media (min-width: 861px) {
   .scope-tune-drawer.is-track-rules-drawer {

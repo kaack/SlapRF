@@ -17,6 +17,45 @@ import { renderSectionCapsuleIcon } from "./markup";
  *   - Below each timer on the track line sits a checkered flag icon button (active on the
  *     start timer, muted on intermediate timers); clicking it sets that timer as the start timer.
  */
+export function isTrackTimerActive(store: AppStore, d?: DetectedTimer, node?: TrackNode): boolean {
+  if (
+    isLapRFMode(store.timingHardwareMode) ||
+    isRotorHazardMode(store.timingHardwareMode) ||
+    d?.firmwareVersion === "LapRF" ||
+    node?.firmwareVersion === "LapRF" ||
+    d?.firmwareVersion === "RotorHazard" ||
+    node?.firmwareVersion === "RotorHazard"
+  ) {
+    return Boolean(d ? d.online : node?.online);
+  }
+  const connected = usbPool.connectedConsoles();
+  if (connected.length === 0) {
+    return false;
+  }
+  const fp = (d?.fingerprint || "").toUpperCase();
+  if (fp) {
+    const direct = usbPool.findByFingerprint(fp);
+    if (direct && direct.connected && !direct.lastStatus?.emergencyMode) {
+      return true;
+    }
+  }
+  const hub = usbPool.hubConsole();
+  if (hub && hub.connected && !hub.lastStatus?.emergencyMode) {
+    if (d?.isHub) {
+      return true;
+    }
+    if (fp && Array.isArray(hub.lastStatus?.spokes)) {
+      const sp = hub.lastStatus!.spokes!.find((s) => (s.fp || "").toUpperCase() === fp);
+      if (sp) {
+        const msAgo = sp.msAgo !== undefined && sp.msAgo >= 0x80000000 ? 0 : sp.msAgo;
+        return (sp.frames ?? 0) > 0 && (msAgo === undefined || msAgo < 5000);
+      }
+    }
+    return Boolean(d ? d.online : node?.online);
+  }
+  return false;
+}
+
 export interface TrackEditorOptions {
   readOnly?: () => boolean;
 }
@@ -43,8 +82,9 @@ export class TrackEditor extends Component {
         void this.makeStart(Number(makeStartBtn.dataset.makeStart));
         return;
       }
-      const deleteTimerBtn = target.closest<HTMLButtonElement>("[data-delete-timer]");
+      const deleteTimerBtn = target.closest<HTMLElement>("[data-delete-timer]");
       if (deleteTimerBtn) {
+        e.preventDefault();
         e.stopPropagation();
         const timerId = Number(deleteTimerBtn.dataset.deleteTimer);
         const fp = deleteTimerBtn.dataset.deleteFp || "";
@@ -104,42 +144,7 @@ export class TrackEditor extends Component {
   }
 
   private isTimerActive(d?: DetectedTimer, node?: TrackNode): boolean {
-    if (
-      isLapRFMode(this.store.timingHardwareMode) ||
-      isRotorHazardMode(this.store.timingHardwareMode) ||
-      d?.firmwareVersion === "LapRF" ||
-      node?.firmwareVersion === "LapRF" ||
-      d?.firmwareVersion === "RotorHazard" ||
-      node?.firmwareVersion === "RotorHazard"
-    ) {
-      return Boolean(d ? d.online : node?.online);
-    }
-    const connected = usbPool.connectedConsoles();
-    if (connected.length === 0) {
-      return false;
-    }
-    const fp = (d?.fingerprint || "").toUpperCase();
-    if (fp) {
-      const direct = usbPool.findByFingerprint(fp);
-      if (direct && direct.connected && !direct.lastStatus?.emergencyMode) {
-        return true;
-      }
-    }
-    const hub = usbPool.hubConsole();
-    if (hub && hub.connected && !hub.lastStatus?.emergencyMode) {
-      if (d?.isHub) {
-        return true;
-      }
-      if (fp && Array.isArray(hub.lastStatus?.spokes)) {
-        const sp = hub.lastStatus!.spokes!.find((s) => (s.fp || "").toUpperCase() === fp);
-        if (sp) {
-          const msAgo = sp.msAgo !== undefined && sp.msAgo >= 0x80000000 ? 0 : sp.msAgo;
-          return (sp.frames ?? 0) > 0 && (msAgo === undefined || msAgo < 5000);
-        }
-      }
-      return Boolean(d ? d.online : node?.online);
-    }
-    return false;
+    return isTrackTimerActive(this.store, d, node);
   }
 
   private get orderedNodes(): TrackNode[] {
@@ -376,6 +381,7 @@ export class TrackEditor extends Component {
     const color = timerColor(this.store, d.timerId);
     const timerName = this.formatTimerShortCode(d.timerId, [d], d.timerLabel);
     const isOnline = this.isTimerActive(d);
+    const readOnly = this.isReadOnlyFn();
     return `
       <button
         type="button"
@@ -386,6 +392,20 @@ export class TrackEditor extends Component {
         title="${esc(timerName)} · Drag onto the track line above to place on the track"
       >
         <span class="gate-node-timer-code mono">${esc(timerName)}</span>
+        ${
+          !isOnline && !readOnly
+            ? `<span
+                role="button"
+                tabindex="0"
+                class="unassigned-puck-dismiss"
+                data-delete-timer="${d.timerId}"
+                data-delete-fp="${esc(d.fingerprint || "")}"
+                data-delete-label="${esc(timerName)}"
+                title="Remove disconnected timer ${esc(timerName)}"
+                aria-label="Remove disconnected timer ${esc(timerName)}"
+              >${icons.close(10)}</span>`
+            : ""
+        }
       </button>`;
   }
 

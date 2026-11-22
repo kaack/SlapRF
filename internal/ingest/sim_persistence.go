@@ -266,6 +266,7 @@ func (s *TrackSimulator) ResetToFactoryDefaults() {
 	s.trackWalkerTimerSec = 0
 	s.poweredOffTimers = make(map[uint8]bool)
 	s.unflashedBoards = make(map[uint8]SimBoardBlankState)
+	s.dismissedBoards = make(map[uint8]domain.DetectedTimer)
 	s.timerRuntimes = make(map[uint8]*simTimerRuntime)
 	s.laprfUnits = defaultSimLapRFUnitsForMode(hwMode)
 	s.rhUnits = defaultSimRHUnitsForMode(hwMode)
@@ -287,6 +288,7 @@ func (s *TrackSimulator) RestoreDemoData() {
 	s.trackWalkerTimerSec = 0
 	s.poweredOffTimers = make(map[uint8]bool)
 	s.unflashedBoards = make(map[uint8]SimBoardBlankState)
+	s.dismissedBoards = make(map[uint8]domain.DetectedTimer)
 	s.timerRuntimes = make(map[uint8]*simTimerRuntime)
 	s.laprfUnits = defaultSimLapRFUnitsForMode(hwMode)
 	s.rhUnits = defaultSimRHUnitsForMode(hwMode)
@@ -310,6 +312,7 @@ func (s *TrackSimulator) ResetTimersAndTrackToDefault() {
 	s.mu.Lock()
 	s.poweredOffTimers = make(map[uint8]bool)
 	s.unflashedBoards = make(map[uint8]SimBoardBlankState)
+	s.dismissedBoards = make(map[uint8]domain.DetectedTimer)
 	s.timerRuntimes = make(map[uint8]*simTimerRuntime)
 	s.laprfUnits = defaultSimLapRFUnitsForMode(hwMode)
 	s.rhUnits = defaultSimRHUnitsForMode(hwMode)
