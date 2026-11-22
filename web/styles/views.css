@@ -3564,6 +3564,8 @@ html[data-theme="light"] .scope-tune-custom-icon {
   }
   .scope-graph-box {
     flex: 0 0 auto;
+    contain: layout paint;
+    transform: translateZ(0);
   }
   .scope-root > .scope-canvas {
     flex: 0 0 auto;
@@ -3582,6 +3584,9 @@ html[data-theme="light"] .scope-tune-custom-icon {
     overflow-y: auto;
     overscroll-behavior-y: contain;
     -webkit-overflow-scrolling: touch;
+    contain: layout paint;
+    will-change: scroll-position;
+    transform: translateZ(0);
     scrollbar-width: none;
     -ms-overflow-style: none;
   }
@@ -3596,6 +3601,7 @@ html[data-theme="light"] .scope-tune-custom-icon {
     max-height: 40px;
     padding: 0 6px 0 12px;
     box-sizing: border-box;
+    transition: none;
   }
   .scope-root > .channel-legend > .channel > .channel-right-cols {
     margin-left: auto;

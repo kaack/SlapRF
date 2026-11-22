@@ -247,6 +247,15 @@ export class PilotRssiChart extends Component {
   private lastHardwareMode: TimingHardwareMode = "slaprf";
   private autoYHoldUntilMs = 0;
   private lastLegendStructSig = "";
+  private lastFastLegendKey = "";
+  private legendScrollingUntilMs = 0;
+  private readonly legendRowDomByGate = new Map<
+    number,
+    { chipEl: HTMLElement; dbmEl: HTMLElement; lastHot: boolean; lastText: string }
+  >();
+  private mobileLayoutCached = false;
+  private gateMetaRev = -1;
+  private readonly gateMetaById = new Map<number, { label: string; color: string }>();
   private lastAxisControlsHtml = "";
   private lastCalibHtml = "";
   private lastTuneDrawerHtml = "";
@@ -356,12 +365,16 @@ export class PilotRssiChart extends Component {
     this.renderTuningDrawer();
   }
 
-  private get isMobileLayout(): boolean {
+  private computeIsMobileLayout(): boolean {
     return (
       typeof window !== "undefined" &&
       typeof window.matchMedia === "function" &&
       window.matchMedia("(max-width: 860px)").matches
     );
+  }
+
+  private get isMobileLayout(): boolean {
+    return this.mobileLayoutCached;
   }
 
   private get padL(): number {
@@ -387,6 +400,7 @@ export class PilotRssiChart extends Component {
     this.store = store;
     this.api = api;
     this.contextMode = options?.contextMode ?? "practice";
+    this.mobileLayoutCached = this.computeIsMobileLayout();
     this.loadChartPrefs();
     el.classList.add("scope-root");
     el.innerHTML = `
@@ -1192,10 +1206,20 @@ export class PilotRssiChart extends Component {
       }
     });
 
+    const legendEl = this.slot("legend");
+    const markLegendScroll = () => {
+      this.legendScrollingUntilMs =
+        (typeof performance !== "undefined" ? performance.now() : Date.now()) + 180;
+    };
+    legendEl.addEventListener("scroll", markLegendScroll, { passive: true });
+    this.onDispose(() => legendEl.removeEventListener("scroll", markLegendScroll));
+
     const timer = window.setInterval(() => {
-      if (document.hidden || this.el.offsetParent === null) return;
+      if (document.hidden || !this.el.isConnected || this.plot.w <= 1) return;
+      const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+      if (nowMs < this.legendScrollingUntilMs) return;
       // Don't rebuild the chips under the pointer — that can swallow a click.
-      if (!this.slot("legend").matches(":hover")) this.renderLegend();
+      if (!legendEl.matches(":hover")) this.renderLegend();
     }, LEGEND_REFRESH_MS);
     this.onDispose(() => window.clearInterval(timer));
     this.onDispose(
@@ -1228,11 +1252,10 @@ export class PilotRssiChart extends Component {
         }
       })
     );
-    let wasMobileLayout = this.isMobileLayout;
     this.listen(window as unknown as HTMLElement, "resize", () => {
-      const nowMobile = this.isMobileLayout;
-      if (nowMobile !== wasMobileLayout) {
-        wasMobileLayout = nowMobile;
+      const nowMobile = this.computeIsMobileLayout();
+      if (nowMobile !== this.mobileLayoutCached) {
+        this.mobileLayoutCached = nowMobile;
         this.renderTuningDrawer();
       } else if (nowMobile && this.tuneDrawerOpen) {
         this.syncMobileDrawerTop(this.tuneDrawerEl);
@@ -1856,8 +1879,27 @@ export class PilotRssiChart extends Component {
 
   // ---- data ------------------------------------------------------------------
 
+  private syncGateMetaCache(): void {
+    const rev = this.store.stateRev ?? 0;
+    if (this.gateMetaRev === rev) return;
+    this.gateMetaRev = rev;
+    this.gateMetaById.clear();
+    for (const node of this.store.nodes) {
+      this.gateMetaById.set(node.gateId, {
+        label: gateLabel(this.store, node.gateId),
+        color: gateColor(this.store, node.gateId),
+      });
+    }
+  }
+
   private colorOf(gateId: number): string {
-    return gateColor(this.store, gateId);
+    this.syncGateMetaCache();
+    return this.gateMetaById.get(gateId)?.color ?? gateColor(this.store, gateId);
+  }
+
+  private labelOfGate(gateId: number): string {
+    this.syncGateMetaCache();
+    return this.gateMetaById.get(gateId)?.label ?? gateLabel(this.store, gateId);
   }
 
   /** Binary-search first index in a chronological `{ timestampUs }` array with `timestampUs >= ts`. */
@@ -1892,7 +1934,7 @@ export class PilotRssiChart extends Component {
           ts: c.timestampUs,
           gateId: c.gateId,
           counted: true,
-          title: `${p?.callsign ?? c.callsign ?? `P${c.slotIndex}`} · ${gateLabel(this.store, c.gateId)}`,
+          title: `${p?.callsign ?? c.callsign ?? `P${c.slotIndex}`} · ${this.labelOfGate(c.gateId)}`,
           detail: `Timed · peak ${c.peakRssiDbm.toFixed(0)}${this.unitSuffix}`,
           color: p?.color,
           slotIndex: c.slotIndex,
@@ -1908,7 +1950,7 @@ export class PilotRssiChart extends Component {
           ts: f.timestampUs,
           gateId: f.gateId,
           counted: false,
-          title: `${p?.callsign ?? `P${f.slotIndex}`} · ${gateLabel(this.store, f.gateId)} (${FILTER_LABELS[f.reason] ?? f.reason})`,
+          title: `${p?.callsign ?? `P${f.slotIndex}`} · ${this.labelOfGate(f.gateId)} (${FILTER_LABELS[f.reason] ?? f.reason})`,
           detail: f.detail,
           color: p?.color,
           slotIndex: f.slotIndex,
@@ -1928,7 +1970,7 @@ export class PilotRssiChart extends Component {
         ts: c.timestampUs,
         gateId: c.gateId,
         counted: true,
-        title: `${gateLabel(this.store, c.gateId)} · ${c.estimatedSpeedMph.toFixed(0)} mph`,
+        title: `${this.labelOfGate(c.gateId)} · ${c.estimatedSpeedMph.toFixed(0)} mph`,
         detail: `Timed · peak ${c.peakRssiDbm.toFixed(0)}${this.unitSuffix}`,
         slotIndex: c.slotIndex,
       });
@@ -1942,7 +1984,7 @@ export class PilotRssiChart extends Component {
         ts: f.timestampUs,
         gateId: f.gateId,
         counted: false,
-        title: `${gateLabel(this.store, f.gateId)} · not counted (${FILTER_LABELS[f.reason] ?? f.reason})`,
+        title: `${this.labelOfGate(f.gateId)} · not counted (${FILTER_LABELS[f.reason] ?? f.reason})`,
         detail: f.detail,
         slotIndex: f.slotIndex,
       });
@@ -2009,8 +2051,12 @@ export class PilotRssiChart extends Component {
       pilotEntries.map((e) => e.slot)
     );
 
-    const xOf = (ts: number) => padL + plotW * ((ts - start) / this.windowUs);
-    const yOf = (dbm: number) => this.yOf(dbm);
+    const xScale = plotW / this.windowUs;
+    const ySpanLocal = Math.max(4, this.yMax - this.yMin);
+    const yScale = plotH / ySpanLocal;
+    const yMaxLocal = this.yMax;
+    const xOf = (ts: number) => padL + (ts - start) * xScale;
+    const yOf = (dbm: number) => padT + (yMaxLocal - dbm) * yScale;
 
     this.drawGrid(ctx, w, h, start, end, ref, xOf, yOf);
 
@@ -2144,8 +2190,8 @@ export class PilotRssiChart extends Component {
 
     // Pass markers: dashed in the gate's (or pilot's) colour when timed, red when set aside.
     ctx.font = font(600, 10.5);
-    const rows = this.labelRows(ctx, xOf, end);
     const passes = this.focusedPasses(start, end);
+    const rows = passes.length > 0 ? this.labelRows(ctx, start, end) : this.cachedLabelRows;
     let hovered: PassMarker | null = null;
     passes.forEach((p) => {
       const x = xOf(p.ts);
@@ -2294,13 +2340,13 @@ export class PilotRssiChart extends Component {
    * first), not just the visible window, so a label keeps its row while it scrolls past —
    * otherwise labels jump between rows whenever an older pass leaves the view.
    */
-  private labelRows(ctx: CanvasRenderingContext2D, _xOf: (ts: number) => number, _end: number): Map<string, number> {
-    const crossings = this.store.crossings;
-    const filtered = this.store.filtered;
-    const lastCid = crossings.length > 0 ? crossings[crossings.length - 1].eventId : 0;
-    const lastFts = filtered.length > 0 ? filtered[filtered.length - 1].timestampUs : 0;
+  private labelRows(ctx: CanvasRenderingContext2D, start: number, end: number): Map<string, number> {
+    const lookbackStart = Math.max(0, start - this.windowUs * 2);
+    const windowPasses = this.focusedPasses(lookbackStart, end);
+    const firstTs = windowPasses.length > 0 ? windowPasses[0].ts : 0;
+    const lastTs = windowPasses.length > 0 ? windowPasses[windowPasses.length - 1].ts : 0;
     const multiSig = this.isMultiPilotMode ? (this.multiPilotSlots ?? []).join(",") : "";
-    const sig = `${crossings.length}:${lastCid}:${filtered.length}:${lastFts}:${Math.round(this.windowUs)}:${Math.round(this.plot.w)}:${this.focus ?? "all"}:${this.activePilotSlot}:${multiSig}`;
+    const sig = `${windowPasses.length}:${firstTs}:${lastTs}:${Math.round(this.windowUs)}:${Math.round(this.plot.w)}:${this.focus ?? "all"}:${this.activePilotSlot}:${multiSig}`;
     if (sig === this.cachedLabelSig) {
       return this.cachedLabelRows;
     }
@@ -2308,10 +2354,9 @@ export class PilotRssiChart extends Component {
     const rows = new Map<string, number>();
     const rowEnd = [-Infinity, -Infinity];
     const pxPerUs = Math.max(1e-9, this.plot.w / this.windowUs);
-    const allPasses = this.focusedPasses(0, Infinity);
-    let baseTs = allPasses.length > 0 ? allPasses[0].ts : 0;
-    for (let i = 0; i < allPasses.length; i++) {
-      const p = allPasses[i];
+    const baseTs = firstTs;
+    for (let i = 0; i < windowPasses.length; i++) {
+      const p = windowPasses[i];
       const lbl = this.labelOf(p);
       let width = this.labelWidthCache.get(lbl);
       if (width === undefined) {
@@ -2689,101 +2734,122 @@ export class PilotRssiChart extends Component {
     }
     if (slots.length === 0) return;
 
-    const canTune = !this.isMultiPilotMode && !this.store.isHistoricalTrack;
-    const isLapRF = this.isLapRF;
-    const isRH = this.isRH;
-    const canAutoCalib = !isLapRF && !isRH;
-    const activeSlot = this.activePilotSlot;
-    const globalOvrCount = canTune ? countGlobalOverrides(this.store.rules) : 0;
-    const isGateCalibrated = (gateId: number): boolean => {
-      if (!canTune) return false;
-      const t = enterThresholdAt(this.store, gateId, activeSlot);
-      if (isLapRF) return t.calibrated;
-      return t.calibrated || exitThresholdAt(this.store, gateId, activeSlot).calibrated;
-    };
-    const anyCalibrated = canTune && this.store.nodes.some((p) => isGateCalibrated(p.gateId));
-    const structSig = [
-      this.focus ?? "all",
-      this.tuningGateId ?? "closed",
-      this.tuneDrawerOpen ? "open" : "closed",
-      this.isMultiPilotMode ? "multi" : "single",
-      canTune ? "tunable" : "readonly",
-      canAutoCalib ? "autocalib" : "manualcalib",
-      anyCalibrated ? "anycal" : "nocal",
-      unitSuffix,
-      `global:${globalOvrCount}`,
-      this.store.nodes
-        .map((p) => {
-          const gOvr = countOverrides(p.ruleOverrides);
-          const pOvr = countOverrides(pilotGateOverridesAt(p, activeSlot));
-          const cal = isGateCalibrated(p.gateId) ? 1 : 0;
-          return `${p.gateId}:${gateLabel(this.store, p.gateId)}:${this.colorOf(p.gateId)}:${gOvr}:${pOvr}:${cal}`;
-        })
-        .join(","),
-    ].join("|");
-
     const legendEl = this.slot("legend");
-    if (structSig !== this.lastLegendStructSig || legendEl.childElementCount === 0) {
-      this.lastLegendStructSig = structSig;
-      const allChip = `
-        <button type="button" class="channel channel-all ${this.focus === null ? "is-focus" : "is-dim"}"
-                data-focus="all" title="Show all timers (${this.store.nodes.length})">
-          <span class="dot channel-all-dot"></span>
-          <span class="channel-name">All timers</span>
-          <span class="channel-right-cols">
-            <span class="channel-dbm mono">${this.store.nodes.length} timers</span>
-          </span>
-        </button>`;
-      const gateChips = this.store.nodes
-        .map((p) => {
-          let dbm = this.defYMin;
-          let hasReading = false;
-          for (const s of slots) {
-            const v = this.rssiAt(p.gateId, s, at);
-            if (v !== undefined && (!hasReading || v > dbm)) {
-              dbm = v;
-              hasReading = true;
+    const activeSlot = this.activePilotSlot;
+    const fastKey = `${this.store.stateRev ?? 0}|${this.focus ?? "all"}|${this.tuningGateId ?? "closed"}|${this.tuneDrawerOpen ? 1 : 0}|${activeSlot}|${this.isMultiPilotMode ? (this.multiPilotSlots ?? []).join(",") : "single"}|${unitSuffix}|${this.pending.size}`;
+    if (fastKey !== this.lastFastLegendKey || legendEl.childElementCount === 0) {
+      this.lastFastLegendKey = fastKey;
+      const canTune = !this.isMultiPilotMode && !this.store.isHistoricalTrack;
+      const isLapRF = this.isLapRF;
+      const isRH = this.isRH;
+      const canAutoCalib = !isLapRF && !isRH;
+      const globalOvrCount = canTune ? countGlobalOverrides(this.store.rules) : 0;
+      const isGateCalibrated = (gateId: number): boolean => {
+        if (!canTune) return false;
+        const t = enterThresholdAt(this.store, gateId, activeSlot);
+        if (isLapRF) return t.calibrated;
+        return t.calibrated || exitThresholdAt(this.store, gateId, activeSlot).calibrated;
+      };
+      const anyCalibrated = canTune && this.store.nodes.some((p) => isGateCalibrated(p.gateId));
+      const structSig = [
+        this.focus ?? "all",
+        this.tuningGateId ?? "closed",
+        this.tuneDrawerOpen ? "open" : "closed",
+        this.isMultiPilotMode ? "multi" : "single",
+        canTune ? "tunable" : "readonly",
+        canAutoCalib ? "autocalib" : "manualcalib",
+        anyCalibrated ? "anycal" : "nocal",
+        unitSuffix,
+        `global:${globalOvrCount}`,
+        this.store.nodes
+          .map((p) => {
+            const gOvr = countOverrides(p.ruleOverrides);
+            const pOvr = countOverrides(pilotGateOverridesAt(p, activeSlot));
+            const cal = isGateCalibrated(p.gateId) ? 1 : 0;
+            return `${p.gateId}:${this.labelOfGate(p.gateId)}:${this.colorOf(p.gateId)}:${gOvr}:${pOvr}:${cal}`;
+          })
+          .join(","),
+      ].join("|");
+
+      if (structSig !== this.lastLegendStructSig || legendEl.childElementCount === 0) {
+        this.lastLegendStructSig = structSig;
+        const allChip = `
+          <button type="button" class="channel channel-all ${this.focus === null ? "is-focus" : "is-dim"}"
+                  data-focus="all" title="Show all timers (${this.store.nodes.length})">
+            <span class="dot channel-all-dot"></span>
+            <span class="channel-name">All timers</span>
+            <span class="channel-right-cols">
+              <span class="channel-dbm mono">${this.store.nodes.length} timers</span>
+            </span>
+          </button>`;
+        const gateChips = this.store.nodes
+          .map((p) => {
+            let dbm = this.defYMin;
+            let hasReading = false;
+            for (const s of slots) {
+              const v = this.rssiAt(p.gateId, s, at);
+              if (v !== undefined && (!hasReading || v > dbm)) {
+                dbm = v;
+                hasReading = true;
+              }
             }
+            const hot = !this.isMultiPilotMode && dbm >= this.thresholdOf(p.gateId).dbm;
+            const dim = this.focus !== null && this.focus !== p.gateId;
+            const label = this.labelOfGate(p.gateId);
+            const gOvrCount = canTune ? countOverrides(p.ruleOverrides) : 0;
+            const pOvrCount = canTune ? countOverrides(pilotGateOverridesAt(p, activeSlot)) : 0;
+            const hasOvr = gOvrCount + pOvrCount > 0;
+            const isCal = isGateCalibrated(p.gateId);
+            const isGateTuneOpen = this.tuneDrawerOpen && this.tuningGateId === p.gateId;
+            const calibColHtml = canTune
+              ? isCal
+                ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-calib is-calibrated" data-calib-gate="${p.gateId}" data-calib-mode="reset" title="Clear calibrated thresholds for ${esc(label)}" aria-label="Clear calibrated thresholds for ${esc(label)}">${icons.targetOff(18)}</span>`
+                : canAutoCalib
+                  ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-calib" data-calib-gate="${p.gateId}" data-calib-mode="auto" title="Calibrate ${esc(label)}" aria-label="Calibrate ${esc(label)}">${icons.target(18)}</span>`
+                  : `<span class="channel-mobile-action-spacer" aria-hidden="true"></span>`
+              : "";
+            const tuneColHtml = canTune
+              ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-tune ${isGateTuneOpen ? "is-active" : ""}" data-tune-gate="${p.gateId}" title="Fine-tune ${esc(label)}" aria-label="Fine-tune ${esc(label)}">${icons.sliders(18)}</span>`
+              : "";
+            const initText = `${this.isMultiPilotMode ? "peak " : ""}${dbm.toFixed(0)}${unitSuffix}`;
+            return `
+              <button type="button" class="channel ${hot ? "is-hot" : ""} ${dim ? "is-dim" : ""} ${this.focus === p.gateId ? "is-focus" : ""}"
+                      data-gate-chip="${p.gateId}"
+                      data-focus="${this.focus === p.gateId ? "all" : p.gateId}" title="${this.focus === p.gateId ? "Show all timers" : "Show only this timer"}">
+                <span class="dot" style="--c:${this.colorOf(p.gateId)}"></span>
+                <span class="channel-name">${esc(label)}</span>
+                ${hasOvr ? `<span class="channel-custom-icon" title="Customized" aria-label="Customized">${icons.pencil(12)}</span>` : ""}
+                <span class="channel-right-cols">
+                  <span class="channel-dbm mono" data-gate-dbm="${p.gateId}">${initText}</span>
+                  ${calibColHtml}
+                  ${tuneColHtml}
+                </span>
+              </button>`;
+          })
+          .join("");
+        legendEl.innerHTML = allChip + gateChips;
+        this.legendRowDomByGate.clear();
+        for (const p of this.store.nodes) {
+          const chipEl = legendEl.querySelector<HTMLElement>(`[data-gate-chip="${p.gateId}"]`);
+          const dbmEl = legendEl.querySelector<HTMLElement>(`[data-gate-dbm="${p.gateId}"]`);
+          if (chipEl && dbmEl) {
+            this.legendRowDomByGate.set(p.gateId, {
+              chipEl,
+              dbmEl,
+              lastHot: chipEl.classList.contains("is-hot"),
+              lastText: dbmEl.textContent ?? "",
+            });
           }
-          const hot = !this.isMultiPilotMode && dbm >= this.thresholdOf(p.gateId).dbm;
-          const dim = this.focus !== null && this.focus !== p.gateId;
-          const label = gateLabel(this.store, p.gateId);
-          const gOvrCount = canTune ? countOverrides(p.ruleOverrides) : 0;
-          const pOvrCount = canTune ? countOverrides(pilotGateOverridesAt(p, activeSlot)) : 0;
-          const hasOvr = gOvrCount + pOvrCount > 0;
-          const isCal = isGateCalibrated(p.gateId);
-          const isGateTuneOpen = this.tuneDrawerOpen && this.tuningGateId === p.gateId;
-          const calibColHtml = canTune
-            ? isCal
-              ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-calib is-calibrated" data-calib-gate="${p.gateId}" data-calib-mode="reset" title="Clear calibrated thresholds for ${esc(label)}" aria-label="Clear calibrated thresholds for ${esc(label)}">${icons.targetOff(18)}</span>`
-              : canAutoCalib
-                ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-calib" data-calib-gate="${p.gateId}" data-calib-mode="auto" title="Calibrate ${esc(label)}" aria-label="Calibrate ${esc(label)}">${icons.target(18)}</span>`
-                : `<span class="channel-mobile-action-spacer" aria-hidden="true"></span>`
-            : "";
-          const tuneColHtml = canTune
-            ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-tune ${isGateTuneOpen ? "is-active" : ""}" data-tune-gate="${p.gateId}" title="Fine-tune ${esc(label)}" aria-label="Fine-tune ${esc(label)}">${icons.sliders(18)}</span>`
-            : "";
-          return `
-            <button type="button" class="channel ${hot ? "is-hot" : ""} ${dim ? "is-dim" : ""} ${this.focus === p.gateId ? "is-focus" : ""}"
-                    data-gate-chip="${p.gateId}"
-                    data-focus="${this.focus === p.gateId ? "all" : p.gateId}" title="${this.focus === p.gateId ? "Show all timers" : "Show only this timer"}">
-              <span class="dot" style="--c:${this.colorOf(p.gateId)}"></span>
-              <span class="channel-name">${esc(label)}</span>
-              ${hasOvr ? `<span class="channel-custom-icon" title="Customized" aria-label="Customized">${icons.pencil(12)}</span>` : ""}
-              <span class="channel-right-cols">
-                <span class="channel-dbm mono" data-gate-dbm="${p.gateId}">${this.isMultiPilotMode ? "peak " : ""}${dbm.toFixed(0)}${unitSuffix}</span>
-                ${calibColHtml}
-                ${tuneColHtml}
-              </span>
-            </button>`;
-        })
-        .join("");
-      legendEl.innerHTML = allChip + gateChips;
-      return;
+        }
+        return;
+      }
     }
 
-    // Fast in-place update of live RSSI numbers without rebuilding button DOM
+    // Fast in-place update of live RSSI numbers using cached DOM element references
+    const prefix = this.isMultiPilotMode ? "peak " : "";
     for (const p of this.store.nodes) {
+      const rowRef = this.legendRowDomByGate.get(p.gateId);
+      if (!rowRef) continue;
       let dbm = this.defYMin;
       let hasReading = false;
       for (const s of slots) {
@@ -2794,14 +2860,14 @@ export class PilotRssiChart extends Component {
         }
       }
       const hot = !this.isMultiPilotMode && dbm >= this.thresholdOf(p.gateId).dbm;
-      const chipBtn = legendEl.querySelector<HTMLElement>(`[data-gate-chip="${p.gateId}"]`);
-      if (chipBtn) {
-        chipBtn.classList.toggle("is-hot", hot);
+      if (hot !== rowRef.lastHot) {
+        rowRef.lastHot = hot;
+        rowRef.chipEl.classList.toggle("is-hot", hot);
       }
-      const valSpan = legendEl.querySelector<HTMLElement>(`[data-gate-dbm="${p.gateId}"]`);
-      const nextText = `${this.isMultiPilotMode ? "peak " : ""}${dbm.toFixed(0)}${unitSuffix}`;
-      if (valSpan && valSpan.textContent !== nextText) {
-        valSpan.textContent = nextText;
+      const nextText = `${prefix}${Math.round(dbm)}${unitSuffix}`;
+      if (nextText !== rowRef.lastText) {
+        rowRef.lastText = nextText;
+        rowRef.dbmEl.textContent = nextText;
       }
     }
   }

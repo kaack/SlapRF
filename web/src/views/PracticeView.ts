@@ -134,6 +134,7 @@ export class PracticeView extends Component {
   private lastMobilePilotsSig = "";
   private lastMobileSectorsSig = "";
   private lastMobileSignalsSig = "";
+  private lastWsLineupFitSig = "";
   private mobilePracticeTab: MobilePracticeTab = "overview";
   private selectedMobileSectorKeys = new Set<string>();
   private lastMobileSectorCourseSig = "";
@@ -527,13 +528,46 @@ export class PracticeView extends Component {
       wsEl.dataset.mobilePracticeView = this.mobilePracticeTab;
       this.ensureSinglePilotFocusForMobileTab(this.mobilePracticeTab);
       this.renderWorkspaceChrome();
-      this.showPanel();
-      this.renderMobilePilotsPanel();
-      this.renderMobileTrackPanel();
-      this.renderMobileSectorsPanel();
-      this.renderMobileSignalsPanel();
-      this.renderMobileAnalyticsPanel();
-      fitScheduleLineups(wsEl);
+      const tab = this.mobilePracticeTab;
+      if (tab === "signals") {
+        if (this.panel) {
+          this.panel.destroy();
+          this.panel = undefined;
+          this.shownFocus = undefined;
+        }
+        this.renderMobileSignalsPanel();
+      } else if (tab === "pilots") {
+        if (this.panel) {
+          this.panel.destroy();
+          this.panel = undefined;
+          this.shownFocus = undefined;
+        }
+        this.renderMobilePilotsPanel();
+      } else if (tab === "track") {
+        if (this.panel) {
+          this.panel.destroy();
+          this.panel = undefined;
+          this.shownFocus = undefined;
+        }
+        this.renderMobileTrackPanel();
+      } else if (tab === "analytics") {
+        if (this.panel) {
+          this.panel.destroy();
+          this.panel = undefined;
+          this.shownFocus = undefined;
+        }
+        this.renderMobileAnalyticsPanel();
+      } else {
+        this.showPanel();
+        if (tab === "laps") {
+          this.renderMobileSectorsPanel();
+        }
+      }
+      const lineupSig = `${tab}:${this.workspaceStore.enabledPilots.map((p) => `${p.slotIndex}:${p.callsign}`).join(",")}`;
+      if (lineupSig !== this.lastWsLineupFitSig) {
+        this.lastWsLineupFitSig = lineupSig;
+        fitScheduleLineups(wsEl);
+      }
     }
     this.syncUrlAndTopBar(pushHistory);
   }
@@ -635,18 +669,27 @@ export class PracticeView extends Component {
     }
     if (nextTab === "pilots") {
       this.renderMobilePilotsPanel();
-    }
-    if (nextTab === "track") {
+    } else if (nextTab === "track") {
       this.renderMobileTrackPanel();
-    }
-    if (nextTab === "laps") {
+    } else if (nextTab === "laps") {
+      this.showPanel();
       this.renderMobileSectorsPanel();
-    }
-    if (nextTab === "signals") {
+    } else if (nextTab === "signals") {
+      if (this.panel) {
+        this.panel.destroy();
+        this.panel = undefined;
+        this.shownFocus = undefined;
+      }
       this.renderMobileSignalsPanel(true);
-    }
-    if (nextTab === "analytics") {
+    } else if (nextTab === "analytics") {
+      if (this.panel) {
+        this.panel.destroy();
+        this.panel = undefined;
+        this.shownFocus = undefined;
+      }
       this.renderMobileAnalyticsPanel(true);
+    } else {
+      this.showPanel();
     }
     if (forceFade || prevTab !== nextTab) {
       const stackEl = wsEl.querySelector<HTMLElement>(".practice-workspace-stack");

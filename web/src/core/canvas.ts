@@ -50,8 +50,7 @@ export class CanvasSurface {
       !document.hidden &&
       this.width > 0 &&
       this.height > 0 &&
-      this.canvas.isConnected &&
-      this.canvas.offsetParent !== null
+      this.canvas.isConnected
     ) {
       this.ctx.clearRect(0, 0, this.width, this.height);
       this.draw(this.ctx, this.width, this.height);

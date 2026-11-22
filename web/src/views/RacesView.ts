@@ -2271,6 +2271,8 @@ export class RacesView extends Component {
       host.appendChild(this.raceSignalsChartEl);
     }
     this.raceSignalsChart.setPilotSlotOverride(slot);
+    const candidates = this.getRaceSignalsCandidates(race);
+    this.lastRaceSignalsMountSig = `${race.raceId ?? ""}:${slot}:${candidates.map((c) => `${c.slotIndex}:${c.callsign}:${c.color}:${c.channelLabel}`).join("|")}`;
   }
 
   private renderPanelById(race: RaceTournamentState, panelId: AnyCanvasPanelId): string {
@@ -3212,6 +3214,9 @@ export class RacesView extends Component {
     ].join("::");
   }
 
+  private signalsDeferredRender = false;
+  private lastRaceSignalsMountSig = "";
+
   private renderIfNeeded(): void {
     if (this.bktUi.activeGesture) return;
     const active = document.activeElement;
@@ -3226,12 +3231,32 @@ export class RacesView extends Component {
     const race = this.currentRace;
     const sig = this.computeSig(race, this.getActiveHeatForRace(race));
     if (sig === this.lastSig) return;
+    if (
+      !this.showDirectory &&
+      this.activeTab === "control" &&
+      this.mobileControlView === "signals" &&
+      this.isMobileViewport() &&
+      this.raceSignalsChart &&
+      this.raceSignalsChartEl?.isConnected &&
+      this.el.querySelector("[data-race-signals-chart]")
+    ) {
+      const candidates = this.getRaceSignalsCandidates(race);
+      const mountSig = `${race.raceId ?? ""}:${this.resolveRaceSignalsSlot(race) ?? ""}:${candidates.map((c) => `${c.slotIndex}:${c.callsign}:${c.color}:${c.channelLabel}`).join("|")}`;
+      if (mountSig === this.lastRaceSignalsMountSig) {
+        this.lastSig = sig;
+        this.signalsDeferredRender = true;
+        this.syncRaceSignalsChartDom();
+        return;
+      }
+    }
+    this.signalsDeferredRender = false;
     this.lastSig = sig;
     this.render();
   }
 
   private updateLiveClockDom(): void {
     if (this.showDirectory || this.activeTab !== "control") return;
+    if (this.isMobileViewport() && this.mobileControlView === "signals") return;
     const race = this.currentRace;
     const heat = this.getControlStageHeat(race);
     if (!heat) return;
@@ -3340,6 +3365,7 @@ export class RacesView extends Component {
 
   private updateLiveRssiDom(): void {
     if (this.showDirectory || this.activeTab !== "control") return;
+    if (this.isMobileViewport() && this.mobileControlView === "signals") return;
     const sfNode =
       this.store.nodes.find((n) => n.role === "START_FINISH") ?? this.store.nodes[0];
     if (!sfNode || !Array.isArray(sfNode.lastRssi)) return;
@@ -5654,7 +5680,7 @@ export class RacesView extends Component {
         return;
       }
       const pageEl = this.el.querySelector<HTMLElement>('[data-rc-page="control"]');
-      if (pageEl) {
+      if (pageEl && !(this.signalsDeferredRender && nextView !== "signals")) {
         const prevView = pageEl.dataset.mobileCtrlView ?? "";
         pageEl.dataset.mobileCtrlView = nextView;
         this.el.querySelectorAll<HTMLElement>("[data-mobile-ctrl-nav]").forEach((btn) => {

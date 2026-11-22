@@ -491,7 +491,46 @@ export class AppStore {
     this.emit("config", "status", "laps", "race", "practice", "selection");
   }
 
+  private _stateRev = 0;
+  private _cachedPracticeNodes: {
+    rev: number;
+    sess: PracticeSession | null | undefined;
+    res: { nodes: TrackNode[]; historical: boolean };
+  } | null = null;
+  private _cachedRaceNodes: {
+    rev: number;
+    race: RaceTournamentState | null | undefined;
+    res: { nodes: TrackNode[]; historical: boolean };
+  } | null = null;
+  private _cachedNodes: { rev: number; res: TrackNode[] } | null = null;
+  private _cachedDetectedTimers: { rev: number; res: DetectedTimer[] } | null = null;
+  private _cachedCrossings: {
+    rev: number;
+    sess: PracticeSession | undefined;
+    res: GateCrossingEvent[];
+  } | null = null;
+  private _cachedFiltered: {
+    rev: number;
+    sess: PracticeSession | undefined;
+    res: FilteredDetection[];
+  } | null = null;
+  private _cachedLaps: {
+    rev: number;
+    sess: PracticeSession | undefined;
+    res: LapRecord[];
+  } | null = null;
+  private _cachedSummaries: {
+    rev: number;
+    sess: PracticeSession | undefined;
+    res: PilotTrackSummary[];
+  } | null = null;
+
+  public get stateRev(): number {
+    return this._stateRev;
+  }
+
   private emit(...topics: Topic[]): void {
+    this._stateRev = (this._stateRev + 1) | 0;
     const fired = new Set<Listener>();
     for (const topic of topics) {
       this.listeners.get(topic)?.forEach((fn) => {
@@ -631,14 +670,23 @@ export class AppStore {
 
   /** Resolves the ordered track gates for `sess`: always `sess`'s own track when initialized/present. */
   public practiceSessionNodes(sess?: PracticeSession | null): { nodes: TrackNode[]; historical: boolean } {
+    const cached = this._cachedPracticeNodes;
+    if (cached && cached.rev === this._stateRev && cached.sess === sess) {
+      return cached.res;
+    }
+    let res: { nodes: TrackNode[]; historical: boolean };
     if (sess && (sess.trackInitialized || (Array.isArray(sess.trackSnapshot) && sess.trackSnapshot.length > 0))) {
       const base = sess.trackSnapshot ?? [];
       if (sess.active) {
-        return { nodes: this.enrichTrackNodesWithLiveTimers(base), historical: false };
+        res = { nodes: this.enrichTrackNodesWithLiveTimers(base), historical: false };
+      } else {
+        res = { nodes: base, historical: true };
       }
-      return { nodes: base, historical: true };
+    } else {
+      res = { nodes: this.nodes, historical: false };
     }
-    return { nodes: this.nodes, historical: false };
+    this._cachedPracticeNodes = { rev: this._stateRev, sess, res };
+    return res;
   }
 
   /** Resolves the timing rules for `sess`. */
@@ -648,17 +696,26 @@ export class AppStore {
 
   /** Resolves the ordered track gates for `race`: always `race`'s own track when initialized/present. */
   public raceNodes(race?: RaceTournamentState | null): { nodes: TrackNode[]; historical: boolean } {
+    const cached = this._cachedRaceNodes;
+    if (cached && cached.rev === this._stateRev && cached.race === race) {
+      return cached.res;
+    }
     const isClosed = Boolean(
       race && (race.lifecycle === "completed" || race.lifecycle === "scrapped" || race.isComplete)
     );
+    let res: { nodes: TrackNode[]; historical: boolean };
     if (race && (race.trackInitialized || (Array.isArray(race.trackSnapshot) && race.trackSnapshot.length > 0))) {
       const base = race.trackSnapshot ?? [];
       if (isClosed) {
-        return { nodes: base, historical: true };
+        res = { nodes: base, historical: true };
+      } else {
+        res = { nodes: this.enrichTrackNodesWithLiveTimers(base), historical: false };
       }
-      return { nodes: this.enrichTrackNodesWithLiveTimers(base), historical: false };
+    } else {
+      res = { nodes: this.nodes, historical: isClosed };
     }
-    return { nodes: this.nodes, historical: isClosed };
+    this._cachedRaceNodes = { rev: this._stateRev, race, res };
+    return res;
   }
 
   /** Resolves the timing rules for `race`. */
@@ -1070,9 +1127,22 @@ export class AppStore {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const base = this;
     const view = Object.create(base) as AppStore;
+    let lastNodesRef: TrackNode[] | null = null;
+    const nodeById = new Map<number, TrackNode>();
+    const syncNodeMap = (): TrackNode[] => {
+      const arr = overrides.nodes().nodes;
+      if (arr !== lastNodesRef) {
+        lastNodesRef = arr;
+        nodeById.clear();
+        for (let i = 0; i < arr.length; i++) {
+          nodeById.set(arr[i].gateId, arr[i]);
+        }
+      }
+      return arr;
+    };
     const props: PropertyDescriptorMap = {
       nodes: {
-        get: () => overrides.nodes().nodes,
+        get: () => syncNodeMap(),
         enumerable: true,
       },
       isHistoricalTrack: {
@@ -1080,7 +1150,10 @@ export class AppStore {
         enumerable: true,
       },
       node: {
-        value: (nodeId: number) => overrides.nodes().nodes.find((n) => n.gateId === nodeId),
+        value: (nodeId: number) => {
+          syncNodeMap();
+          return nodeById.get(nodeId);
+        },
       },
       pilot: {
         value: overrides.pilot ? overrides.pilot : (slotIndex: number) => base.pilot(slotIndex),
@@ -1193,13 +1266,17 @@ export class AppStore {
 
   /** Track nodes (gates) sorted by their position around the track. */
   public get nodes(): TrackNode[] {
+    if (this._cachedNodes && this._cachedNodes.rev === this._stateRev) {
+      return this._cachedNodes.res;
+    }
+    let res = this._nodes;
     if (!this._simulatorRunning && this._usbTimer && this._usbTimer.fingerprint) {
       const usb = this._usbTimer;
       const matchedDet = this.detectedTimers.find(
         (d) => d.fingerprint && d.fingerprint.toUpperCase() === usb.fingerprint!.toUpperCase()
       );
       if (matchedDet) {
-        return this._nodes.map((n) => {
+        res = this._nodes.map((n) => {
           const assigned = n.assignedTimerId ?? n.gateId;
           if (assigned === matchedDet.timerId && n.online) {
             return {
@@ -1211,10 +1288,15 @@ export class AppStore {
         });
       }
     }
-    return this._nodes;
+    this._cachedNodes = { rev: this._stateRev, res };
+    return res;
   }
   /** Physical XIAO timers discovered via the USB Hub (ESP-NOW), flashed over USB, or currently plugged in via USB. */
   public get detectedTimers(): DetectedTimer[] {
+    if (this._cachedDetectedTimers && this._cachedDetectedTimers.rev === this._stateRev) {
+      return this._cachedDetectedTimers.res;
+    }
+    let res = this._detectedTimers;
     if (!this._simulatorRunning && this._usbTimer && this._usbTimer.fingerprint) {
       const usb = this._usbTimer;
       const list = this._detectedTimers.map((d) => ({ ...d }));
@@ -1236,9 +1318,10 @@ export class AppStore {
           lastSeenAt: existing.lastSeenAt,
         };
       }
-      return list;
+      res = list;
     }
-    return this._detectedTimers;
+    this._cachedDetectedTimers = { rev: this._stateRev, res };
+    return res;
   }
 
   public setUsbDetectedTimer(timer: DetectedTimer | null): void {
@@ -1255,6 +1338,7 @@ export class AppStore {
     const floorDiff =
       prev && timer ? Math.abs((prev.noiseFloorDbm ?? -92) - (timer.noiseFloorDbm ?? -92)) : 999;
     this._usbTimer = timer;
+    this._stateRev = (this._stateRev + 1) | 0;
     if (!identitySame) {
       this.emit("status", "config");
     } else if (floorDiff >= 2) {
@@ -1265,9 +1349,15 @@ export class AppStore {
     if (this.hasPracticeSessions) {
       const sess = this.selectedPracticeSession;
       if (!sess) return [];
+      const cached = this._cachedLaps;
+      if (cached && cached.rev === this._stateRev && cached.sess === sess) {
+        return cached.res;
+      }
       const activeSlots = new Set(sess.pilots.map((p) => p.slotIndex));
       const raw = this.isSelectedSessionLiveStream(sess) ? this._laps : sess.laps;
-      return raw.filter((l) => activeSlots.has(l.slotIndex));
+      const res = raw.filter((l) => activeSlots.has(l.slotIndex));
+      this._cachedLaps = { rev: this._stateRev, sess, res };
+      return res;
     }
     return this._laps;
   }
@@ -1275,9 +1365,15 @@ export class AppStore {
     if (this.hasPracticeSessions) {
       const sess = this.selectedPracticeSession;
       if (!sess) return [];
+      const cached = this._cachedCrossings;
+      if (cached && cached.rev === this._stateRev && cached.sess === sess) {
+        return cached.res;
+      }
       const activeSlots = new Set(sess.pilots.map((p) => p.slotIndex));
       const raw = this.isSelectedSessionLiveStream(sess) ? this._crossings : sess.crossings;
-      return raw.filter((c) => activeSlots.has(c.slotIndex));
+      const res = raw.filter((c) => activeSlots.has(c.slotIndex));
+      this._cachedCrossings = { rev: this._stateRev, sess, res };
+      return res;
     }
     return this._crossings;
   }
@@ -1286,9 +1382,15 @@ export class AppStore {
     if (this.hasPracticeSessions) {
       const sess = this.selectedPracticeSession;
       if (!sess) return [];
+      const cached = this._cachedFiltered;
+      if (cached && cached.rev === this._stateRev && cached.sess === sess) {
+        return cached.res;
+      }
       const activeSlots = new Set(sess.pilots.map((p) => p.slotIndex));
       const raw = this.isSelectedSessionLiveStream(sess) ? this._filtered : sess.filtered;
-      return raw.filter((f) => activeSlots.has(f.slotIndex));
+      const res = raw.filter((f) => activeSlots.has(f.slotIndex));
+      this._cachedFiltered = { rev: this._stateRev, sess, res };
+      return res;
     }
     return this._filtered;
   }
@@ -1296,9 +1398,15 @@ export class AppStore {
     if (this.hasPracticeSessions) {
       const sess = this.selectedPracticeSession;
       if (!sess) return [];
+      const cached = this._cachedSummaries;
+      if (cached && cached.rev === this._stateRev && cached.sess === sess) {
+        return cached.res;
+      }
       const activeSlots = new Set(sess.pilots.map((p) => p.slotIndex));
       const raw = this.isSelectedSessionLiveStream(sess) ? this._summaries : sess.summaries;
-      return raw.filter((s) => activeSlots.has(s.slotIndex));
+      const res = raw.filter((s) => activeSlots.has(s.slotIndex));
+      this._cachedSummaries = { rev: this._stateRev, sess, res };
+      return res;
     }
     return this._summaries;
   }
@@ -1831,7 +1939,9 @@ export class AppStore {
     }
     const nowIso = this._lastSeenIso;
     const node = this.node(frame.timerId);
+    let onlineChanged = false;
     if (node) {
+      if (!node.online) onlineChanged = true;
       node.lastRssi = frame.rssi;
       node.framesRxCount = (node.framesRxCount ?? 0) + 1;
       node.online = true;
@@ -1840,10 +1950,14 @@ export class AppStore {
     const assignedTimerId = node?.assignedTimerId ?? frame.timerId;
     const det = this._detectedTimers.find((d) => d.timerId === assignedTimerId);
     if (det) {
+      if (!det.online) onlineChanged = true;
       det.lastRssi = frame.rssi;
       det.framesRxCount = (det.framesRxCount ?? 0) + 1;
       det.online = true;
       det.lastSeenAt = nowIso;
+    }
+    if (onlineChanged) {
+      this._stateRev = (this._stateRev + 1) | 0;
     }
   }
 
@@ -1946,6 +2060,7 @@ export class AppStore {
 
   private setNodes(nodes: TrackNode[] | null | undefined): void {
     this._nodes = [...(nodes ?? [])].sort((a, b) => a.trackOrder - b.trackOrder);
+    this._stateRev = (this._stateRev + 1) | 0;
   }
 
   private ensureValidSelection(): void {
