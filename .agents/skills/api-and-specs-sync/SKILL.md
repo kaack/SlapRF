@@ -15,7 +15,10 @@ Whenever you add, rename, or modify an endpoint, request/response field, stream 
 
 ## Layer 1: Go Domain, Persistence & HTTP/WS Server
 - **Domain & Engine State**: `internal/domain/` and `internal/tracker/` (`PersistedEngineState`, `ExportState`, `RestoreState`), plus `bbolt` storage in `internal/storage/` if persisted.
-- **REST & WebSocket Handlers**: `internal/api/http_server.go` (`StatusResponse`, `FullStateResponse`, `/v1/*` routes, `/v1/ws/stream` envelopes, and `/v1/status?lite=1` lightweight polling).
+- **Core REST & WebSocket Handlers**: `internal/api/http_server.go` (`StatusResponse`, `FullStateResponse`, `/v1/*` routes, `/v1/ws/stream` envelopes, and `/v1/status?lite=1` lightweight polling).
+- **Physical Hardware Transport Routes (`internal/portable/`)**:
+  - SlapRF USB & Bluetooth: `/v1/slaprf/usb/*`, `/v1/ws/slaprf/usb`, `/v1/ws/slaprf/usb-raw`, `/v1/slaprf/bluetooth/*`, `/v1/ws/slaprf/bluetooth`, and `/v1/slaprf/known-timers/{fp}` (`internal/portable/{usb_handlers.go,bluetooth_handlers.go}`, backed by `internal/slaprf/{usb,bluetooth}`).
+  - External Timers: `/v1/laprf/{network/devices,usb/ports,connections}` + `/v1/laprf:sync` (`internal/portable/laprf_manager.go`) and `/v1/rotorhazard/{network/devices,usb/ports,connections}` + `/v1/rotorhazard:sync` (`internal/portable/rh_manager.go`).
 - **Binary Telemetry Encoding**: If `TimerTelemetryFrame` wire fields change, update both `api.EncodeTelemetryBatch` (`internal/api/`) and `decodeTelemetryBatch` (`web/src/services/wasm_transport.ts`).
 
 ## Layer 2: Browser WASM Bridge & IndexedDB Persistence
@@ -35,6 +38,11 @@ Whenever you add, rename, or modify an endpoint, request/response field, stream 
    go test ./internal/api/... ./internal/tracker/... ./internal/storage/... ./web/...
    ```
    When changing route contracts or stream semantics, also run the E2E API parity suite (`e2e/api_*_test.go`):
-   ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-e2e.ps1 -ApiOnly
-   ```
+   - **macOS / Linux**:
+     ```bash
+     bash ./scripts/test-e2e.sh --api-only
+     ```
+   - **Windows (PowerShell)**:
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-e2e.ps1 -ApiOnly
+     ```

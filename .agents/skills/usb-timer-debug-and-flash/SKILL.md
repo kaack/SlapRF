@@ -24,7 +24,7 @@ Physical SlapRF timers run on the **Seeed Studio XIAO ESP32-C5** using its built
 
 ### Release Port Locks First
 Only **one** process can hold a serial port open at a time. Before running `esptool`, `build_local*.ps1 -FlashPort`, or Python bench scripts:
-1. Ensure neither `cmd/slaprf` nor `cmd/devserver` (in Portable mode) is holding the port open (disconnect via UI `/v1/usb/disconnect` or stop the server).
+1. Ensure neither `cmd/slaprf` nor `cmd/devserver` (in Portable mode) is holding the port open (disconnect via UI or `POST /v1/slaprf/usb/connections:disconnectAll`, or stop the server).
 2. Ensure Chrome WebSerial (`#/debug`, `#/network`, `#/flasher`) is disconnected from that port.
 
 ### Critical ESP32-C5 DTR/RTS Pitfall (Do Not Reset into Download Mode Accidentally!)
@@ -91,9 +91,9 @@ Structured replies begin with `@{...}` JSON on a single line (so firmware log li
 | `REBOOT` | Cleanly reboots the timer (`ESP_RST_SW`). |
 
 ### Bluetooth LE Bench Testing Notes (macOS & Linux)
-- **Claim-on-Pair `AUTH` Lock**: On BLE Hub firmware (`slaprf-xiao-c5-ble.bin`), the first command over GATT RX must be `AUTH <32-hex-key>\n` (handled automatically by `usb.Manager`). Unauthenticated GATT peers are disconnected. Send `BLEPAIR CLEAR` over USB (or hold **BOOT** for 3 seconds) before pairing with a different host DB.
-- **Linux BlueZ Non-`hci0` Adapters**: `tinygo.org/x/bluetooth`'s `DefaultAdapter` hardcodes `hci0`, so `internal/usb/ble_adapter_linux.go` enumerates `org.bluez.Adapter1` over D-Bus (preferring the first `Powered: true` adapter in natural `hciN` order, with sysfs fallback). Set `SLAPRF_BLE_ADAPTER=hci1` to override adapter selection. Inspect controllers with `bluetoothctl list` and `busctl tree org.bluez`.
-- **Linux API Bench Order**: `PUT /v1/hardware/mode` updates whichever engine is currently active (Simulator vs Real). When driving a fresh server over REST for real hardware tests, stop the simulator (`PATCH /v1/sim` `{"running":false}`) **before** calling `PUT /v1/hardware/mode` `{"mode":"slaprf_ble"}` so `SetBLEScanEnabled(true)` activates on the real engine.
+- **Claim-on-Pair `AUTH` Lock**: On BLE Hub firmware (`slaprf-xiao-c5-ble.bin`), the first command over GATT RX must be `AUTH <32-hex-key>\n` (handled automatically by `slaprf.Manager`). Unauthenticated GATT peers are disconnected. Use wireless **Forget Device** (`DELETE /v1/slaprf/bluetooth/connections/0?forget=1`), send `BLEPAIR CLEAR` over USB, or hold **BOOT** for 3 seconds before pairing with a different host DB.
+- **Linux BlueZ Non-`hci0` Adapters & Scan Settle**: `tinygo.org/x/bluetooth`'s `DefaultAdapter` hardcodes `hci0`, so `internal/slaprf/bluetooth/ble_adapter_linux.go` enumerates `org.bluez.Adapter1` over D-Bus (auto-powering `Powered: true` when needed and preferring natural `hciN` order, with sysfs fallback) and enforces a `750 ms` `hci_sync` settle window after `StopDiscovery` to avoid `le-connection-abort-by-local` on BlueZ 5.85+. Set `SLAPRF_BLE_ADAPTER=hci1` to override adapter selection. Inspect controllers with `bluetoothctl list` and `busctl tree org.bluez`.
+- **Linux API Bench Order**: `PUT /v1/hardware/mode` updates whichever engine is currently active (Simulator vs Real). When driving a fresh server over REST for real hardware tests, stop the simulator (`PATCH /v1/sim` `{"running":false}`) **before** calling `PUT /v1/hardware/mode` `{"mode":"slaprf_ble"}` so `bleMgr.SetActive(true, false)` activates on the real engine; then discover via `GET /v1/slaprf/bluetooth/ports` and connect via `PUT /v1/slaprf/bluetooth/connections/0`.
 - **macOS SSH TCC Caveat**: Running a BLE scan directly inside a headless `sshd` session checks TCC permissions against `sshd-keygen-wrapper` (`bluetooth is not authorized for this app`). On macOS, launch `slaprf` from a GUI user context (`Terminal.app` or via `open -n` on a signed `.app` bundle with `NSBluetoothAlwaysUsageDescription`) so macOS displays the Bluetooth permission prompt.
 
 ---

@@ -321,8 +321,8 @@ For each pilot and each track section $s \in \{S_1, \dots, S_k\}$:
 ## 9. Host Drivers, Native Android App & Firmware Flasher
 
 1. **Desktop Native Transports (`cmd/slaprf`)**:
-   - **USB Serial (`internal/usb`)**: Cross-platform native serial transport (`go.bug.st/serial`) for Windows, macOS, and Linux.
-   - **Bluetooth LE (`internal/ble` / `internal/usb`)**: Cross-platform native BLE central (`tinygo.org/x/bluetooth`) using WinRT on Windows, CoreBluetooth on macOS, and BlueZ DBus on Linux. Exposes discovered Bluetooth Hubs as `ble:<FINGERPRINT>` ports.
+   - **OS Serial Primitive (`internal/serialport`)**: Cross-platform native serial I/O (`go.bug.st/serial`) shared by `internal/slaprf/usb`, `internal/rotorhazard/usb`, and `internal/laprf/usb`.
+   - **SlapRF USB & Bluetooth LE (`internal/slaprf`, `internal/slaprf/usb`, `internal/slaprf/bluetooth`)**: Unified SlapRF connection/session manager (`slaprf.Manager`) with separate USB-C serial (`/v1/slaprf/usb/*`) and native BLE central (`/v1/slaprf/bluetooth/*`, `tinygo.org/x/bluetooth` over WinRT, CoreBluetooth, and BlueZ D-Bus) transports. Exposes discovered Bluetooth Hubs as `ble:<FINGERPRINT>` ports.
 2. **Native Android App (`cmd/slaprf-android` + `android/java/app/slaprf/`)**:
    - Built without Gradle by [`cmd/build-android`](../cmd/build-android/main.go).
    - Compiles the full Go timing engine and HTTP/WebSocket server into `libslaprf.so` (`arm64-v8a`, 16 KB page-aligned) listening on loopback `127.0.0.1`.

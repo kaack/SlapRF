@@ -21,10 +21,17 @@ go version
 ```
 - **Windows**: `winget install GoLang.Go`
 - **macOS**: `brew install go`
-- **Linux**: Install official tarball from `https://go.dev/dl/` into `/usr/local/go`.
+- **Linux (`x86_64` / `arm64`)**: Install official tarball from `https://go.dev/dl/` into `/usr/local/go` (or `~/.local/go` if rootless) and add `bin` to `PATH`:
+  ```bash
+  ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+  curl -fSL "https://go.dev/dl/go1.25.1.linux-${ARCH}.tar.gz" -o /tmp/go.tar.gz
+  sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf /tmp/go.tar.gz && rm -f /tmp/go.tar.gz
+  export PATH="/usr/local/go/bin:$PATH"
+  ```
 
 ### Chrome / Edge (Required for `go test ./web/...`)
-The frontend test suite (`slaprf/web`) executes inside a headless Chromium/Chrome/Edge instance discovered automatically from standard OS paths (`CHROME_BIN` overrides discovery if needed).
+The frontend test suite (`slaprf/web`) executes inside a headless Chromium/Chrome/Edge instance discovered automatically from standard OS paths (`CHROME_BIN` overrides discovery if needed):
+- **Linux (Ubuntu/Debian)**: Install Google Chrome (`google-chrome-stable`) or Chromium (`sudo apt-get install -y chromium-browser` / `chromium`).
 
 ### Hugo Extended (`0.170.1`, Required for `docs-site` & full `cmd/build-web`)
 Must be the **Extended** edition (SCSS/PostCSS support for Hextra):
@@ -33,7 +40,12 @@ hugo version   # Verify "+extended" appears in output
 ```
 - **Windows**: `winget install Hugo.Hugo.Extended --version 0.170.1`
 - **macOS**: `brew install hugo`
-- **Linux**: Download `hugo_extended_0.170.1_linux-amd64.tar.gz` from `https://github.com/gohugoio/hugo/releases/tag/v0.170.1`.
+- **Linux (`x86_64` / `arm64`, user-space `~/.local/bin/hugo`)**:
+  ```bash
+  ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+  mkdir -p ~/.local/bin
+  curl -fSL "https://github.com/gohugoio/hugo/releases/download/v0.170.1/hugo_extended_0.170.1_linux-${ARCH}.tar.gz" | tar -xz -C ~/.local/bin hugo
+  ```
 - *(Tip: If Hugo is not installed and you only need the web app, pass `-skip-docs` to `cmd/build-web`.)*
 
 ### GitHub CLI (`gh`)
@@ -43,6 +55,7 @@ gh --version && gh auth status
 ```
 - **Windows**: `winget install GitHub.cli`
 - **macOS**: `brew install gh`
+- **Linux (Ubuntu/Debian/Raspberry Pi OS)**: `sudo apt-get update && sudo apt-get install -y gh`
 
 ---
 
@@ -54,6 +67,10 @@ go run github.com/playwright-community/playwright-go/cmd/playwright install chro
 # On Linux CI/servers, include OS shared libraries:
 go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
 ```
+- **Newer Ubuntu Releases (`25.x` / `26.04+`)**: If Playwright's installer prints `Playwright does not support chromium on ubuntu26.04-x64`, prefix with `PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64`:
+  ```bash
+  PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64 go run github.com/playwright-community/playwright-go/cmd/playwright install chromium
+  ```
 
 ---
 
@@ -63,14 +80,28 @@ go run github.com/playwright-community/playwright-go/cmd/playwright install --wi
 
 1. **JDK 17+** (`javac` and `keytool`):
    - `JAVA_HOME` or `~/.slaprf/android-toolchain/jdk-17`
-   - Windows: `winget install EclipseAdoptium.Temurin.17.JDK`
-   - macOS: `brew install --cask temurin@17`
+   - **Windows**: `winget install EclipseAdoptium.Temurin.17.JDK`
+   - **macOS**: `brew install --cask temurin@17`
+   - **Linux (`apt`)**: `sudo apt-get install -y openjdk-17-jdk-headless` (or use the zero-`sudo` bootstrap below)
 2. **Android SDK + Platform Tools (`adb`) + NDK**:
    - Required packages via `sdkmanager`:
      ```bash
      sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
      ```
-   - Ensure `platform-tools` (`adb`) is on `PATH`:
+   - **Linux Zero-`sudo` User-Space Bootstrap (`~/.slaprf/android-toolchain`, `x86_64`)**:
+     Installs Temurin JDK 17, `cmdline-tools`, `adb`, Android 35 SDK, Build-Tools `35.0.0`, and NDK `27.2.12479018` directly where `cmd/build-android` auto-discovers them:
+     ```bash
+     TC="$HOME/.slaprf/android-toolchain"
+     mkdir -p "$TC/jdk-17" "$TC/sdk/cmdline-tools" ~/.local/bin
+     curl -fSL "https://api.adoptium.net/v3/binary/latest/17/ga/linux/x64/jdk/hotspot/normal/eclipse?project=jdk" | tar -xz -C "$TC/jdk-17" --strip-components=1
+     curl -fSL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" -o /tmp/cmdtools.zip
+     unzip -q /tmp/cmdtools.zip -d /tmp/cmdtools-extract && mv /tmp/cmdtools-extract/cmdline-tools "$TC/sdk/cmdline-tools/latest" && rm -rf /tmp/cmdtools.zip /tmp/cmdtools-extract
+     export JAVA_HOME="$TC/jdk-17" ANDROID_HOME="$TC/sdk" PATH="$TC/jdk-17/bin:$TC/sdk/cmdline-tools/latest/bin:$TC/sdk/platform-tools:$PATH"
+     yes | sdkmanager --sdk_root="$TC/sdk" --licenses >/dev/null || true
+     sdkmanager --sdk_root="$TC/sdk" "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+     ln -sf "$TC/sdk/platform-tools/adb" ~/.local/bin/adb
+     ```
+   - Verify `adb` is reachable:
      ```bash
      adb version
      ```
@@ -107,6 +138,9 @@ Required only when compiling C firmware locally (otherwise download CI artifacts
   ```
 - **macOS / Linux** (`~/esp/esp-idf`):
   ```bash
+  # Linux only: install ESP-IDF host build packages once
+  sudo apt-get update && sudo apt-get install -y git wget flex bison gperf python3 python3-pip python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
+
   mkdir -p ~/esp
   git clone -b v5.5.1 --depth 1 --recursive --shallow-submodules https://github.com/espressif/esp-idf.git ~/esp/esp-idf
   ~/esp/esp-idf/install.sh esp32c5

@@ -51,7 +51,7 @@ adb connect <PHONE_IP>:5555
 adb devices -l
 ```
 
-*(Tip: If both USB and Wi-Fi or multiple devices are listed in `adb devices`, pass `-s <PHONE_IP>:<PORT>` to every `adb` command.)*
+*(Tip: On Linux user-space installs via `dev-setup`, `adb` is located at `~/.slaprf/android-toolchain/sdk/platform-tools/adb` or symlinked to `~/.local/bin/adb`. If connecting over USB on Ubuntu/Debian and `adb devices` shows `no permissions`, add `SUBSYSTEM=="usb", ATTR{idVendor}=="<VENDOR_HEX>", MODE="0666", GROUP="plugdev", TAG+="uaccess"` under `/etc/udev/rules.d/51-android.rules` or use Option A Wireless Debugging directly over Wi-Fi with zero udev setup. When multiple devices are listed in `adb devices`, pass `-s <SERIAL_OR_IP:PORT>` to every `adb` command.)*
 
 ---
 
@@ -89,4 +89,4 @@ adb -s <DEVICE> logcat -v time | Select-String "SlapRF|GoLog|chromium|AndroidRun
    ```
    You can now query `http://127.0.0.1:9223/json/list` or open `chrome://inspect/#devices` on your desktop to inspect the live Android DOM, console, and network streams.
 2. **Test the Embedded Go `/v1/*` Server Directly**:
-   Check `logcat` for the local loopback port bound by `libslaprf.so`, then forward it with `adb forward tcp:18090 tcp:<APP_PORT>` to hit `http://127.0.0.1:18090/v1/status` directly from your workstation.
+   Check `logcat` for the local loopback port bound by `libslaprf.so`, then forward it with `adb forward tcp:18090 tcp:<APP_PORT>` to hit `http://127.0.0.1:18090/v1/status`, `/v1/slaprf/bluetooth/*`, or `/v1/slaprf/usb/*` directly from your workstation.

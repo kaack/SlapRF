@@ -36,7 +36,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * APIs and pure-Java {@code usb-serial-for-android}.
  *
  * All SlapRF protocol framing, SLAPRF02 parsing, watchdogs, and reconnect state machines
- * live in Go (internal/usb).
+ * live in Go (internal/slaprf).
  */
 public final class SlapRFUsbShim {
     private static final int ESPRESSIF_VID = 0x303A;

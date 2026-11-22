@@ -38,13 +38,15 @@ Shared by `firmware/`, `internal/firmware/image.go` (`PatchImage`, `RepairAppIma
 
 ---
 
-## 3. Bluetooth LE Hub GATT & Android Shims
+## 3. Hardware Transport Packages, BLE Hub GATT & Android Shims
 
 When changing BLE Hub GATT characteristics, MTU framing, Claim-on-Pair `AUTH`, or USB serial control lines:
 - **Firmware**: `firmware/components_ble/slaprf_ble_link/` & `docs/ble-hub-protocol.md`
-- **Desktop Go BLE**: `internal/usb/ble_port.go` & `internal/usb/ports_ble_desktop.go`
+- **OS Serial Primitive**: `internal/serialport/` (`go.bug.st/serial` + `/dev/serial/by-id` enrichment on Linux)
+- **SlapRF Transports**: `internal/slaprf/` (`Manager`, `KnownTimerRegistry`), `internal/slaprf/usb/`, and `internal/slaprf/bluetooth/` (`ble_port.go`, `ports_ble_desktop.go`, `ble_adapter_linux.go`)
+- **External USB Transports**: `internal/laprf/usb/` and `internal/rotorhazard/usb/`
 - **Android Shims**: `android/java/app/slaprf/SlapRFBleShim.java` & `SlapRFUsbShim.java` + `cmd/slaprf-android/`
-- **UI & Console**: `web/src/services/timer_console.ts` (`ble:<FINGERPRINT>` port handles)
+- **UI & Console**: `web/src/services/timer_console.ts` (`/v1/slaprf/{usb,bluetooth}/*`, `ble:<FINGERPRINT>` port handles)
 
 ---
 
