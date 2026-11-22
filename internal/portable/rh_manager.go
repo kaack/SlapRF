@@ -213,16 +213,20 @@ func (m *rhManager) close() {
 }
 
 func (m *rhManager) RestorePersistedTargets(simMode bool) {
-	m.Reconcile(simMode)
+	m.reconcile(simMode, true)
 }
 
 func (m *rhManager) SetSimMode(simRunning bool) {
-	m.Reconcile(simRunning)
+	m.reconcile(simRunning, true)
 }
 
-// Reconcile suspends or restores RotorHazard Network (`hw.rh_targets`) or RotorHazard USB
+// Reconcile suspends inactive RotorHazard Network (`hw.rh_targets`) or RotorHazard USB
 // (`hw.rh_usb_targets`) sessions whenever `simRunning` or `engine.TimingHardwareMode()` changes.
 func (m *rhManager) Reconcile(simRunning bool) {
+	m.reconcile(simRunning, false)
+}
+
+func (m *rhManager) reconcile(simRunning bool, restoreSaved bool) {
 	hwMode := domain.NormalizeTimingHardwareMode(m.engine.TimingHardwareMode())
 	wantActive := !simRunning && domain.IsRotorHazardMode(hwMode)
 
@@ -246,7 +250,7 @@ func (m *rhManager) Reconcile(simRunning bool) {
 	m.mu.Unlock()
 
 	m.closeAllSessionsWithoutPersist()
-	if m.store == nil {
+	if !restoreSaved || m.store == nil {
 		return
 	}
 	kvKey := kvRHTargetsKey

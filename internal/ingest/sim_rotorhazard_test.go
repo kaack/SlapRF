@@ -17,8 +17,8 @@ func TestSimRotorHazardMultiDeviceLifecycleAndLapScoring(t *testing.T) {
 	if len(snap.RotorHazardUnits) != 2 {
 		t.Fatalf("expected 2 default RotorHazard units (R1, R2), got %d", len(snap.RotorHazardUnits))
 	}
-	if snap.RotorHazardUnits[0].Label != "R1" || !snap.RotorHazardUnits[0].Connected {
-		t.Fatalf("expected R1 connected by default, got %+v", snap.RotorHazardUnits[0])
+	if snap.RotorHazardUnits[0].Label != "R1" || snap.RotorHazardUnits[0].Connected {
+		t.Fatalf("expected R1 disconnected by default until explicitly connected, got %+v", snap.RotorHazardUnits[0])
 	}
 	if snap.RotorHazardUnits[1].Label != "R2" || snap.RotorHazardUnits[1].Connected {
 		t.Fatalf("expected R2 disconnected by default, got %+v", snap.RotorHazardUnits[1])
@@ -30,8 +30,20 @@ func TestSimRotorHazardMultiDeviceLifecycleAndLapScoring(t *testing.T) {
 		t.Fatalf("expected 2 discovered RH units, got %d", len(found))
 	}
 
-	// Verify connect-host rejects invalid admin password
+	// Connect RH1 with valid credentials on Gate 1
 	_, err := sim.ApplyRotorHazardAction(SimRotorHazardActionRequest{
+		Action:    "connect-host",
+		Host:      "192.168.1.101",
+		Port:      5000,
+		AdminUser: "admin",
+		AdminPass: "rotorhazard",
+	})
+	if err != nil {
+		t.Fatalf("connect-host RH1 failed: %v", err)
+	}
+
+	// Verify connect-host rejects invalid admin password
+	_, err = sim.ApplyRotorHazardAction(SimRotorHazardActionRequest{
 		Action:    "connect-host",
 		Host:      "192.168.1.102",
 		Port:      5000,
@@ -108,9 +120,12 @@ func TestModeSwitchingRotorHazardToSlapRFAndLapRFContinuesScoringLaps(t *testing
 	eng := tracker.NewEngine()
 	sim := NewTrackSimulator(eng)
 
-	// 1. Start in RotorHazard mode and verify hardware telemetry + lap scoring
+	// 1. Start in RotorHazard mode, connect R1, and verify hardware telemetry + lap scoring
 	eng.SetTimingHardwareMode(domain.HardwareModeRotorHazard, true)
 	sim.SyncHardwareMode()
+	if _, err := sim.ApplyRotorHazardAction(SimRotorHazardActionRequest{Action: "connect", TimerID: 2}); err != nil {
+		t.Fatalf("connect R1 failed: %v", err)
+	}
 	eng.SetRaceArmed(true)
 	for i := 0; i < 1250; i++ {
 		eng.AdvanceVirtualClockUs(20_000)
@@ -144,8 +159,8 @@ func TestModeSwitchingRotorHazardToSlapRFAndLapRFContinuesScoringLaps(t *testing
 			t.Fatalf("unexpected non-SlapRF timer in SlapRF snapshot: %+v", tm)
 		}
 	}
-	if len(slapSnap.RotorHazardUnits) != 2 || !slapSnap.RotorHazardUnits[0].Connected || slapSnap.RotorHazardUnits[1].Connected {
-		t.Fatalf("expected simulated RotorHazard boards reset to default (R1 connected, R2 disconnected) upon switching timing systems, got %+v", slapSnap.RotorHazardUnits)
+	if len(slapSnap.RotorHazardUnits) != 2 || slapSnap.RotorHazardUnits[0].Connected || slapSnap.RotorHazardUnits[1].Connected {
+		t.Fatalf("expected simulated RotorHazard boards reset to default (R1 and R2 disconnected) upon switching timing systems, got %+v", slapSnap.RotorHazardUnits)
 	}
 	exported := eng.ExportState()
 	savedOpts := sim.ExportOptions()
@@ -193,9 +208,12 @@ func TestModeSwitchingRotorHazardToSlapRFAndLapRFContinuesScoringLaps(t *testing
 		t.Fatalf("expected SlapRF mode with USB HubFrameDecoder to score new laps after switching from RotorHazard (before=%d, after=%d)", len(lapsBeforeSlap), len(slapLaps))
 	}
 
-	// 3. Switch SlapRF -> LapRF 8-Way and verify laps continue scoring cleanly
+	// 3. Switch SlapRF -> LapRF 8-Way, connect L1, and verify laps continue scoring cleanly
 	engSlap.SetTimingHardwareMode(domain.HardwareModeLapRF, true)
 	simSlap.SyncHardwareMode()
+	if _, err := simSlap.ApplyLapRFAction(SimLapRFActionRequest{Action: "connect", TimerID: 2}); err != nil {
+		t.Fatalf("connect L1 failed: %v", err)
+	}
 	_, _, lapsBeforeLapRF, _, _ := engSlap.StateSnapshot()
 	engSlap.SetRaceArmed(true)
 	simSlap.TriggerPackBurst()
@@ -228,14 +246,20 @@ func TestSimRotorHazardUSBMultiDeviceAndLapScoring(t *testing.T) {
 	}
 	u1 := snap.RotorHazardUnits[0]
 	u2 := snap.RotorHazardUnits[1]
-	if u1.Transport != "usb" || u1.PortName != "SIM-RH-USB1" || !u1.Connected || u1.APILevel != 36 {
-		t.Fatalf("expected SIM-RH-USB1 connected with API 36, got %+v", u1)
+	if u1.Transport != "usb" || u1.PortName != "SIM-RH-USB1" || u1.Connected || u1.APILevel != 36 {
+		t.Fatalf("expected SIM-RH-USB1 disconnected by default with API 36, got %+v", u1)
 	}
 	if u2.Transport != "usb" || u2.PortName != "SIM-RH-USB2" || u2.Connected {
 		t.Fatalf("expected SIM-RH-USB2 disconnected by default, got %+v", u2)
 	}
 
-	// Connect SIM-RH-USB2 via connect-port and bind to Gate 2
+	// Connect SIM-RH-USB1 and SIM-RH-USB2 via connect-port and bind to Gate 1 & Gate 2
+	if _, err := sim.ApplyRotorHazardAction(SimRotorHazardActionRequest{
+		Action:   "connect-port",
+		PortName: "SIM-RH-USB1",
+	}); err != nil {
+		t.Fatalf("connect-port SIM-RH-USB1 failed: %v", err)
+	}
 	_, err := sim.ApplyRotorHazardAction(SimRotorHazardActionRequest{
 		Action:   "connect-port",
 		PortName: "SIM-RH-USB2",

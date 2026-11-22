@@ -256,14 +256,9 @@ func main() {
 	})
 
 	sim.SetSlapRFModeSyncHook(func() {
+		simHubUSBConnected.Store(false)
 		simHubRx.Reset()
-		if simHubUSBConnected.Load() && sim.IsRunning() {
-			simStreamSub.beginBatch()
-			ingestRawHubStream(simHubRx, simEngine, sim.BuildHubHelloStream())
-			simStreamSub.endBatch()
-		} else {
-			simEngine.SetAllTimersOffline()
-		}
+		simEngine.SetAllTimersOffline()
 	})
 
 	loadedBootState := loadSimFromBootState(simEngine, sim)

@@ -183,6 +183,14 @@ func (s *TrackSimulator) RestoreOptions(opts SimPersistedOptions) {
 	}
 	s.hellosSent = false
 	hasUsbSink := s.hubFrameSink != nil
+	laprfCopy := make([]domain.SimLapRFUnit, len(s.laprfUnits))
+	for i := range s.laprfUnits {
+		laprfCopy[i] = s.laprfUnits[i].SimLapRFUnit
+	}
+	rhCopy := make([]domain.SimRotorHazardUnit, len(s.rhUnits))
+	for i := range s.rhUnits {
+		rhCopy[i] = s.rhUnits[i].SimRotorHazardUnit
+	}
 	if len(opts.PilotStates) > 0 {
 		bySlot := make(map[int]SimPilotPersistedState, len(opts.PilotStates))
 		for _, pst := range opts.PilotStates {
@@ -227,8 +235,17 @@ func (s *TrackSimulator) RestoreOptions(opts SimPersistedOptions) {
 	s.mu.Unlock()
 
 	hwMode := s.engine.TimingHardwareMode()
-	if domain.IsLapRFMode(hwMode) || domain.IsRotorHazardMode(hwMode) {
-		s.SyncHardwareMode()
+	if domain.IsLapRFMode(hwMode) {
+		for idx, u := range laprfCopy {
+			s.engine.EnsureLapRFTimerRegistered(u.TimerID, u.Label, u.VoltageMv, idx == 0 && u.Connected && u.PoweredOn)
+			s.engine.SetDetectedTimerOnline(u.TimerID, u.PoweredOn && u.Connected)
+		}
+	} else if domain.IsRotorHazardMode(hwMode) {
+		for idx, u := range rhCopy {
+			s.engine.EnsureRHTimerRegistered(u.TimerID, u.Label, idx == 0 && u.Connected && u.PoweredOn)
+			s.engine.SetDetectedTimerOnline(u.TimerID, u.PoweredOn && u.Connected)
+		}
+		s.SyncRHNodesNow()
 	} else if hasUsbSink {
 		s.engine.SetAllTimersOffline()
 	} else {

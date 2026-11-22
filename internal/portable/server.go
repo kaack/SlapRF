@@ -219,12 +219,9 @@ func NewServer(cfg Config) *Server {
 	})
 
 	sim.SetSlapRFModeSyncHook(func() {
+		s.setSimHubUSBConnected(false)
 		simHubRx.Reset()
-		if s.simHubUSBConnected.Load() && sim.IsRunning() {
-			s.ingestRawHubStream(simHubRx, simEngine, sim.BuildHubHelloStream())
-		} else {
-			simEngine.SetAllTimersOffline()
-		}
+		simEngine.SetAllTimersOffline()
 	})
 
 	var initialSimMode bool
@@ -297,7 +294,7 @@ func NewServer(cfg Config) *Server {
 
 	var reconcileMu sync.Mutex
 	var lastActiveSlapRF domain.TimingHardwareMode
-	reconcileSlapRFLinks := func(simRunning bool, realMode domain.TimingHardwareMode) {
+	reconcileSlapRFLinks := func(simRunning bool, realMode domain.TimingHardwareMode, restoreSaved bool) {
 		reconcileMu.Lock()
 		wantMode := domain.TimingHardwareMode("")
 		if !simRunning && domain.IsSlapRFMode(realMode) {
@@ -310,27 +307,32 @@ func NewServer(cfg Config) *Server {
 		wantUSB := wantMode == domain.HardwareModeSlapRF
 		wantBLE := wantMode == domain.HardwareModeSlapRFBLE
 		if !wantUSB {
-			s.usbMgr.SetActive(false, simRunning)
+			s.usbMgr.SetActiveWithRestore(false, simRunning, false)
 		}
 		if !wantBLE {
-			s.bleMgr.SetActive(false, simRunning)
+			s.bleMgr.SetActiveWithRestore(false, simRunning, false)
 		}
 		if modeChanged && wantMode != "" {
 			realHubRx.Reset()
 		}
 		if wantUSB {
-			s.usbMgr.SetActive(true, simRunning)
+			s.usbMgr.SetActiveWithRestore(true, simRunning, restoreSaved)
 		}
 		if wantBLE {
-			s.bleMgr.SetActive(true, simRunning)
+			s.bleMgr.SetActiveWithRestore(true, simRunning, restoreSaved)
 		}
 	}
 
-	reconcileRealHardwareLinks := func(simRunning bool) {
+	reconcileRealHardwareLinks := func(simRunning bool, restoreSaved bool) {
 		realMode := realEngine.TimingHardwareMode()
-		reconcileSlapRFLinks(simRunning, realMode)
-		s.laprfMgr.Reconcile(simRunning)
-		s.rhMgr.Reconcile(simRunning)
+		reconcileSlapRFLinks(simRunning, realMode, restoreSaved)
+		if restoreSaved {
+			s.laprfMgr.RestorePersistedTargets(simRunning)
+			s.rhMgr.RestorePersistedTargets(simRunning)
+		} else {
+			s.laprfMgr.Reconcile(simRunning)
+			s.rhMgr.Reconcile(simRunning)
+		}
 		s.laprfEmulatorMgr.Reconcile()
 	}
 
@@ -339,7 +341,7 @@ func NewServer(cfg Config) *Server {
 			if s.persistWorker != nil {
 				s.persistWorker.MarkDirty()
 			}
-			reconcileRealHardwareLinks(sim.IsRunning())
+			reconcileRealHardwareLinks(sim.IsRunning(), false)
 		},
 		OnModeChanged: func(simRunning bool) {
 			if s.persistWorker != nil {
@@ -348,7 +350,7 @@ func NewServer(cfg Config) *Server {
 			if simRunning && s.simHubUSBConnected.Load() {
 				s.ingestRawHubStream(simHubRx, simEngine, sim.BuildHubHelloStream())
 			}
-			reconcileRealHardwareLinks(simRunning)
+			reconcileRealHardwareLinks(simRunning, true)
 		},
 		OnTimingStarted: func() {
 			if !sim.IsRunning() && domain.IsSlapRFMode(realEngine.TimingHardwareMode()) {
@@ -365,18 +367,18 @@ func NewServer(cfg Config) *Server {
 			if s.persistWorker != nil {
 				s.persistWorker.WipeAndReconcile()
 			}
-			reconcileRealHardwareLinks(sim.IsRunning())
+			reconcileRealHardwareLinks(sim.IsRunning(), false)
 		},
 		OnStorageImport: func() {
 			if s.persistWorker != nil {
 				s.persistWorker.ReconcileAllNow()
 			}
-			reconcileRealHardwareLinks(sim.IsRunning())
+			reconcileRealHardwareLinks(sim.IsRunning(), true)
 		},
 	})
 
 	// Restore persisted hardware links & LapRF emulator listener
-	reconcileSlapRFLinks(initialSimMode, realEngine.TimingHardwareMode())
+	reconcileSlapRFLinks(initialSimMode, realEngine.TimingHardwareMode(), true)
 	s.laprfMgr.RestorePersistedTargets(initialSimMode)
 	s.rhMgr.RestorePersistedTargets(initialSimMode)
 	s.laprfEmulatorMgr.Reconcile()

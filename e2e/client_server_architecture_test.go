@@ -310,18 +310,16 @@ func TestClientServer_StandaloneDemoModeAndCrossOriginBackendConnect(t *testing.
 	}
 	h.MustBeVisible(dsSec, "Settings Datasource section re-opened")
 
-	// 2b. Verify timing systems (SlapRF, LapRF 8-Way, RotorHazard) switch inline on #/network in Simulator Demo Mode!
+	// 2b. Verify timing systems (SlapRF, LapRF 8-Way, RotorHazard) switch inline on #/network in Simulator Demo Mode without auto-connecting!
 	h.NavigateSidebar("network")
+	if vis, _ := h.Page.Locator(`button[data-action="open-usb-slot-actions"]`).First().IsVisible(); vis {
+		_ = h.Page.Locator(`button[data-action="open-usb-slot-actions"]`).First().Click()
+		_ = h.Page.Locator(`button[data-action="modal-usb-disconnect"]`).First().Click()
+	}
 	h.SelectCustomOption(`select[data-field="network-hardware-mode"]`, "LapRF 8-Way (Network)")
 	h.MustBeVisible(h.Page.Locator(`[data-slot="laprf-connection"]`).First(), "LapRF Ethernet connection card")
-	if err := h.Page.Locator(`button[data-action="network-disconnect-active"]`).First().Click(); err != nil {
-		t.Fatalf("disconnect simulated LapRF on #/network: %v", err)
-	}
 	h.SelectCustomOption(`select[data-field="network-hardware-mode"]`, "RotorHazard (Network)")
 	h.MustBeVisible(h.Page.Locator(`[data-slot="rh-connection"]`).First(), "RotorHazard connection card")
-	if err := h.Page.Locator(`button[data-action="network-disconnect-active"]`).First().Click(); err != nil {
-		t.Fatalf("disconnect simulated RotorHazard on #/network: %v", err)
-	}
 	h.SelectCustomOption(`select[data-field="network-hardware-mode"]`, "SlapRF (USB)")
 
 	// Return to Settings -> Datasource for server checks

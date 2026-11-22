@@ -39,15 +39,17 @@ func TestRotorHazardSimulatedMultiDeviceAndBrowserRealWebSocketHandshake(t *test
 	h.MustBeVisible(timersTable.Locator(`strong.mono`, playwright.LocatorLocatorOptions{HasText: "R1"}).First(), "RotorHazard device R1")
 	h.MustBeVisible(timersTable.Locator(`strong.mono`, playwright.LocatorLocatorOptions{HasText: "R2"}).First(), "RotorHazard device R2")
 
-	// Connect R2 on #/sim so both R1 and R2 are linked.
-	connBtn2 := timersTable.Locator(`button[data-action="rh-connect"]`).Nth(1)
-	if err := connBtn2.Click(); err != nil {
-		t.Fatalf("click Plug in on R2: %v", err)
+	// Connect both R1 and R2 on #/sim so both are linked.
+	for idx, label := range []string{"R1", "R2"} {
+		connBtn := timersTable.Locator(`button[data-action="rh-connect"]`).Nth(idx)
+		if err := connBtn.Click(); err != nil {
+			t.Fatalf("click Plug in on %s: %v", label, err)
+		}
+		h.WaitUntil(label+" button switches to Unplug", 5*time.Second, func() (bool, error) {
+			txt, err := connBtn.InnerText()
+			return err == nil && strings.TrimSpace(txt) == "Unplug", nil
+		})
 	}
-	h.WaitUntil("R2 button switches to Unplug", 5*time.Second, func() (bool, error) {
-		txt, err := connBtn2.InnerText()
-		return err == nil && strings.TrimSpace(txt) == "Unplug", nil
-	})
 
 	// 3. Open Network page (#/network) and verify both R1 and R2 show Auth OK, 8 nodes, and 0–255 RSSI bars.
 	h.NavigateSidebar("network")

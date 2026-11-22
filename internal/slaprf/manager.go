@@ -259,6 +259,13 @@ func (m *Manager) loadSavedTargets() {
 // (`!simRunning` and matching hardware mode), persisted targets for this transport are restored;
 // when transitioning to `active == false`, open slots are closed cleanly without wiping saved targets.
 func (m *Manager) SetActive(active bool, simMode bool) {
+	m.SetActiveWithRestore(active, simMode, true)
+}
+
+// SetActiveWithRestore activates or suspends this transport manager, optionally restoring persisted
+// targets when `restoreSaved` is true (e.g., on server boot or simulation toggle, but false when
+// the user switches timing hardware modes in the dropdown).
+func (m *Manager) SetActiveWithRestore(active bool, simMode bool, restoreSaved bool) {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -286,6 +293,9 @@ func (m *Manager) SetActive(active bool, simMode bool) {
 	m.closeAllSlotsWithoutPersist()
 	m.broadcastPoolState()
 
+	if !restoreSaved {
+		return
+	}
 	for idx, target := range targets {
 		target = strings.TrimSpace(target)
 		if target == "" {

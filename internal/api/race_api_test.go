@@ -866,11 +866,15 @@ func TestPausedRaceStartHeatAutoActivatesAndRHDebugStream(t *testing.T) {
 	st = decodeState(t, reqJSON(t, h, http.MethodPost, fmt.Sprintf("/v1/race/sessions/%s/heats/%s:control", raceID, h2), map[string]any{"action": "stop"}))
 	st = decodeState(t, reqJSON(t, h, http.MethodPost, fmt.Sprintf("/v1/race/sessions/%s:pause", raceID), map[string]any{}))
 
-	// 2. Switch to RotorHazard mode with NO active race or practice -> nodes are idle (0 MHz) until Debug Stream is enabled
+	// 2. Switch to RotorHazard mode with NO active race or practice -> connect R1, nodes are idle (0 MHz) until Debug Stream is enabled
 	st = decodeState(t, reqJSON(t, h, http.MethodPut, "/v1/hardware/mode", map[string]any{"mode": "rotorhazard"}))
 	if st.SimState == nil || len(st.SimState.RotorHazardUnits) == 0 {
 		t.Fatalf("expected simulated RotorHazard units in sim mode")
 	}
+	if st.SimState.RotorHazardUnits[0].Connected {
+		t.Fatalf("expected switching hardware mode to rotorhazard NOT to auto-connect R1")
+	}
+	st = decodeState(t, reqJSON(t, h, http.MethodPost, "/v1/sim/rotorhazard/timers/2:action", map[string]any{"action": "connect"}))
 	recOff := reqJSON(t, h, http.MethodPut, "/v1/rotorhazard/connections/2/debug-stream", map[string]any{"active": false})
 	if recOff.Code != http.StatusOK {
 		t.Fatalf("expected 200 from PUT /v1/rotorhazard/connections/2/debug-stream=false, got %d", recOff.Code)

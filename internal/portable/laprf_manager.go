@@ -174,16 +174,20 @@ func (m *laprfManager) close() {
 }
 
 func (m *laprfManager) RestorePersistedTargets(simMode bool) {
-	m.Reconcile(simMode)
+	m.reconcile(simMode, true)
 }
 
 func (m *laprfManager) SetSimMode(simRunning bool) {
-	m.Reconcile(simRunning)
+	m.reconcile(simRunning, true)
 }
 
-// Reconcile suspends or restores LapRF Network (`hw.laprf_targets`) or LapRF USB
+// Reconcile suspends inactive LapRF Network (`hw.laprf_targets`) or LapRF USB
 // (`hw.laprf_usb_targets`) sessions whenever `simRunning` or `engine.TimingHardwareMode()` changes.
 func (m *laprfManager) Reconcile(simRunning bool) {
+	m.reconcile(simRunning, false)
+}
+
+func (m *laprfManager) reconcile(simRunning bool, restoreSaved bool) {
 	hwMode := domain.NormalizeTimingHardwareMode(m.engine.TimingHardwareMode())
 	wantActive := !simRunning && domain.IsLapRFMode(hwMode)
 
@@ -207,7 +211,7 @@ func (m *laprfManager) Reconcile(simRunning bool) {
 	m.mu.Unlock()
 
 	m.stopActiveSessionsWithoutForgetting()
-	if m.store == nil {
+	if !restoreSaved || m.store == nil {
 		return
 	}
 	kvKey := kvLapRFTargetsKey
