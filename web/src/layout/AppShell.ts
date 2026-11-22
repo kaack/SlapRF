@@ -68,8 +68,10 @@ export class AppShell extends Component {
     fromRoute: RouteId;
     toRoute: RouteId;
     dx: number;
+    dirSign: -1 | 1;
     width: number;
     scrollY: number;
+    forwardSpeed: number;
   } | null = null;
   private lastRacesTab = getRacesTopBarContext().tab;
   private lastPracticeTab = getPracticeTopBarContext().tab;
@@ -312,6 +314,7 @@ export class AppShell extends Component {
     const outlet = this.slot("outlet");
     let startX = 0;
     let startY = 0;
+    let dragAnchorX = 0;
     let startTime = 0;
     let lastDx = 0;
     let activePointerId: number | null = null;
@@ -324,7 +327,30 @@ export class AppShell extends Component {
     let dragAvailableRoutes: RouteId[] = [];
     let dragCurIdx = -1;
     let dragStagePrepared = false;
+    const velocitySamples: Array<{ x: number; t: number }> = [];
     const activePointers = new Map<number, { ts: number; target: EventTarget | null }>();
+
+    const recordVelocitySample = (x: number, t: number) => {
+      velocitySamples.push({ x, t });
+      while (velocitySamples.length > 8 || (velocitySamples.length > 2 && t - velocitySamples[0].t > 95)) {
+        velocitySamples.shift();
+      }
+    };
+
+    const computeReleaseVelocityX = (endX: number, endT: number): number => {
+      if (velocitySamples.length === 0) return 0;
+      let anchor = velocitySamples[0];
+      for (let i = velocitySamples.length - 1; i >= 0; i--) {
+        const dt = endT - velocitySamples[i].t;
+        if (dt >= 14 && dt <= 90) {
+          anchor = velocitySamples[i];
+          break;
+        }
+      }
+      const dt = endT - anchor.t;
+      if (dt < 1 || dt > 220) return 0;
+      return (endX - anchor.x) / dt;
+    };
 
     const pruneStalePointers = (now: number) => {
       for (const [id, info] of activePointers.entries()) {
@@ -358,6 +384,7 @@ export class AppShell extends Component {
 
     this.resetSwipeGestureState = () => {
       activePointers.clear();
+      velocitySamples.length = 0;
       this.swipePointerActive = false;
       multiTouchTainted = false;
       ignoredSwipe = false;
@@ -498,7 +525,10 @@ export class AppShell extends Component {
       activePointerId = e.pointerId;
       startX = e.clientX;
       startY = e.clientY;
+      dragAnchorX = e.clientX;
       startTime = performance.now();
+      velocitySamples.length = 0;
+      recordVelocitySample(e.clientX, startTime);
       lastDx = 0;
       dragLock = "none";
       dragNeighborRoute = null;
@@ -512,8 +542,9 @@ export class AppShell extends Component {
     };
 
     const onWindowPointerMove = (e: PointerEvent) => {
+      const now = performance.now();
       const tracked = activePointers.get(e.pointerId);
-      if (tracked) tracked.ts = performance.now();
+      if (tracked) tracked.ts = now;
       if (multiTouchTainted || ignoredSwipe || activePointerId === null || e.pointerId !== activePointerId) {
         return;
       }
@@ -524,19 +555,20 @@ export class AppShell extends Component {
         return;
       }
 
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
+      recordVelocitySample(e.clientX, now);
+      const rawDx = e.clientX - startX;
+      const rawDy = e.clientY - startY;
 
       if (dragLock === "none") {
-        const dist = Math.hypot(dx, dy);
-        if (dist < 10) return;
-        if (Math.abs(dy) >= Math.abs(dx) * 0.85) {
+        const dist = Math.hypot(rawDx, rawDy);
+        if (dist < 6) return;
+        if (Math.abs(rawDy) >= Math.abs(rawDx) * 0.9) {
           dragLock = "y";
           ignoredSwipe = true;
           activePointerId = null;
           return;
         }
-        if (Math.abs(dx) > Math.abs(dy) * 1.2) {
+        if (Math.abs(rawDx) >= 6 && Math.abs(rawDx) > Math.abs(rawDy) * 1.12) {
           const curRoute = this.activeRouteId ?? this.router.route;
           dragAvailableRoutes = this.getSwipeableMobileRoutes();
           dragCurIdx = dragAvailableRoutes.indexOf(curRoute);
@@ -547,6 +579,7 @@ export class AppShell extends Component {
           }
           dragWidth = Math.max(280, outlet.clientWidth || window.innerWidth || 390);
           dragScrollY = Math.max(0, window.scrollY);
+          dragAnchorX = e.clientX;
           dragLock = "x";
         } else {
           return;
@@ -555,6 +588,8 @@ export class AppShell extends Component {
 
       if (dragLock !== "x") return;
 
+      const dx = e.clientX - dragAnchorX;
+      const dirDx = Math.abs(dx) > 0.5 ? dx : rawDx;
       const curRoute = this.activeRouteId ?? this.router.route;
       const curEntry = this.mountedViews.get(curRoute);
       if (!curEntry) return;
@@ -573,7 +608,7 @@ export class AppShell extends Component {
 
       lastDx = dx;
       const width = dragWidth;
-      const nextIdx = dx < 0 ? dragCurIdx + 1 : dx > 0 ? dragCurIdx - 1 : -1;
+      const nextIdx = dirDx < 0 ? dragCurIdx + 1 : dirDx > 0 ? dragCurIdx - 1 : -1;
       const targetNeighbor: RouteId | null =
         nextIdx >= 0 && nextIdx < dragAvailableRoutes.length ? dragAvailableRoutes[nextIdx] : null;
 
@@ -602,7 +637,7 @@ export class AppShell extends Component {
             dragNeighborRoute = targetNeighbor;
             const neighborScrollY = Math.max(0, neighborEntry.scrollY || 0);
             const clampedInitDx = Math.max(-width, Math.min(width, dx));
-            const initOffset = clampedInitDx < 0 ? width + clampedInitDx : -width + clampedInitDx;
+            const initOffset = dirDx < 0 ? width + clampedInitDx : -width + clampedInitDx;
             neighborEntry.host.classList.add("is-swipe-peek");
             neighborEntry.host.style.top = `${8 + dragScrollY - neighborScrollY}px`;
             neighborEntry.host.style.transition = "none";
@@ -621,7 +656,7 @@ export class AppShell extends Component {
         }
         if (neighborEntry) {
           const clampedDx = Math.max(-width, Math.min(width, dx));
-          const neighborOffset = clampedDx < 0 ? width + clampedDx : -width + clampedDx;
+          const neighborOffset = dirDx < 0 ? width + clampedDx : -width + clampedDx;
           curEntry.host.style.transform = `translate3d(${clampedDx}px, 0, 0)`;
           neighborEntry.host.style.transform = `translate3d(${neighborOffset}px, 0, 0)`;
           return;
@@ -633,6 +668,7 @@ export class AppShell extends Component {
     };
 
     const onWindowPointerUp = (e: PointerEvent) => {
+      const now = performance.now();
       const wasTracked = !multiTouchTainted && !ignoredSwipe && activePointerId !== null && e.pointerId === activePointerId;
       const wasDraggingX = dragLock === "x";
       activePointers.delete(e.pointerId);
@@ -641,6 +677,7 @@ export class AppShell extends Component {
         multiTouchTainted = false;
       }
       if (!wasTracked) {
+        velocitySamples.length = 0;
         if (wasDraggingX) cleanupInteractiveDrag(true);
         if (e.pointerId === activePointerId) activePointerId = null;
         this.scheduleIdleNeighborWarmup();
@@ -648,6 +685,7 @@ export class AppShell extends Component {
       }
       activePointerId = null;
       if (window.innerWidth > 900 || this.isInSubPage()) {
+        velocitySamples.length = 0;
         if (wasDraggingX) cleanupInteractiveDrag(true);
         return;
       }
@@ -655,35 +693,54 @@ export class AppShell extends Component {
       const available = wasDraggingX && dragAvailableRoutes.length > 0 ? dragAvailableRoutes : this.getSwipeableMobileRoutes();
       const curIdx = wasDraggingX && dragCurIdx >= 0 ? dragCurIdx : available.indexOf(curRoute);
       if (curIdx < 0) {
+        velocitySamples.length = 0;
         if (wasDraggingX) cleanupInteractiveDrag(true);
         return;
       }
 
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
-      const dt = performance.now() - startTime;
+      const rawDx = e.clientX - startX;
+      const rawDy = e.clientY - startY;
+      const visualDx = wasDraggingX ? e.clientX - dragAnchorX : 0;
+      const dt = now - startTime;
+      const vx = computeReleaseVelocityX(e.clientX, now);
+      velocitySamples.length = 0;
       const width = wasDraggingX ? dragWidth : Math.max(280, outlet.clientWidth || window.innerWidth || 390);
+      const scrollYOnCommit = wasDraggingX ? dragScrollY : Math.max(0, window.scrollY);
 
-      const nextIdx = dx < 0 ? curIdx + 1 : curIdx - 1;
+      const effectiveDirDx = Math.abs(visualDx) > 1 ? visualDx : rawDx;
+      if (Math.abs(rawDx) < 8 && Math.abs(visualDx) < 4) {
+        if (wasDraggingX) cleanupInteractiveDrag(true);
+        this.scheduleIdleNeighborWarmup();
+        return;
+      }
+      const dirSign: -1 | 1 = effectiveDirDx < 0 ? -1 : 1;
+      const forwardSpeed = dirSign < 0 ? -vx : vx;
+      const reverseSpeed = -forwardSpeed;
+
+      const nextIdx = dirSign < 0 ? curIdx + 1 : curIdx - 1;
       const canAdvance = nextIdx >= 0 && nextIdx < available.length;
       const meetsFlickOrDrag =
         wasDraggingX
-          ? Math.abs(dx) >= Math.min(88, width * 0.22) || (Math.abs(dx) >= 42 && dt <= 340)
-          : dt <= 650 && Math.abs(dx) >= 54 && Math.abs(dx) >= Math.abs(dy) * 1.45;
+          ? reverseSpeed < 0.24 &&
+            ((forwardSpeed >= 0.15 && Math.abs(rawDx) >= 10) ||
+              Math.abs(visualDx) >= Math.min(82, width * 0.21) ||
+              (Math.abs(rawDx) >= 26 && dt <= 320))
+          : dt <= 380 &&
+            Math.abs(rawDx) >= 20 &&
+            Math.abs(rawDx) >= Math.abs(rawDy) * 1.25 &&
+            (forwardSpeed >= 0.14 || dt <= 220);
 
       if (canAdvance && meetsFlickOrDrag) {
         const targetRoute = available[nextIdx];
-        if (wasDraggingX && Math.abs(dx) > 4) {
-          this.pendingSwipeTransition = {
-            fromRoute: curRoute,
-            toRoute: targetRoute,
-            dx: Math.max(-width, Math.min(width, dx)),
-            width,
-            scrollY: dragScrollY,
-          };
-        } else if (wasDraggingX) {
-          cleanupInteractiveDrag(true);
-        }
+        this.pendingSwipeTransition = {
+          fromRoute: curRoute,
+          toRoute: targetRoute,
+          dx: wasDraggingX ? Math.max(-width, Math.min(width, visualDx)) : 0,
+          dirSign,
+          width,
+          scrollY: scrollYOnCommit,
+          forwardSpeed: Math.max(0, forwardSpeed),
+        };
         dragNeighborRoute = null;
         dragLock = "none";
         dragAvailableRoutes = [];
@@ -706,13 +763,18 @@ export class AppShell extends Component {
         dragStagePrepared = false;
         lastDx = 0;
 
+        const springMs = Math.round(
+          Math.max(165, Math.min(260, 160 + 95 * Math.sqrt(Math.min(1, Math.abs(visualDx) / width))))
+        );
+        const springCss = `transform ${springMs}ms cubic-bezier(0.16, 0.64, 0.26, 1)`;
+
         if (curEntry) {
-          curEntry.host.style.transition = "transform 180ms cubic-bezier(0.22, 1, 0.36, 1)";
+          curEntry.host.style.transition = springCss;
           curEntry.host.style.transform = "translate3d(0px, 0, 0)";
         }
         if (neighborEntry) {
-          neighborEntry.host.style.transition = "transform 180ms cubic-bezier(0.22, 1, 0.36, 1)";
-          neighborEntry.host.style.transform = `translate3d(${dx < 0 ? width : -width}px, 0, 0)`;
+          neighborEntry.host.style.transition = springCss;
+          neighborEntry.host.style.transform = `translate3d(${dirSign < 0 ? width : -width}px, 0, 0)`;
         }
         const finalizeCancel = () => {
           if (curEntry) {
@@ -738,7 +800,7 @@ export class AppShell extends Component {
           this.swipeSettleTimer = null;
           this.swipeSettleCleanup = null;
           finalizeCancel();
-        }, 190);
+        }, springMs + 10);
       } else {
         this.scheduleIdleNeighborWarmup();
       }
@@ -1040,10 +1102,26 @@ export class AppShell extends Component {
     }
 
     if (swipeTrans && prevEntry && entry) {
-      const { dx, width, scrollY } = swipeTrans;
-      const incomingStart = dx < 0 ? width + dx : -width + dx;
-      const outgoingEnd = dx < 0 ? -width : width;
+      const { dx, dirSign, width, scrollY, forwardSpeed } = swipeTrans;
+      const incomingStart = dirSign < 0 ? width + dx : -width + dx;
+      const outgoingEnd = dirSign < 0 ? -width : width;
       const targetScrollY = Math.max(0, entry.scrollY || 0);
+      const remDist = Math.max(1, width - Math.abs(dx));
+
+      // Velocity-matched SnapFlingController / MobileRaceEditor deceleration physics:
+      // gentle effortless flicks glide smoothly over ~290-325ms with immediate acceleration and
+      // soft cubic/quintic feathering, while fast flings scale down to ~170ms matching finger exit velocity.
+      const clampedSpeed = Math.max(0, Math.min(4.2, forwardSpeed));
+      const distRatio = Math.min(1, Math.max(0.12, remDist / Math.max(1, width)));
+      const baseMs = 140 + 195 * Math.sqrt(distRatio);
+      const speedScale = 1 / (1 + clampedSpeed * 0.45);
+      const durationMs = Math.round(Math.max(170, Math.min(335, baseMs * (0.5 + 0.5 * speedScale))));
+      const x1 = 0.16;
+      const naturalSlope = 3.1;
+      const velocitySlope = remDist > 4 ? (clampedSpeed * durationMs) / remDist : naturalSlope;
+      const slope = Math.max(naturalSlope, Math.min(5.2, velocitySlope));
+      const y1 = Number(Math.max(0.48, Math.min(0.92, x1 * slope)).toFixed(3));
+      const transitionCss = `transform ${durationMs}ms cubic-bezier(${x1}, ${y1}, 0.25, 1)`;
 
       outlet.classList.add("is-swipe-stage");
       prevEntry.host.classList.remove("is-swipe-peek", "is-swipe-exiting");
@@ -1062,9 +1140,9 @@ export class AppShell extends Component {
         void entry.host.offsetWidth;
       }
 
-      prevEntry.host.style.transition = "transform 190ms cubic-bezier(0.22, 1, 0.36, 1)";
+      prevEntry.host.style.transition = transitionCss;
       prevEntry.host.style.transform = `translate3d(${outgoingEnd}px, 0, 0)`;
-      entry.host.style.transition = "transform 190ms cubic-bezier(0.22, 1, 0.36, 1)";
+      entry.host.style.transition = transitionCss;
       entry.host.style.transform = "translate3d(0px, 0, 0)";
 
       let finalized = false;
@@ -1097,7 +1175,7 @@ export class AppShell extends Component {
         this.swipeSettleTimer = null;
         this.swipeSettleCleanup = null;
         finalizeCommit();
-      }, 198);
+      }, durationMs + 10);
       return;
     } else if (prevRoute && prevRoute !== route && entry) {
       const mobileRoutes = window.innerWidth <= 900 ? this.getSwipeableMobileRoutes() : null;
