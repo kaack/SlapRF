@@ -3211,8 +3211,22 @@ paths:
 
     delete:
       tags: [Hardware & LapRF Emulator]
-      summary: Disconnect a USB console slot
+      summary: Disconnect a USB or Bluetooth console slot (optionally unpairing and forgetting the device)
       operationId: deleteUsbConnectionSlot
+      parameters:
+        - name: forget
+          in: query
+          required: false
+          description: Pass `"1"` to atomically clear Bluetooth pairing (`BLEPAIR CLEAR`), disconnect, and forget the timer.
+          schema:
+            type: string
+            enum: ["0", "1"]
+        - name: fp
+          in: query
+          required: false
+          description: Optional 8-hex timer fingerprint hint when forgetting a disconnected Bluetooth Hub.
+          schema:
+            type: string
       responses:
         "200":
           description: Updated USB pool snapshot

@@ -40,7 +40,8 @@ import {
 import { sharedLapRFLink } from "../services/laprf_hardware_link";
 import { sharedLapRFEmulatorRelay } from "../services/laprf_emulator_relay";
 import { sharedRHLink } from "../services/rh_hardware_link";
-import { TimerConsole, usbPool } from "../services/timer_console";
+import { getPairedBluetoothHub, TimerConsole, usbPool } from "../services/timer_console";
+import { openDeviceConnectionSheet } from "../widgets/DeviceConnectionSheet";
 import { AppStore } from "../state/store";
 import { isSlapRFMode } from "../types/models";
 
@@ -362,7 +363,12 @@ export class TopBar extends Component {
         if (isServerDisconnectedLockout()) return;
         const main = usbPool.mainConsole;
         if (main.busyLabel) return;
-        if (main.connected || main.reconnecting) {
+        if (main.connected) {
+          openDeviceConnectionSheet({
+            console: main,
+            bluetoothMode: this.store.timingHardwareMode === "slaprf_ble",
+          });
+        } else if (main.reconnecting) {
           void main.disconnectCleanly();
         } else {
           void usbPool.connectMain().catch(() => undefined);
@@ -420,7 +426,9 @@ export class TopBar extends Component {
         : "";
 
     const appTheme = getAppTheme();
-    const sig = `${meta.id}:${appTheme}:${hwMode}:${sim ? 1 : 0}:${caps.demoMode ? 1 : 0}:${caps.portable ? 1 : 0}:${lockedOut ? 1 : 0}:${caps.remoteBackend ? 1 : 0}:${caps.backendBaseUrl}:${caps.localDetectedUrl ?? ""}:${emulEnabled ? 1 : 0}:${voiceOn ? 1 : 0}:${emulConnected ? 1 : 0}:${this.scopeMenuOpen ? 1 : 0}:${this.crumbMenuOpen ? 1 : 0}:${usbOn ? 1 : 0}:${activeLabel}:${usbFp}:${usbBusy}:${led.color}:${led.shortLabel}:${led.detail}:${sbCollapsed ? 1 : 0}:${rCtx.tab}:${rCtx.raceId ?? ""}:${rCtx.raceName}:${rCtx.activeStage}:${rCtx.totalStages}:${rCtx.stageTitle}:${rCtx.live ? 1 : 0}:${pCtx.tab}:${pCtx.sessionId ?? ""}:${pCtx.sessionName}:${pCtx.active ? 1 : 0}:${aTopCtx.mode}:${aScope ? `${aScope.kind}:${aScope.id}:${aScope.name}:${aScope.live ? 1 : 0}` : ""}:${scopePopoverCounts}`;
+    const isBleMode = hwMode === "slaprf_ble";
+    const pairedBleHub = isBleMode ? getPairedBluetoothHub() : null;
+    const sig = `${meta.id}:${appTheme}:${hwMode}:${sim ? 1 : 0}:${caps.demoMode ? 1 : 0}:${caps.portable ? 1 : 0}:${lockedOut ? 1 : 0}:${caps.remoteBackend ? 1 : 0}:${caps.backendBaseUrl}:${caps.localDetectedUrl ?? ""}:${emulEnabled ? 1 : 0}:${voiceOn ? 1 : 0}:${emulConnected ? 1 : 0}:${this.scopeMenuOpen ? 1 : 0}:${this.crumbMenuOpen ? 1 : 0}:${usbOn ? 1 : 0}:${activeLabel}:${usbFp}:${usbBusy}:${pairedBleHub?.fp ?? ""}:${led.color}:${led.shortLabel}:${led.detail}:${sbCollapsed ? 1 : 0}:${rCtx.tab}:${rCtx.raceId ?? ""}:${rCtx.raceName}:${rCtx.activeStage}:${rCtx.totalStages}:${rCtx.stageTitle}:${rCtx.live ? 1 : 0}:${pCtx.tab}:${pCtx.sessionId ?? ""}:${pCtx.sessionName}:${pCtx.active ? 1 : 0}:${aTopCtx.mode}:${aScope ? `${aScope.kind}:${aScope.id}:${aScope.name}:${aScope.live ? 1 : 0}` : ""}:${scopePopoverCounts}`;
     this.el.classList.toggle("has-subpage-back", isSubPage);
     this.el.closest(".app")?.classList.toggle("is-mobile-subpage", isSubPage);
     if (sig === this.lastSig) return;
@@ -437,7 +445,6 @@ export class TopBar extends Component {
         ${sim ? icons.zap(19) : icons.zapOff(19)}<span class="topbar-btn-label">${sim ? "Simulation on" : "Simulation off"}</span>
       </button>`;
 
-    const isBleMode = hwMode === "slaprf_ble";
     const usbSupported = TimerConsole.supported() && !lockedOut;
     const usbBtnText = usbOn
       ? activeLabel
@@ -446,16 +453,20 @@ export class TopBar extends Component {
       : usbBusy
         ? `${esc(usbBusy)}…`
         : isBleMode
-          ? "Connect Bluetooth"
+          ? pairedBleHub
+            ? "Connect"
+            : "Pair Device"
           : "Connect";
     const usbTitle = !usbSupported
       ? isBleMode
         ? "Connect a SlapRF Server or open the mobile app to connect a Bluetooth Hub"
         : "Connect a SlapRF Server to open USB serial ports"
       : usbOn
-        ? `Connected over ${main.transportLabel === "Bluetooth" || isBleMode ? "Bluetooth" : "USB"}${activeLabel ? ` (${activeLabel}${usbFp ? ` · ${usbFp}` : ""})` : ""} · click to disconnect`
+        ? `Connected over ${main.transportLabel === "Bluetooth" || isBleMode ? "Bluetooth" : "USB"}${activeLabel ? ` (${activeLabel}${usbFp ? ` · ${usbFp}` : ""})` : ""} · click for connection options`
         : isBleMode
-          ? "Connect a SlapRF Bluetooth Hub"
+          ? pairedBleHub
+            ? `Connect to paired Bluetooth Hub ${pairedBleHub.label} (${pairedBleHub.fp})`
+            : "Pair a SlapRF Bluetooth Hub"
           : "Connect a timer over USB-C";
 
     const usbBtn =

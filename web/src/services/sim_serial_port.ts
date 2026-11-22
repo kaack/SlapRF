@@ -1331,6 +1331,11 @@ export class SimulatedSerialPort implements SerialPortLike {
       return;
     }
 
+    if (upper === "BLEPAIR CLEAR") {
+      this.emitJson({ t: "ok", cmd: "blepair", pairingMode: true });
+      return;
+    }
+
     if (upper === "REBOOT") {
       this.emitJson({ t: "ok", cmd: "REBOOT" });
       window.setTimeout(() => this.performReboot("ESP_RST_SW", false), 50);
@@ -1407,11 +1412,17 @@ export async function forgetAllPairedPorts(): Promise<number> {
 
 const unpairedSimTimerIds = new Set<number>();
 
+export function isBleHardwareMode(): boolean {
+  return getBoundStore()?.timingHardwareMode === "slaprf_ble";
+}
+
 export interface PickUsbPortOptions {
   showAllPorts?: boolean;
   excludePorts?: SerialPortLike[];
   excludeTimerIds?: number[];
   transport?: "usb" | "ble";
+  alreadyPaired?: boolean;
+  preferredPortName?: string;
 }
 
 interface BackendPortEntry {
@@ -1539,16 +1550,36 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
     }
   };
 
-  choices = await loadChoices();
+  const preferredId = opts.preferredPortName ? `backend-${opts.preferredPortName}` : null;
+  let scanning = !simMode;
+  if (simMode) {
+    choices = await loadChoices();
+  }
 
   return new Promise<SerialPortLike>((resolve, reject) => {
-    let selectedId: string | null = choices[0]?.id ?? null;
+    const pickInitialId = (list: PortChoice[]): string | null => {
+      if (preferredId) {
+        const pref = list.find((c) => c.id.toLowerCase() === preferredId.toLowerCase());
+        if (pref) return pref.id;
+      }
+      return list[0]?.id ?? null;
+    };
+
+    let selectedId: string | null = pickInitialId(choices);
     let closed = false;
 
     const backdrop = document.createElement("div");
     backdrop.className = "slaprf-modal-backdrop confirm-modal-backdrop";
 
     const renderRowsHtml = (): string => {
+      if (scanning && choices.length === 0) {
+        return `<div class="sim-usb-port-empty sim-usb-port-scanning">
+          <span>${isBleMode ? "Scanning for Bluetooth Hubs…" : "Scanning serial ports…"}</span>
+          <div class="slaprf-indeterminate-track" role="progressbar" aria-label="Scanning">
+            <div class="slaprf-indeterminate-bar"></div>
+          </div>
+        </div>`;
+      }
       if (choices.length === 0) {
         return `<div class="sim-usb-port-empty">${
           simMode
@@ -1596,8 +1627,14 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
         .join("");
     };
 
-    const moreBtnLabel = () => (simMode ? "More devices…" : isBleMode ? "Scan again" : "Refresh");
-    const modalTitle = isBleMode ? "Connect Bluetooth Hub" : "Select a serial port";
+    const moreBtnLabel = () =>
+      simMode ? "More devices…" : scanning ? "Scanning…" : isBleMode ? "Scan again" : "Refresh";
+    const modalTitle = isBleMode
+      ? opts.alreadyPaired
+        ? "Connect Bluetooth Device"
+        : "Pair Bluetooth Device"
+      : "Select a serial port";
+    const confirmBtnText = isBleMode && !opts.alreadyPaired ? "Pair" : "Connect";
     const listAriaLabel = isBleMode ? "Available Bluetooth Hubs" : "Available serial ports";
 
     backdrop.innerHTML = `
@@ -1617,31 +1654,48 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
           </div>
         </div>
         <div class="slaprf-modal-foot">
-          <button type="button" class="btn btn-ghost" data-modal="request-native" style="margin-right:auto">${simMode ? icons.plus(15) : icons.reset(15)}<span data-role="more-ports-label">${esc(moreBtnLabel())}</span></button>
+          <button type="button" class="btn btn-ghost" data-modal="request-native" ${scanning ? "disabled" : ""} style="margin-right:auto">${simMode ? icons.plus(15) : icons.reset(15)}<span data-role="more-ports-label">${esc(moreBtnLabel())}</span></button>
           <button type="button" class="btn btn-ghost" data-modal="cancel">Cancel</button>
-          <button type="button" class="btn btn-armed" data-modal="connect" ${selectedId === null ? "disabled" : ""}>
+          <button type="button" class="btn btn-armed" data-modal="connect" ${selectedId === null || scanning ? "disabled" : ""}>
             ${icons.plug(15)}
-            <span>Connect</span>
+            <span>${esc(confirmBtnText)}</span>
           </button>
         </div>
       </div>`;
 
     const listEl = backdrop.querySelector<HTMLElement>(".sim-usb-port-list");
     const connectBtn = backdrop.querySelector<HTMLButtonElement>('[data-modal="connect"]');
+    const moreBtn = backdrop.querySelector<HTMLButtonElement>('[data-modal="request-native"]');
     const moreLabelEl = backdrop.querySelector<HTMLElement>('[data-role="more-ports-label"]');
 
     const syncButtons = () => {
-      if (connectBtn) connectBtn.disabled = selectedId === null;
+      if (connectBtn) connectBtn.disabled = selectedId === null || scanning;
+      if (moreBtn) moreBtn.disabled = scanning;
       if (moreLabelEl) moreLabelEl.textContent = moreBtnLabel();
     };
 
     const refreshListDom = () => {
       if (closed || !listEl) return;
       if (selectedId === null || !choices.some((c) => c.id === selectedId)) {
-        selectedId = choices[0]?.id ?? null;
+        selectedId = pickInitialId(choices);
       }
       listEl.innerHTML = renderRowsHtml();
       syncButtons();
+    };
+
+    const runAsyncScan = () => {
+      scanning = true;
+      refreshListDom();
+      void loadChoices()
+        .then((next) => {
+          if (closed) return;
+          choices = next;
+        })
+        .finally(() => {
+          if (closed) return;
+          scanning = false;
+          refreshListDom();
+        });
     };
 
     const updateSelection = (id: string) => {
@@ -1712,14 +1766,17 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
         return;
       }
       if (target.closest('[data-modal="request-native"]')) {
+        if (scanning) return;
         if (simMode) {
           unpairedSimTimerIds.clear();
+          void loadChoices().then((next) => {
+            if (closed) return;
+            choices = next;
+            refreshListDom();
+          });
+        } else {
+          runAsyncScan();
         }
-        void loadChoices().then((next) => {
-          if (closed) return;
-          choices = next;
-          refreshListDom();
-        });
         return;
       }
       const row = target.closest<HTMLElement>("[data-pick-port-id]");
@@ -1741,6 +1798,9 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
     document.addEventListener("keydown", onKey, true);
     document.body.appendChild(backdrop);
     syncButtons();
+    if (!simMode) {
+      runAsyncScan();
+    }
   });
 }
 

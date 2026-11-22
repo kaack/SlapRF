@@ -1,6 +1,7 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
+import { scanSettingsIntroCollapse } from "../core/settings_intro";
 import { getAppTheme, subscribeAppTheme } from "../core/theme";
 import { ApiClient } from "../services/api_client";
 import { capabilitiesSnapshot, resolveBackendUrl } from "../services/capabilities";
@@ -17,6 +18,7 @@ import {
   sharedRHLink,
 } from "../services/rh_hardware_link";
 import {
+  getKnownHardwareTimers,
   LiveSample,
   sharedTimerConsole,
   TimerConsole,
@@ -26,6 +28,7 @@ import {
 import { timerColor } from "../state/selectors";
 import { AppStore } from "../state/store";
 import { DetectedTimer, isRotorHazardMode, isSlapRFMode } from "../types/models";
+import { openDeviceConnectionSheet } from "../widgets/DeviceConnectionSheet";
 import { patchUsbConnectionBar } from "../widgets/UsbConnectionBar";
 import { channelColor, DBM_MAX, DBM_MIN, formatHardwareFreq, RACEBAND, racebandName } from "./debug/charts";
 
@@ -217,7 +220,7 @@ export class NetworkView extends Component {
           <section class="settings-section" data-section-anchor="connection">
             <div class="settings-intro">
               <h2>Manual connection</h2>
-              <p>Connect directly to a LapRF 8-Way timer by Ethernet IP (TCP :5403) or over a USB CDC serial link (115200 baud).</p>
+              <p>Connect directly to a LapRF 8-Way timer by Ethernet IP (TCP :5403) or over a USB CDC serial link (115200 baud). Go to <a href="#/setup/timing-devices" class="link-inline">Settings</a> to change the connectivity type.</p>
             </div>
             <div class="debug-status-layout" data-slot="laprf-connection"></div>
           </section>
@@ -243,7 +246,7 @@ export class NetworkView extends Component {
           <section class="settings-section" data-section-anchor="connection">
             <div class="settings-intro">
               <h2>Manual connection</h2>
-              <p>Enter a RotorHazard server's IP address and port to sign in with admin credentials and connect directly.</p>
+              <p>Enter a RotorHazard server's IP address and port to sign in with admin credentials and connect directly. Go to <a href="#/setup/timing-devices" class="link-inline">Settings</a> to change the connectivity type.</p>
             </div>
             <div class="debug-status-layout" data-slot="rh-connection"></div>
           </section>
@@ -269,7 +272,7 @@ export class NetworkView extends Component {
           <section class="settings-section" data-section-anchor="connection">
             <div class="settings-intro">
               <h2>USB serial connection</h2>
-              <p>Connect RotorHazard USB serial nodes directly over USB-C / CDC (ESP32-C5, STM32, Arduino, or RP2040 binary serial protocol).</p>
+              <p>Connect RotorHazard USB serial nodes directly over USB-C / CDC (ESP32-C5, STM32, Arduino, or RP2040 binary serial protocol). Go to <a href="#/setup/timing-devices" class="link-inline">Settings</a> to change the connectivity type.</p>
             </div>
             <div class="debug-status-layout" data-slot="rh-usb-connection"></div>
           </section>
@@ -1069,6 +1072,15 @@ export class NetworkView extends Component {
         }
         break;
       }
+      case "open-usb-slot-actions": {
+        this.connError = null;
+        openDeviceConnectionSheet({
+          console: usbPool.mainConsole,
+          bluetoothMode: this.store.timingHardwareMode === "slaprf_ble",
+          onAfterAction: () => this.renderAll(),
+        });
+        break;
+      }
       case "disconnect-usb-slot": {
         this.connError = null;
         await usbPool.mainConsole.disconnectCleanly();
@@ -1759,14 +1771,15 @@ export class NetworkView extends Component {
     }
 
     if (slaprfWrap) {
+      const introSig = isBleMode ? "ble" : "usb";
       const connIntro = slaprfWrap.querySelector<HTMLElement>('[data-section-anchor="connection"] > .settings-intro');
-      if (connIntro) {
-        const wantConnHtml = isBleMode
-          ? `<h2>Bluetooth Hub</h2><p>Connect your SlapRF Bluetooth Hub wirelessly over Bluetooth LE to inspect pairing status, 2.4 GHz ESP-NOW Spokes, and live 8-channel 5.8 GHz readings.</p>`
-          : `<h2>Connection</h2><p>Connect the Hub (or a Spoke) over USB-C to inspect the 2.4 GHz network and 5.8 GHz channel readings.</p>`;
-        if (connIntro.innerHTML !== wantConnHtml) {
-          connIntro.innerHTML = wantConnHtml;
-        }
+      if (connIntro && connIntro.dataset.introMode !== introSig) {
+        connIntro.dataset.introMode = introSig;
+        connIntro.classList.remove("has-intro-collapse");
+        connIntro.innerHTML = isBleMode
+          ? `<h2>Bluetooth Hub</h2><p>Set up to connect to the Hub over <strong>Bluetooth</strong>. Go to <a href="#/setup/timing-devices" class="link-inline">Settings</a> to change the connectivity type, or pair wirelessly to inspect pairing status, 2.4 GHz ESP-NOW Spokes, and live 5.8 GHz readings.</p>`
+          : `<h2>Connection</h2><p>Set up to connect to the Hub over <strong>USB-C</strong>. Go to <a href="#/setup/timing-devices" class="link-inline">Settings</a> to change the connectivity type, or connect the Hub (or a Spoke) to inspect the 2.4 GHz network and 5.8 GHz readings.</p>`;
+        scanSettingsIntroCollapse(connIntro);
       }
       const topoSec = slaprfWrap.querySelector<HTMLElement>('[data-section-anchor="topology"]');
       if (topoSec) {
@@ -1774,13 +1787,13 @@ export class NetworkView extends Component {
         topoSec.style.display = "";
       }
       const timerIntro = slaprfWrap.querySelector<HTMLElement>('[data-section-anchor="timer"] > .settings-intro');
-      if (timerIntro) {
-        const wantTimerHtml = isBleMode
+      if (timerIntro && timerIntro.dataset.introMode !== introSig) {
+        timerIntro.dataset.introMode = introSig;
+        timerIntro.classList.remove("has-intro-collapse");
+        timerIntro.innerHTML = isBleMode
           ? `<h2>Timer</h2><p>Identity, Bluetooth LE + 2.4 GHz ESP-NOW link stats, and live 5.8 GHz channel readings for the selected slot.</p>`
           : `<h2>Timer</h2><p>Identity, 2.4 GHz TDMA link stats, and live 5.8 GHz channel readings for the selected slot.</p>`;
-        if (timerIntro.innerHTML !== wantTimerHtml) {
-          timerIntro.innerHTML = wantTimerHtml;
-        }
+        scanSettingsIntroCollapse(timerIntro);
       }
     }
 
@@ -3583,7 +3596,7 @@ export class NetworkView extends Component {
           <div class="debug-subbox">
             <p class="note">${
               isBleEmpty
-                ? "No SlapRF Bluetooth Hub is currently connected. Click Connect Bluetooth above to connect wirelessly (hold BOOT on the Hub for 3 s to pair with a new device)."
+                ? "No SlapRF Bluetooth Hub is currently connected. Click Pair Device (or Connect) above to link wirelessly. Use Forget Device when connected, or hold BOOT on the Hub for 3 s, to pair with a new device."
                 : "No Hub timer is currently connected on TDMA Slot 1. Connect your Hub over USB-C to coordinate the 2.4 GHz network."
             }</p>
           </div>`;

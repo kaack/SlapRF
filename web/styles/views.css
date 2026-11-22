@@ -5043,7 +5043,139 @@ html[data-theme="light"] .flasher-hub-link .segmented button.is-active {
   cursor: pointer;
 }
 .debug-usb-chip-select:only-child {
-  padding-right: 7px;
+  padding-right: 12px;
+}
+.debug-usb-chip-select.has-menu-caret:only-child {
+  padding-right: 9px;
+}
+.debug-usb-chip-caret {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 2px;
+  color: var(--text-3);
+  transition: color 0.12s;
+}
+.debug-usb-chip:hover .debug-usb-chip-caret {
+  color: var(--text);
+}
+.device-conn-modal {
+  max-width: 420px;
+}
+.device-conn-head-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.device-conn-head-titles h3,
+.device-conn-head-titles strong {
+  margin: 0;
+  line-height: 1.25;
+}
+.device-conn-head-meta {
+  font-size: 12px;
+  color: var(--text-3);
+  font-weight: 500;
+}
+.device-conn-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.device-conn-action {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 13px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.14s, border-color 0.14s;
+}
+.device-conn-action:hover:not(:disabled) {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+}
+.device-conn-action:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.device-conn-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  flex-shrink: 0;
+}
+.device-conn-action-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.device-conn-action-copy strong {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.device-conn-action-copy span {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-3);
+}
+.device-conn-cancel-mobile {
+  width: 100%;
+  justify-content: center;
+}
+.debug-usb-busy-wrap {
+  margin-top: 8px;
+  max-width: 172px;
+}
+.sim-usb-port-scanning {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.sim-usb-port-scanning .slaprf-indeterminate-track {
+  width: 180px;
+}
+.slaprf-indeterminate-track {
+  position: relative;
+  width: 100%;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.slaprf-indeterminate-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 38%;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--text-2);
+  will-change: transform;
+  animation: slaprf-side-sweep 1.05s cubic-bezier(0.42, 0, 0.58, 1) infinite alternate;
+}
+@keyframes slaprf-side-sweep {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(163%);
+  }
 }
 .debug-usb-chip-select > *,
 .debug-usb-chip-close > *,

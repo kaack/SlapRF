@@ -185,6 +185,54 @@ func (m *Manager) Disconnect(slotIndex int) error {
 	return err
 }
 
+// ForgetSlot atomically clears auto-reconnect targets first, sends `BLEPAIR CLEAR` over an active
+// Bluetooth Hub link so the Hub returns to Pairing Mode, closes the slot, and forgets `fp`.
+func (m *Manager) ForgetSlot(slotIndex int, hintFP string) error {
+	if slotIndex < 0 || slotIndex >= MaxUSBConnections {
+		return fmt.Errorf("invalid USB slot index %d", slotIndex)
+	}
+	slot := m.slots[slotIndex]
+	slot.mu.Lock()
+	prevPort := slot.portName
+	hasPort := slot.port != nil
+	fp := strings.ToUpper(strings.TrimSpace(hintFP))
+	if fp == "" && slot.lastStatus != nil {
+		if sFP, ok := slot.lastStatus["fp"].(string); ok {
+			fp = strings.ToUpper(strings.TrimSpace(sFP))
+		}
+	}
+	if fp == "" && slot.lastConfig != nil {
+		fp = strings.ToUpper(strings.TrimSpace(slot.lastConfig.Fingerprint))
+	}
+	slot.mu.Unlock()
+	if fp == "" {
+		if pFP, ok := ParseBLEPortName(prevPort); ok {
+			fp = pFP
+		}
+	}
+
+	// Clear persisted auto-reconnect targets BEFORE sending BLEPAIR CLEAR so runSlotLoops cannot
+	// race and re-claim the Hub when the firmware drops the BLE link ~50 ms later.
+	m.clearSlotTarget(slotIndex, prevPort)
+	if fp != "" {
+		m.removePersistedBLETarget(BLEPortPrefix + fp)
+	}
+	if hasPort && IsBLEPortName(prevPort) {
+		_ = m.SendCommand(slotIndex, "BLEPAIR CLEAR")
+		time.Sleep(160 * time.Millisecond)
+	}
+	err := m.closeSlotInternal(slot, true)
+	if slotIndex == 1 {
+		m.SetDebugSlot(0)
+	}
+	if fp != "" {
+		m.ForgetKnownTimer(fp)
+	} else {
+		m.broadcastPoolState()
+	}
+	return err
+}
+
 func (m *Manager) closeSlotInternal(slot *usbSlot, clearPortName bool) error {
 	slot.mu.Lock()
 	cancel := slot.cancel
@@ -283,6 +331,7 @@ func (m *Manager) removePersistedBLETarget(portName string) {
 	if portName == "" {
 		return
 	}
+	bleFP, hasFP := ParseBLEPortName(portName)
 	m.mu.Lock()
 	changed := false
 	for i := 0; i < MaxUSBConnections; i++ {
@@ -294,7 +343,25 @@ func (m *Manager) removePersistedBLETarget(portName string) {
 	if changed {
 		m.persistTargetsLocked(true)
 	}
+	knownChanged := false
+	if hasFP {
+		if kt, ok := m.knownTimers[bleFP]; ok && kt.PairedBLE {
+			kt.PairedBLE = false
+			m.knownTimers[bleFP] = kt
+			knownChanged = true
+		}
+	}
+	var list []KnownHardwareTimer
+	if knownChanged {
+		list = make([]KnownHardwareTimer, 0, len(m.knownTimers))
+		for _, kt := range m.knownTimers {
+			list = append(list, kt)
+		}
+	}
 	m.mu.Unlock()
+	if knownChanged && m.cfg.Store != nil {
+		_ = m.cfg.Store.PutJSON(kvKnownTimersKey, list)
+	}
 }
 
 func (m *Manager) persistTargetsLocked(isBLE bool) {
@@ -1550,6 +1617,8 @@ func (m *Manager) recordKnownStatusMap(st map[string]any) {
 	if hub, ok := st["hub"].(map[string]any); ok {
 		parentHubFp, _ = hub["fp"].(string)
 	}
+	transport, _ := st["transport"].(string)
+	pairedBLE := role == "hub" && strings.EqualFold(strings.TrimSpace(transport), "ble")
 	nowMs := time.Now().UnixMilli()
 	m.upsertKnownTimer(KnownHardwareTimer{
 		FP:          fp,
@@ -1560,6 +1629,7 @@ func (m *Manager) recordKnownStatusMap(st map[string]any) {
 		Slot:        slotNum,
 		Channel:     chNum,
 		ParentHubFP: parentHubFp,
+		PairedBLE:   pairedBLE,
 		LastSeenMs:  nowMs,
 	})
 
@@ -1677,8 +1747,10 @@ func (m *Manager) upsertKnownTimer(entry KnownHardwareTimer) {
 			}
 		}
 	}
+	pairedBLE := false
 	if role == "hub" {
 		parentHub = ""
+		pairedBLE = entry.PairedBLE || (hadPrev && prev.PairedBLE)
 	}
 	merged := KnownHardwareTimer{
 		FP:          fp,
@@ -1689,6 +1761,7 @@ func (m *Manager) upsertKnownTimer(entry KnownHardwareTimer) {
 		Slot:        slot,
 		Channel:     channel,
 		ParentHubFP: parentHub,
+		PairedBLE:   pairedBLE,
 		LastSeenMs:  entry.LastSeenMs,
 	}
 	m.knownTimers[fp] = merged
@@ -1710,8 +1783,19 @@ func (m *Manager) ForgetKnownTimer(fp string) {
 	if clean == "" {
 		return
 	}
+	bleTarget := BLEPortPrefix + clean
 	m.mu.Lock()
 	delete(m.knownTimers, clean)
+	targetsChanged := false
+	for i := 0; i < MaxUSBConnections; i++ {
+		if strings.EqualFold(m.savedBLETargets[i], bleTarget) {
+			m.savedBLETargets[i] = ""
+			targetsChanged = true
+		}
+	}
+	if targetsChanged {
+		m.persistTargetsLocked(true)
+	}
 	list := make([]KnownHardwareTimer, 0, len(m.knownTimers))
 	for _, kt := range m.knownTimers {
 		list = append(list, kt)

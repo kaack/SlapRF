@@ -42,6 +42,7 @@ type KnownHardwareTimer struct {
 	Slot        int    `json:"slot,omitempty"`
 	Channel     int    `json:"channel,omitempty"`
 	ParentHubFP string `json:"parentHubFp,omitempty"`
+	PairedBLE   bool   `json:"pairedBle,omitempty"`
 	LastSeenMs  int64  `json:"lastSeenMs"`
 }
 

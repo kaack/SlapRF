@@ -120,7 +120,11 @@ func (s *Server) handleUSBDisconnectSlot(w http.ResponseWriter, r *http.Request)
 		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid USB slotIndex"})
 		return
 	}
-	_ = s.usbMgr.Disconnect(slotIndex)
+	if r.URL.Query().Get("forget") == "1" {
+		_ = s.usbMgr.ForgetSlot(slotIndex, r.URL.Query().Get("fp"))
+	} else {
+		_ = s.usbMgr.Disconnect(slotIndex)
+	}
 	writeJSONNoStore(w, http.StatusOK, s.usbMgr.Snapshot())
 }
 

@@ -1,7 +1,7 @@
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { getAppTheme } from "../core/theme";
-import { TimerConsole, usbPool } from "../services/timer_console";
+import { getPairedBluetoothHub, TimerConsole, usbPool } from "../services/timer_console";
 
 export interface UsbConnectionBarOptions {
   activeConsole: TimerConsole;
@@ -30,7 +30,7 @@ export function patchUsbConnectionBar(host: HTMLElement | null, opts: UsbConnect
   host.innerHTML = html;
 }
 
-function renderChip(c: TimerConsole, active: boolean, canDisconnect = true): string {
+function renderChip(c: TimerConsole, active: boolean, canManage = true): string {
   const s = c.lastStatus;
   const cfg = c.lastConfig;
   const isOther = c.isOtherDevice;
@@ -67,32 +67,31 @@ function renderChip(c: TimerConsole, active: boolean, canDisconnect = true): str
   const fpNote = fp ? ` · ${fp}` : "";
   const viaBluetooth = c.transportLabel === "Bluetooth";
   const roleMetaShown = viaBluetooth && !isWriting ? `${roleMeta} · Bluetooth` : roleMeta;
-  const closeBtn = canDisconnect
-    ? `<button
-        type="button"
-        class="debug-usb-chip-close"
-        data-action="disconnect-usb-slot"
-        data-usb-slot="${c.slotIndex}"
-        title="${isWriting ? `Cancel writing and disconnect ${esc(label)}` : `Disconnect ${esc(label)}`}"
-        aria-label="${isWriting ? `Cancel writing and disconnect ${esc(label)}` : `Disconnect ${esc(label)}`}"
-      >${icons.close(13)}</button>`
+  const openMenuOnClick = canManage && active && !isWriting;
+  const actionAttr = openMenuOnClick ? "open-usb-slot-actions" : "select-usb-slot";
+  const titleText = openMenuOnClick
+    ? `${label} (${roleMetaShown}${fpNote}) · click for connection options`
+    : `${label} (${roleMetaShown}${fpNote})`;
+  const caretHtml = openMenuOnClick
+    ? `<span class="debug-usb-chip-caret" aria-hidden="true">${icons.chevronDown(13)}</span>`
     : "";
   return `
     <div class="pilot-chip debug-usb-chip ${active ? "is-active" : ""} ${isWriting ? "is-writing" : ""}" style="--c:${chipColor}">
       <button
         type="button"
-        class="debug-usb-chip-select"
+        class="debug-usb-chip-select ${openMenuOnClick ? "has-menu-caret" : ""}"
         role="tab"
         aria-selected="${active}"
-        data-action="select-usb-slot"
+        ${openMenuOnClick ? 'aria-haspopup="dialog"' : ""}
+        data-action="${actionAttr}"
         data-usb-slot="${c.slotIndex}"
-        title="${esc(label)} (${esc(roleMetaShown)}${esc(fpNote)})"
+        title="${esc(titleText)}"
       >
         <span class="dot is-live"></span>
         <span class="pilot-chip-name">${esc(label)}</span>
         <span class="pilot-chip-time">${esc(roleMetaShown)}</span>
+        ${caretHtml}
       </button>
-      ${closeBtn}
     </div>`;
 }
 
@@ -106,7 +105,8 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
   const main = usbPool.mainConsole;
   const swapSlot = usbPool.slots[1];
   const poolBusy = usbPool.slots.find((c) => c.busyLabel)?.busyLabel ?? null;
-  const busyText = opts.busyText || opts.activeConsole.busyLabel || poolBusy || "";
+  const reconnectingText = !main.connected && main.reconnecting ? "Reconnecting" : "";
+  const busyText = opts.busyText || opts.activeConsole.busyLabel || poolBusy || reconnectingText;
   const busy = busyText.length > 0;
 
   let chipsHtml = "";
@@ -114,10 +114,9 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
 
   if (opts.allowSwap && !bleMode) {
     // Debug page (USB mode):
-    // - Protect only a Hub connection (`canDisconnect = false`); any non-Hub port (Spoke / Other) can be closed.
+    // - Protect only a Hub connection (`canManage = false`); any active non-Hub port (Spoke / Other) opens Disconnect options on click.
     // - Allow choosing a second USB connection (Slot 1) to debug on, shown alongside the main connection so the user
-    //   can switch between them or close non-Hub connections.
-    // - Once both slots are occupied, hide the connect button until a slot is closed.
+    //   can switch between them.
     const isHubConsole = (c: TimerConsole): boolean =>
       c.lastStatus ? c.lastStatus.role === 1 : c.lastConfig?.role === "hub";
     const chips: string[] = [];
@@ -150,18 +149,24 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
     }
   } else {
     // Network page (and Bluetooth Hub mode on both Network & Debug): single primary connection (Slot 0).
+    // Clicking the connected pill opens the Disconnect / Forget Device modal (desktop) or drawer (mobile).
+    const pairedBleHub = bleMode ? getPairedBluetoothHub() : null;
     if (main.connected) {
       chipsHtml = renderChip(main, true, true);
     } else {
-      const connectText = bleMode ? "Connect Bluetooth" : "Connect USB";
-      const connectTitle = bleMode ? "Connect a SlapRF Bluetooth Hub" : "Connect a USB device";
+      const connectText = bleMode ? (pairedBleHub ? "Connect" : "Pair Device") : "Connect USB";
+      const connectTitle = bleMode
+        ? pairedBleHub
+          ? `Connect to paired Bluetooth Hub ${pairedBleHub.label} (${pairedBleHub.fp})`
+          : "Pair a SlapRF Bluetooth Hub"
+        : "Connect a USB device";
       actionBtnHtml = `
         <button
           type="button"
           class="pilot-chip debug-usb-add-chip"
           data-action="connect-add"
           ${supported && !busy ? "" : "disabled"}
-          title="${connectTitle}"
+          title="${esc(connectTitle)}"
         >
           ${bleMode ? icons.wifi(20) : icons.plug(20)}
           <span class="pilot-chip-name">${busy ? `${esc(busyText)}…` : connectText}</span>
@@ -170,6 +175,15 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
   }
 
   const bannerParts: string[] = [];
+  if (busy && !main.connected) {
+    bannerParts.push(
+      `<div class="debug-usb-busy-wrap">
+        <div class="slaprf-indeterminate-track" role="progressbar" aria-label="${esc(busyText)}">
+          <div class="slaprf-indeterminate-bar"></div>
+        </div>
+      </div>`
+    );
+  }
   if (!supported) {
     bannerParts.push(
       bleMode

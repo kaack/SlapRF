@@ -54,7 +54,7 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
     }
   });
 
-  it("renders Connect Bluetooth button and omits All ports checkbox in UsbConnectionBar", () => {
+  it("renders Pair Device button when unpaired and omits All ports checkbox in UsbConnectionBar", () => {
     const main = usbPool.mainConsole;
     const usbHtml = renderUsbConnectionBarHtml({
       activeConsole: main,
@@ -68,7 +68,7 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       showAllPorts: false,
       bluetoothMode: true,
     });
-    expect(bleHtml).toContain("Connect Bluetooth");
+    expect(bleHtml).toContain("Pair Device");
     expect(bleHtml).not.toContain("Connect USB");
     expect(bleHtml).not.toContain("All ports");
   });
@@ -84,7 +84,7 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
     const netView = new NetworkView(netRoot.querySelector("#ble-net-host")!, store, api);
     try {
       expect(netRoot.textContent || "").toContain("Bluetooth Hub");
-      expect(netRoot.textContent || "").toContain("Connect Bluetooth");
+      expect(netRoot.textContent || "").toContain("Pair Device");
       const topoSec = netRoot.querySelector<HTMLElement>('[data-section-anchor="topology"]');
       expect(topoSec?.hidden).toBe(false);
 
@@ -333,7 +333,7 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
 
       const modal = document.querySelector<HTMLElement>(".sim-usb-dialog")!;
       expect(modal).not.toBeNull();
-      expect(modal.textContent || "").toContain("Connect Bluetooth Hub");
+      expect(modal.textContent || "").toContain("Pair Bluetooth Device");
       expect(modal.textContent || "").toContain("No SlapRF Bluetooth Hub found nearby");
       expect(modal.textContent || "").toContain("Scan again");
       expect(seenUrls.some((u) => u.includes("/v1/usb/ports?transport=ble"))).toBe(true);
@@ -487,6 +487,365 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
     } finally {
       practiceView.destroy();
       topbar.destroy();
+    }
+  });
+
+  it("remembers paired Bluetooth Hub across Disconnect (showing Connect) and clears bond on Forget Device", async () => {
+    const origFetch = window.fetch;
+    const calls: Array<{ method: string; url: string; body?: string }> = [];
+    window.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const method = (init?.method || "GET").toUpperCase();
+      const body = typeof init?.body === "string" ? init.body : undefined;
+      calls.push({ method, url, body });
+      if (url.includes("/v1/capabilities")) {
+        return new Response(
+          JSON.stringify({ portable: true, nativeEngine: true, nativeUsb: true }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url.includes("/v1/usb/ports")) {
+        return new Response(
+          JSON.stringify({
+            ports: [
+              {
+                name: "ble:BE7C0001",
+                isUsb: false,
+                serialNumber: "BE7C0001",
+                product: "SlapRF H1 (Bluetooth)",
+                isEspressif: true,
+                transport: "ble",
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url.includes("/v1/usb/connections/0") && method === "PUT") {
+        await new Promise((r) => window.setTimeout(r, 40));
+        return new Response(
+          JSON.stringify({
+            slot: {
+              slotIndex: 0,
+              connected: true,
+              portName: "ble:BE7C0001",
+              probing: false,
+              reconnecting: false,
+              reconnectAttempt: 0,
+              maxReconnectAttempts: 5,
+              reconnectFailed: false,
+            },
+            pool: {
+              debugSlotIndex: 0,
+              slots: [
+                {
+                  slotIndex: 0,
+                  connected: true,
+                  portName: "ble:BE7C0001",
+                  probing: false,
+                  reconnecting: false,
+                  reconnectAttempt: 0,
+                  maxReconnectAttempts: 5,
+                  reconnectFailed: false,
+                },
+              ],
+              knownTimers: [
+                {
+                  fp: "BE7C0001",
+                  role: "hub",
+                  label: "H1",
+                  pairedBle: true,
+                  lastSeenMs: Date.now(),
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url.includes("/v1/usb:command")) {
+        return new Response(
+          JSON.stringify({ ok: true, reply: { t: "ok", cmd: "blepair", pairingMode: true } }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url.includes("/v1/usb/connections/0") && method === "DELETE") {
+        const isForget = url.includes("forget=1");
+        return new Response(
+          JSON.stringify({
+            debugSlotIndex: 0,
+            slots: [
+              {
+                slotIndex: 0,
+                connected: false,
+                probing: false,
+                reconnecting: false,
+                reconnectAttempt: 0,
+                reconnectFailed: false,
+              },
+            ],
+            knownTimers: isForget
+              ? []
+              : [
+                  {
+                    fp: "BE7C0001",
+                    role: "hub",
+                    label: "H1",
+                    pairedBle: true,
+                    lastSeenMs: Date.now(),
+                  },
+                ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url.includes("/v1/usb/known-timers/BE7C0001") && method === "DELETE") {
+        return new Response(
+          JSON.stringify({ debugSlotIndex: 0, slots: [], knownTimers: [] }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return origFetch(input, init);
+    }) as typeof window.fetch;
+
+    const store = makeStore({
+      simulatorRunning: false,
+      timingHardwareMode: "slaprf_ble",
+    });
+    bindSimSerialStore(store);
+    const { api } = makeMockApiClient(store);
+    const netRoot = mountHtml(`<div id="ble-forget-host"></div>`);
+    let netView: NetworkView | null = null;
+
+    try {
+      await probeCapabilities();
+      usbPool.applyBackendPoolSnapshot({
+        debugSlotIndex: 0,
+        slots: [],
+        knownTimers: [],
+      });
+      netView = new NetworkView(netRoot.querySelector("#ble-forget-host")!, store, api);
+      await flushMicrotasks();
+
+      // 1. Unpaired initial state -> "Pair Device" + collapsible intro with underlined Settings link and (see more)
+      const connSlot = netRoot.querySelector<HTMLElement>('[data-slot="connection"]')!;
+      const connIntro = netRoot.querySelector<HTMLElement>('[data-section-anchor="connection"] > .settings-intro')!;
+      expect(connSlot.textContent || "").toContain("Pair Device");
+      expect(connIntro.classList.contains("has-intro-collapse")).toBe(true);
+      expect(connIntro.querySelector(".settings-intro-more")).not.toBeNull();
+      expect(connIntro.textContent || "").toContain("Set up to connect to the Hub over Bluetooth");
+      const settingsLink = connIntro.querySelector<HTMLAnchorElement>('a.link-inline[href="#/setup/timing-devices"]');
+      expect(settingsLink).not.toBeNull();
+      expect(settingsLink!.textContent || "").toBe("Settings");
+
+      // 2. Paired & connected over BLE -> shows both Disconnect (x) AND Forget Device
+      const bleStatus: TimerStatus = {
+        fw: "v0.1.7",
+        role: 1,
+        fp: "BE7C0001",
+        label: "H1",
+        uptimeMs: 12000,
+        reset: "POWERON",
+        boots: 1,
+        heapFree: 19200,
+        heapMin: 16400,
+        sweepHz: 50,
+        sweeps: 600,
+        sweepUs: 4900,
+        sweepUsMax: 6100,
+        sweepBudgetUs: 6000,
+        rf: { ok: true, enabled: true, gain: 38, gainMax: 80, floorDb: -91 },
+        chip: { model: "ESP32-C5", rev: "v1.0", mac: "AA:BB:CC:DD:EE:FF", flashMB: 8 },
+        net: { mode: "ble", stations: 0 },
+        channel: 1,
+        slot: 1,
+        freqsTemporary: false,
+        freqs: [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917],
+        image: "ble",
+        transport: "ble",
+        ble: {
+          connected: true,
+          intervalUs: 20000,
+          mtu: 247,
+          phy: 2,
+          rssi: -60,
+          txNotifies: 300,
+          txBytes: 18000,
+          txDrops: 0,
+          rxWrites: 4,
+          nocp: 300,
+          connects: 1,
+          sync: true,
+          syncLocked: true,
+          phaseUs: 13500,
+          paired: true,
+          pairingMode: false,
+        },
+      };
+      usbPool.applyBackendPoolSnapshot({
+        debugSlotIndex: 0,
+        slots: [
+          {
+            slotIndex: 0,
+            connected: true,
+            portName: "ble:BE7C0001",
+            probing: false,
+            reconnecting: false,
+            reconnectAttempt: 0,
+            maxReconnectAttempts: 5,
+            reconnectFailed: false,
+            isOtherDevice: false,
+            lastStatus: bleStatus,
+          },
+        ],
+        knownTimers: [
+          {
+            fp: "BE7C0001",
+            role: "hub",
+            label: "H1",
+            pairedBle: true,
+            lastSeenMs: Date.now(),
+          },
+        ],
+      });
+      await flushMicrotasks();
+
+      const origMatchMedia = window.matchMedia;
+      try {
+        // 2. Desktop (> 760px): connected pill has no inline 'x' or side-by-side Forget button; clicking opens modal
+        window.matchMedia = ((q: string) => ({
+          matches: false,
+          media: q,
+          onchange: null,
+          addListener: () => undefined,
+          removeListener: () => undefined,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+          dispatchEvent: () => false,
+        })) as typeof window.matchMedia;
+
+        expect(connSlot.querySelector('[data-action="disconnect-usb-slot"]')).toBeNull();
+        expect(connSlot.querySelector('[data-action="forget-ble-device"]')).toBeNull();
+        const pillBtn = connSlot.querySelector<HTMLButtonElement>('[data-action="open-usb-slot-actions"]')!;
+        expect(pillBtn).not.toBeNull();
+
+        pillBtn.click();
+        await flushMicrotasks();
+
+        const desktopModal = document.querySelector<HTMLElement>(".device-conn-modal")!;
+        expect(desktopModal).not.toBeNull();
+        expect(document.querySelector(".device-conn-drawer")).toBeNull();
+        const disconnectAction = desktopModal.querySelector<HTMLButtonElement>('[data-conn-action="disconnect"]')!;
+        const forgetActionDesktop = desktopModal.querySelector<HTMLButtonElement>('[data-conn-action="forget"]')!;
+        expect(disconnectAction).not.toBeNull();
+        expect(forgetActionDesktop).not.toBeNull();
+        expect(forgetActionDesktop.textContent || "").toContain("Forget Device");
+
+        // 3. Click Disconnect in modal -> remembers pairing and shows "Connect" (not "Pair Device")
+        disconnectAction.click();
+        await flushMicrotasks();
+        await new Promise((r) => window.setTimeout(r, 30));
+
+        const connectBtnAfterDisconnect = connSlot.querySelector<HTMLButtonElement>('[data-action="connect-add"]')!;
+        expect(connectBtnAfterDisconnect).not.toBeNull();
+        expect((connectBtnAfterDisconnect.textContent || "").trim()).toBe("Connect");
+        expect(connSlot.querySelector('[data-action="forget-ble-device"]')).toBeNull();
+
+        // 3b. Clicking Connect when already paired STILL opens selection dialog ("Connect Bluetooth Device")
+        // and disables the button + renders the side-to-side indeterminate bar while Connecting...
+        connectBtnAfterDisconnect.click();
+        await flushMicrotasks();
+        await new Promise((r) => window.setTimeout(r, 15));
+
+        const pickDialog = document.querySelector<HTMLElement>(".sim-usb-dialog")!;
+        expect(pickDialog).not.toBeNull();
+        expect(pickDialog.textContent || "").toContain("Connect Bluetooth Device");
+        const modalConnectBtn = pickDialog.querySelector<HTMLButtonElement>('[data-modal="connect"]')!;
+        expect((modalConnectBtn.textContent || "").trim()).toBe("Connect");
+        modalConnectBtn.click();
+        await flushMicrotasks();
+
+        const busyBtn = connSlot.querySelector<HTMLButtonElement>('[data-action="connect-add"]')!;
+        expect(busyBtn.disabled).toBe(true);
+        expect(busyBtn.textContent || "").toContain("Connecting…");
+        expect(connSlot.querySelector(".slaprf-indeterminate-bar")).not.toBeNull();
+
+        await new Promise((r) => window.setTimeout(r, 60));
+        await flushMicrotasks();
+
+        // 4. Mobile (<= 760px): clicking connected pill opens bottom sheet drawer; Forget Device clears pairing -> "Pair Device"
+        window.matchMedia = ((q: string) => ({
+          matches: q.includes("max-width: 760px"),
+          media: q,
+          onchange: null,
+          addListener: () => undefined,
+          removeListener: () => undefined,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+          dispatchEvent: () => false,
+        })) as typeof window.matchMedia;
+
+        usbPool.applyBackendPoolSnapshot({
+          debugSlotIndex: 0,
+          slots: [
+            {
+              slotIndex: 0,
+              connected: true,
+              portName: "ble:BE7C0001",
+              probing: false,
+              reconnecting: false,
+              reconnectAttempt: 0,
+              maxReconnectAttempts: 5,
+              reconnectFailed: false,
+              isOtherDevice: false,
+              lastStatus: bleStatus,
+            },
+          ],
+          knownTimers: [
+            {
+              fp: "BE7C0001",
+              role: "hub",
+              label: "H1",
+              pairedBle: true,
+              lastSeenMs: Date.now(),
+            },
+          ],
+        });
+        await flushMicrotasks();
+
+        connSlot.querySelector<HTMLButtonElement>('[data-action="open-usb-slot-actions"]')!.click();
+        await flushMicrotasks();
+
+        const mobileDrawer = document.querySelector<HTMLElement>(".device-conn-drawer")!;
+        expect(mobileDrawer).not.toBeNull();
+        const forgetBtnMobile = mobileDrawer.querySelector<HTMLButtonElement>('[data-conn-action="forget"]')!;
+        expect(forgetBtnMobile).not.toBeNull();
+        forgetBtnMobile.click();
+        await new Promise((r) => window.setTimeout(r, 120));
+        await flushMicrotasks();
+
+        expect(
+          calls.some(
+            (c) =>
+              c.method === "DELETE" &&
+              c.url.includes("/v1/usb/connections/0") &&
+              c.url.includes("forget=1")
+          )
+        ).toBe(true);
+        expect(calls.some((c) => c.method === "DELETE" && c.url.includes("/v1/usb/known-timers/BE7C0001"))).toBe(true);
+
+        const finalConnectBtn = connSlot.querySelector<HTMLButtonElement>('[data-action="connect-add"]')!;
+        expect((finalConnectBtn.textContent || "").trim()).toBe("Pair Device");
+      } finally {
+        window.matchMedia = origMatchMedia;
+      }
+    } finally {
+      document.querySelectorAll(".slaprf-modal-backdrop, .device-conn-drawer-overlay").forEach((el) => el.remove());
+      netView?.destroy();
+      usbPool.applyBackendPoolSnapshot({ debugSlotIndex: 0, slots: [], knownTimers: [] });
+      window.localStorage.removeItem("slaprf.hw.knownTimers");
+      window.fetch = origFetch;
+      await probeCapabilities();
     }
   });
 });

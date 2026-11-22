@@ -23,6 +23,7 @@ import {
 } from "../services/timer_console";
 import { AppStore } from "../state/store";
 import { DetectedTimer, isRotorHazardMode, isSlapRFMode, TimingHardwareMode } from "../types/models";
+import { openDeviceConnectionSheet } from "../widgets/DeviceConnectionSheet";
 import { patchUsbConnectionBar } from "../widgets/UsbConnectionBar";
 import {
   buildFileStamp,
@@ -3248,13 +3249,35 @@ export class DebugView extends Component {
           }
           break;
         }
+        case "open-usb-slot-actions": {
+          const slot = Number(t.dataset.usbSlot);
+          const targetConsole = usbPool.slots[slot] ?? usbPool.mainConsole;
+          const isBle = this.hwMode() === "slaprf_ble";
+          const isHub = targetConsole.lastStatus
+            ? targetConsole.lastStatus.role === 1
+            : targetConsole.lastConfig?.role === "hub";
+          if (targetConsole.connected && (!isHub || isBle)) {
+            openDeviceConnectionSheet({
+              console: targetConsole,
+              bluetoothMode: isBle,
+              onAfterAction: () => {
+                if (slot === 1 && !usbPool.slots[1]?.connected) {
+                  usbPool.setDebugSlot(0);
+                } else if (slot === 0 && usbPool.slots[1]?.connected) {
+                  usbPool.setDebugSlot(1);
+                }
+              },
+            });
+          }
+          break;
+        }
         case "disconnect-usb-slot": {
           const slot = Number(t.dataset.usbSlot);
           const targetConsole = usbPool.slots[slot];
           const isHub = targetConsole?.lastStatus
             ? targetConsole.lastStatus.role === 1
             : targetConsole?.lastConfig?.role === "hub";
-          if (targetConsole && !isHub) {
+          if (targetConsole && (!isHub || this.hwMode() === "slaprf_ble")) {
             if (slot === 1) {
               await usbPool.revertDebugToMain();
             } else {

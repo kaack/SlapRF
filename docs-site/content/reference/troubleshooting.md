@@ -30,7 +30,7 @@ If your phone or laptop does not discover the Bluetooth Hub in **Network**:
 
 1. Verify the board was flashed with the Bluetooth Hub image (`slaprf-xiao-c5-ble.bin`) and shows either the fast double-blink (Pairing Mode) or `1 Hz` slow blink.
 2. Confirm **Settings -> Hardware** is set to **SlapRF (Bluetooth)**.
-3. Disconnect any other phone or browser tab already linked to the Hub (BLE advertising pauses while an active host is connected). To pair with a new host, hold `BOOT` on the Hub for `3.0 s` until the rapid LED burst clears the previous bond.
+3. Disconnect any other phone or browser tab already linked to the Hub (BLE advertising pauses while an active host is connected). To switch the Hub to a new phone, computer, or Raspberry Pi, click **Forget Device** in **Network** while connected on the old device, or hold `BOOT` on the Hub for `3.0 s` until the rapid LED burst clears the previous bond.
 4. On Linux, SlapRF powers on the default BlueZ adapter automatically. If your host has more than one Bluetooth controller, run `bluetoothctl list` and set `SLAPRF_BLE_ADAPTER=hci1` (or your active adapter name) if needed.
 
 ### Raspberry Pi Bluetooth Fails to Connect or Drops

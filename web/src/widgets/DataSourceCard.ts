@@ -724,7 +724,7 @@ export class TimingDevicesCard extends Component {
             : effectiveMode === "slaprf_ble"
               ? sim
                 ? `Simulating a wireless SlapRF Bluetooth Hub (solo 1-gate or with up to 6 ESP-NOW Spokes, up to 8 simultaneous pilots). Manage simulated boards on <a href="#/sim" class="link-inline">Simulation</a> or inspect live 5.8 GHz RSSI on <a href="#/network" class="link-inline">Network</a>.`
-                : `Timing laps wirelessly with a SlapRF Bluetooth Hub (solo 1-gate or with up to 6 ESP-NOW Spokes, up to 8 simultaneous pilots). First connect claims the Hub; hold <code>BOOT</code> for 3 s on the Hub to pair a different phone or computer. Connect on <a href="#/network" class="link-inline">Network</a>.`
+                : `Timing laps wirelessly with a SlapRF Bluetooth Hub (solo 1-gate or with up to 6 ESP-NOW Spokes, up to 8 simultaneous pilots). First pair claims the Hub; click <strong>Forget Device</strong> on <a href="#/network" class="link-inline">Network</a> (or hold <code>BOOT</code> for 3 s on the Hub) to pair a different phone or computer.`
               : sim
                 ? `Simulating SlapRF Hub &amp; Spoke gate timers. Manage simulated boards on <a href="#/sim" class="link-inline">Simulation</a>.`
                 : `Timing laps with SlapRF Hub &amp; Spoke gate timers over native USB-C serial.`;

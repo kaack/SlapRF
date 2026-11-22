@@ -14,6 +14,7 @@ import {
 import {
   createBackendPortHandle,
   isBackendSerialPort,
+  isBleHardwareMode,
   isSimulatedSerialPort,
   isSimulatedUsbMode,
   listSimulatedTimers,
@@ -56,12 +57,22 @@ export interface KnownHardwareTimer {
   slot?: number;
   channel?: number;
   parentHubFp?: string;
+  pairedBle?: boolean;
   lastSeenMs: number;
 }
 
+export interface PairedBluetoothHubInfo {
+  fp: string;
+  label: string;
+  portName: string;
+  simTimerId?: number;
+}
+
 const KNOWN_TIMERS_STORAGE_KEY = "slaprf.hw.knownTimers";
+const PAIRED_SIM_BLE_HUB_KEY = "slaprf.ui.pairedSimBleHub.v1";
 
 let backendKnownTimersCache: KnownHardwareTimer[] = [];
+let backendKnownTimersHydrated = false;
 
 export function getKnownHardwareTimers(): KnownHardwareTimer[] {
   const map = new Map<string, KnownHardwareTimer>();
@@ -138,6 +149,7 @@ export function recordKnownHardwareTimer(entry: Partial<KnownHardwareTimer> & { 
     slot,
     channel,
     parentHubFp: role === "spoke" ? parentHubFp : undefined,
+    pairedBle: role === "hub" ? Boolean(entry.pairedBle ?? prev?.pairedBle) : undefined,
     lastSeenMs: entry.lastSeenMs ?? Date.now(),
   };
   byFp.set(fp, merged);
@@ -149,6 +161,104 @@ export function recordKnownHardwareTimer(entry: Partial<KnownHardwareTimer> & { 
       // ignore storage errors
     }
   }
+}
+
+export function setPairedSimBleHub(hub: { fp: string; label: string; timerId: number } | null): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  try {
+    if (!hub) {
+      window.localStorage.removeItem(PAIRED_SIM_BLE_HUB_KEY);
+    } else {
+      window.localStorage.setItem(PAIRED_SIM_BLE_HUB_KEY, JSON.stringify(hub));
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function clearLocalBlePairing(fp?: string): void {
+  const cleanFp = (fp || "").trim().toUpperCase();
+  if (!cleanFp) return;
+  backendKnownTimersCache = backendKnownTimersCache.map((t) =>
+    t.fp.toUpperCase() === cleanFp ? { ...t, pairedBle: false } : t
+  );
+  if (typeof window !== "undefined" && window.localStorage) {
+    try {
+      const raw = window.localStorage.getItem(KNOWN_TIMERS_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown;
+        if (Array.isArray(parsed)) {
+          const updated = parsed.map((item) => {
+            if (item && typeof item === "object" && typeof (item as KnownHardwareTimer).fp === "string") {
+              const kt = item as KnownHardwareTimer;
+              if (kt.fp.toUpperCase() === cleanFp) {
+                return { ...kt, pairedBle: false };
+              }
+            }
+            return item;
+          });
+          window.localStorage.setItem(KNOWN_TIMERS_STORAGE_KEY, JSON.stringify(updated));
+        }
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }
+}
+
+/**
+ * Returns the Bluetooth Hub currently paired to this host (even when temporarily disconnected),
+ * or `null` when no Bluetooth Hub is paired (initial state or after `Forget Device`).
+ */
+export function getPairedBluetoothHub(): PairedBluetoothHubInfo | null {
+  if (isSimulatedUsbMode()) {
+    if (typeof window !== "undefined" && window.localStorage) {
+      try {
+        const raw = window.localStorage.getItem(PAIRED_SIM_BLE_HUB_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as { fp?: string; label?: string; timerId?: number };
+          const timerId = typeof parsed.timerId === "number" ? parsed.timerId : 1;
+          const desc = listSimulatedTimers().find((t) => t.timerId === timerId && t.poweredOn);
+          if (desc) {
+            return {
+              fp: (parsed.fp || desc.fingerprint || "SIM").toUpperCase(),
+              label: parsed.label || desc.label || "H1",
+              portName: `sim:${timerId}`,
+              simTimerId: timerId,
+            };
+          }
+        }
+      } catch {
+        // ignore storage errors
+      }
+    }
+    return null;
+  }
+
+  const main = usbPool?.mainConsole;
+  if (main?.connected && main.transportLabel === "Bluetooth") {
+    const activeFp = (main.lastStatus?.fp || main.lastConfig?.fingerprint || "").trim().toUpperCase();
+    if (activeFp) {
+      return {
+        fp: activeFp,
+        label: main.lastStatus?.label || main.lastConfig?.timerLabel || "H1",
+        portName: `ble:${activeFp}`,
+      };
+    }
+  }
+
+  const source =
+    capabilitiesSnapshot().portable && backendKnownTimersHydrated
+      ? [...backendKnownTimersCache].sort((a, b) => (b.lastSeenMs ?? 0) - (a.lastSeenMs ?? 0))
+      : getKnownHardwareTimers();
+  const hub = source.find((t) => t.role === "hub" && t.pairedBle && t.fp);
+  if (!hub) return null;
+  const fp = hub.fp.trim().toUpperCase();
+  return {
+    fp,
+    label: hub.label || "H1",
+    portName: `ble:${fp}`,
+  };
 }
 
 export function forgetKnownHardwareTimer(fp?: string, _label?: string): void {
@@ -171,6 +281,13 @@ export function forgetKnownHardwareTimer(fp?: string, _label?: string): void {
 }
 
 export function recordKnownTimerStatus(s: TimerStatus): void {
+  const isBleHub = s.role === 1 && s.transport === "ble";
+  if (isSimulatedUsbMode()) {
+    if (isBleHub || (s.role === 1 && isBleHardwareMode())) {
+      setPairedSimBleHub({ fp: s.fp, label: s.label || "H1", timerId: 1 });
+    }
+    return;
+  }
   recordKnownHardwareTimer({
     fp: s.fp,
     role: s.role === 1 ? "hub" : "spoke",
@@ -180,6 +297,7 @@ export function recordKnownTimerStatus(s: TimerStatus): void {
     slot: s.slot || (s.role === 1 ? 1 : undefined),
     channel: s.channel || 1,
     parentHubFp: s.hub?.fp,
+    pairedBle: isBleHub ? true : undefined,
     lastSeenMs: Date.now(),
   });
   if (s.role === 1 && Array.isArray(s.spokes)) {
@@ -770,6 +888,7 @@ export class TimerConsole {
     this.reconnectFailed = false;
     this.lastError = null;
     this.probing = true;
+    this.busyLabel = "Connecting";
     this.notifyStateChange();
     try {
       if (isBackendSerialPort(port)) {
@@ -809,6 +928,7 @@ export class TimerConsole {
       return s;
     } finally {
       this.probing = false;
+      this.busyLabel = null;
       this.notifyStateChange();
     }
   }
@@ -825,6 +945,7 @@ export class TimerConsole {
       return await this.connectWithPort(port, showAllPorts, 2000);
     } finally {
       this.probing = false;
+      this.busyLabel = null;
       this.notifyStateChange();
     }
   }
@@ -910,6 +1031,59 @@ export class TimerConsole {
       await sleep(50);
     }
     await this.disconnect();
+  }
+
+  /**
+   * Unpairs and forgets a Bluetooth Hub (`BLEPAIR CLEAR` + disconnect + remove persisted pairing)
+   * so another phone, computer, or Raspberry Pi can pair without holding the physical BOOT button.
+   */
+  public async forgetBluetoothDevice(): Promise<void> {
+    const remembered = getPairedBluetoothHub();
+    const fp = (this.lastStatus?.fp || this.lastConfig?.fingerprint || remembered?.fp || "").trim().toUpperCase();
+    this.userDisconnecting = true;
+    if (capabilitiesSnapshot().portable && !isSimulatedUsbMode()) {
+      cancelActiveFlash();
+      window.clearInterval(this.statusPollTimer);
+      this.statusPollTimer = 0;
+      this.writing = false;
+      this.busyLabel = null;
+      this.reconnecting = false;
+      this.reconnectAttempt = 0;
+      this.reconnectFailed = false;
+      this.lastError = null;
+      this.port = null;
+      const qs = fp ? `?forget=1&fp=${encodeURIComponent(fp)}` : "?forget=1";
+      await fetch(resolveBackendUrl(`/v1/usb/connections/${this.slotIndex}${qs}`), {
+        method: "DELETE",
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((pool) => {
+          if (pool) usbPool.applyBackendPoolSnapshot(pool as BackendPoolSnapshot);
+        })
+        .catch(() => undefined);
+      setPairedSimBleHub(null);
+      if (fp) {
+        forgetKnownHardwareTimer(fp);
+      }
+      this.probing = false;
+      this.clearDeviceIdentity();
+      this.failWaiters("Disconnected");
+      this.subscribers.forEach((h) => h.onDisconnect?.());
+      this.notifyStateChange();
+      return;
+    }
+    if (this.connected) {
+      await withTimeout(this.send("BLEPAIR CLEAR"), 600).catch(() => undefined);
+      await sleep(60);
+      await this.disconnectCleanly();
+    } else if (this.reconnecting) {
+      await this.disconnectCleanly();
+    }
+    setPairedSimBleHub(null);
+    if (fp) {
+      forgetKnownHardwareTimer(fp);
+    }
+    this.notifyStateChange();
   }
 
   /**
@@ -1836,6 +2010,12 @@ export class UsbConnectionPool {
   public applyBackendPoolSnapshot(pool: BackendPoolSnapshot): void {
     if (Array.isArray(pool.knownTimers)) {
       backendKnownTimersCache = pool.knownTimers;
+      backendKnownTimersHydrated = true;
+      for (const kt of pool.knownTimers) {
+        if (kt && kt.fp) {
+          recordKnownHardwareTimer(kt);
+        }
+      }
     }
     if (typeof pool.debugSlotIndex === "number") {
       this._debugSlotIndex = pool.debugSlotIndex === 1 ? 1 : 0;
@@ -2124,12 +2304,21 @@ export class UsbConnectionPool {
     return this.slots.find((c) => c.ownsPort(candidate)) ?? null;
   }
 
-  /** Connects the main USB connection (Slot 0). */
+  /** Connects the main USB/BLE connection (Slot 0), always presenting the device selection dialog. */
   public async connectMain(
     showAllPorts = false
   ): Promise<{ console: TimerConsole; status: TimerStatus | null; alreadyConnected: boolean }> {
     const main = this.slots[0];
-    const port = await pickUsbPort({ showAllPorts });
+    if (main.busyLabel) {
+      return { console: main, status: main.lastStatus, alreadyConnected: main.connected };
+    }
+    const bleMode = isBleHardwareMode();
+    const paired = bleMode ? getPairedBluetoothHub() : null;
+    const port = await pickUsbPort({
+      showAllPorts,
+      alreadyPaired: Boolean(paired),
+      preferredPortName: paired?.portName,
+    });
     const existing = this.findOwnerOfPort(port);
     if (existing) {
       if (existing === main) {
@@ -2140,7 +2329,26 @@ export class UsbConnectionPool {
     if (main.connected) {
       await main.disconnectCleanly();
     }
-    const status = await main.connectWithPort(port, showAllPorts);
+    let status: TimerStatus | null = null;
+    try {
+      status = await main.connectWithPort(port, showAllPorts);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (bleMode && paired && /paired to another device/i.test(msg)) {
+        clearLocalBlePairing(paired.fp);
+        this.notify();
+      }
+      throw err;
+    }
+    if (bleMode && isSimulatedSerialPort(port)) {
+      const desc = listSimulatedTimers().find((t) => t.timerId === port.simulatedTimerId);
+      setPairedSimBleHub({
+        fp: (status?.fp || desc?.fingerprint || "SIM").toUpperCase(),
+        label: status?.label || desc?.label || "H1",
+        timerId: port.simulatedTimerId,
+      });
+      this.notify();
+    }
     return { console: main, status, alreadyConnected: false };
   }
 
