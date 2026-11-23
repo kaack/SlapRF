@@ -19,11 +19,12 @@ func DefaultGateLine() GateLine {
 	}
 }
 
-// DefaultCameraConfig returns outdoor-friendly high-FPS capture defaults.
+// DefaultCameraConfig returns camera capture defaults (Auto shutter for bright indoor/outdoor startup;
+// fast manual 1/1000..1/4000 s shutter can be selected in the UI for high-speed outdoor flights).
 func DefaultCameraConfig() CameraConfig {
 	return CameraConfig{
 		TargetFPS:          120,
-		ShutterUs:          500, // 1/2000 s freezes 70 mph quads to ~1.5 cm blur
+		ShutterUs:          0, // Auto exposure by default
 		FocusLocked:        false,
 		MotionModel:        "mog2",
 		Sensitivity:        16.0,

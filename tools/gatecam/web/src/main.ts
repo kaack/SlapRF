@@ -450,11 +450,11 @@ function renderLiveView(): string {
             <svg class="gate-svg" id="live-gate-svg" viewBox="0 0 ${fw} ${fh}" preserveAspectRatio="none">
               ${gateGeometrySVG(g, true, fw, fh)}
             </svg>
-            <div class="hud-rssi-bar">
-              <span data-hud-rssi>${rssiHtml}</span>
-              <span data-hud-ring>${(ci.ringSpanMs / 1000).toFixed(1)}s · ${ci.actualFps.toFixed(0)}fps ●</span>
-            </div>
           </div>
+        </div>
+        <div class="hud-rssi-bar">
+          <span class="hud-rssi-text" data-hud-rssi>${rssiHtml}</span>
+          <span class="hud-ring-text" data-hud-ring>Ring: ${(ci.ringSpanMs / 1000).toFixed(1)}s · ${ci.actualFps.toFixed(0)} fps ●</span>
         </div>
         <div class="cam-controls">
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">

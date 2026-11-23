@@ -69,6 +69,7 @@ public final class GateCamShim {
     private static Context appCtx;
     private static volatile Activity activeActivity;
     private static volatile TextureView previewTexture;
+    private static volatile SurfaceTexture boundSurfaceTexture;
     private static volatile int previewWidth = 1280;
     private static volatile int previewHeight = 720;
 
@@ -89,7 +90,7 @@ public final class GateCamShim {
 
     // Requested camera configuration
     private static volatile int targetFps = 120;
-    private static volatile int shutterUs = 500; // 0=Auto, 1000=1/1000s, 500=1/2000s, 250=1/4000s
+    private static volatile int shutterUs = 0; // 0=Auto, 1000=1/1000s, 500=1/2000s, 250=1/4000s
     private static volatile boolean focusLocked = false;
     private static volatile Float lockedFocusDist = null;
     private static volatile String lastError = "";
@@ -146,21 +147,30 @@ public final class GateCamShim {
         }
     }
 
-    public static void onPreviewSurfaceAvailable(TextureView tv, int w, int h) {
+    public static synchronized void onPreviewSurfaceAvailable(TextureView tv, int w, int h) {
+        if (cameraDevice != null && tv != null && tv.getSurfaceTexture() != boundSurfaceTexture) {
+            stopCamera();
+        }
         previewTexture = tv;
         previewWidth = w;
         previewHeight = h;
         applyPreviewTransform(tv, w, h);
     }
 
-    public static void onPreviewSurfaceSizeChanged(TextureView tv, int w, int h) {
+    public static synchronized void onPreviewSurfaceSizeChanged(TextureView tv, int w, int h) {
+        if (previewTexture != null && previewTexture != tv) {
+            return;
+        }
         previewTexture = tv;
         previewWidth = w;
         previewHeight = h;
         applyPreviewTransform(tv, w, h);
     }
 
-    public static void onPreviewSurfaceDestroyed() {
+    public static synchronized void onPreviewSurfaceDestroyed(TextureView tv) {
+        if (previewTexture != tv) {
+            return;
+        }
         stopCamera();
         previewTexture = null;
     }
@@ -319,12 +329,14 @@ public final class GateCamShim {
                 previewSurface = null;
             }
         } catch (Throwable ignored) {}
+        boundSurfaceTexture = null;
     }
 
     private static synchronized void createCapturePipelineLocked() {
         if (cameraDevice == null || previewTexture == null || !previewTexture.isAvailable()) return;
         try {
             SurfaceTexture st = previewTexture.getSurfaceTexture();
+            boundSurfaceTexture = st;
             st.setDefaultBufferSize(1280, 720);
             if (previewSurface != null) previewSurface.release();
             previewSurface = new Surface(st);
@@ -603,7 +615,7 @@ public final class GateCamShim {
                 targetFps = (want >= 120 && supports120Fps) ? 120 : 60;
             }
             if (o.has("shutterUs")) {
-                shutterUs = Math.max(0, o.optInt("shutterUs", 500));
+                shutterUs = Math.max(0, o.optInt("shutterUs", 0));
             }
             if (o.has("focusLocked") && !o.optBoolean("focusLocked", false)) {
                 focusLocked = false;

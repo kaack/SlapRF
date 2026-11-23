@@ -107,18 +107,20 @@ public final class GateCamHost extends Activity {
         previewView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
             @Override
             public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
+                if (activeHost != GateCamHost.this) return;
                 GateCamShim.onPreviewSurfaceAvailable(previewView, width, height);
                 ensureCameraStarted();
             }
 
             @Override
             public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
+                if (activeHost != GateCamHost.this) return;
                 GateCamShim.onPreviewSurfaceSizeChanged(previewView, width, height);
             }
 
             @Override
             public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
-                GateCamShim.onPreviewSurfaceDestroyed();
+                GateCamShim.onPreviewSurfaceDestroyed(previewView);
                 return true;
             }
 
@@ -210,6 +212,9 @@ public final class GateCamHost extends Activity {
     @Override
     protected void onDestroy() {
         if (webView != null) {
+            if (rootLayout != null) {
+                rootLayout.removeView(webView);
+            }
             webView.destroy();
             webView = null;
         }
