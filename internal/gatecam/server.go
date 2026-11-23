@@ -900,29 +900,38 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// LocalIPv4URLs returns `http://<lan-ip>:<port>` strings for active private IPv4 interfaces.
+// LocalIPv4URLs returns `http://<lan-ip>:<port>` strings for active private IPv4 interfaces,
+// falling back to a connectionless UDP route lookup on Android 11+ where SELinux restricts netlink.
 func LocalIPv4URLs(port int) []string {
 	if port <= 0 {
 		return nil
 	}
 	pStr := strconv.Itoa(port)
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return nil
-	}
 	var out []string
-	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-		addrs, _ := iface.Addrs()
-		for _, a := range addrs {
-			if ipNet, ok := a.(*net.IPNet); ok {
-				ip4 := ipNet.IP.To4()
-				if ip4 != nil && ip4.IsPrivate() {
-					out = append(out, "http://"+net.JoinHostPort(ip4.String(), pStr))
+	if ifaces, err := net.Interfaces(); err == nil {
+		for _, iface := range ifaces {
+			if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+				continue
+			}
+			addrs, _ := iface.Addrs()
+			for _, a := range addrs {
+				if ipNet, ok := a.(*net.IPNet); ok {
+					ip4 := ipNet.IP.To4()
+					if ip4 != nil && ip4.IsPrivate() {
+						out = append(out, "http://"+net.JoinHostPort(ip4.String(), pStr))
+					}
 				}
 			}
+		}
+	}
+	if len(out) == 0 {
+		if c, err := net.Dial("udp4", "192.0.2.1:80"); err == nil {
+			if ua, ok := c.LocalAddr().(*net.UDPAddr); ok && ua.IP != nil && !ua.IP.IsLoopback() {
+				if v4 := ua.IP.To4(); v4 != nil {
+					out = append(out, "http://"+net.JoinHostPort(v4.String(), pStr))
+				}
+			}
+			_ = c.Close()
 		}
 	}
 	return out

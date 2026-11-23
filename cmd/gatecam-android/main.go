@@ -224,7 +224,7 @@ func Java_app_slaprf_gatecam_GateCamHost_nativeStartServer(env *C.JNIEnv, clazz 
 	}
 
 	var ln net.Listener
-	for _, cand := range []string{"127.0.0.1:18095", "127.0.0.1:18096", "127.0.0.1:0"} {
+	for _, cand := range []string{"127.0.0.1:18094", "127.0.0.1:0"} {
 		ln, err = net.Listen("tcp4", cand)
 		if err == nil {
 			break
