@@ -1,10 +1,12 @@
 ---
 name: build-and-test
 description: >-
-  Build, serve, and test all SlapRF targets: live devserver (Portable Go backend mode and Pure
-  Browser WASM Demo mode), static GitHub Pages bundle (cmd/build-web), Hugo docs (cmd/build-docs),
-  cross-platform SlapRF Portable binaries (cmd/build-portable), unit tests (go test ./...), and
-  Playwright E2E suites (scripts/test-e2e.*). Activate before building artifacts or running tests.
+  Build, serve, instrument, and test all SlapRF targets: live devserver (Portable Go backend mode
+  and Pure Browser WASM Demo mode), diagnostic logging (slaprf.log, /v1/logs, TRACE-ERROR levels,
+  and live code instrumentation), static GitHub Pages bundle (cmd/build-web), Hugo docs
+  (cmd/build-docs), cross-platform SlapRF Portable binaries (cmd/build-portable), unit tests
+  (go test ./...), and Playwright E2E suites (scripts/test-e2e.*). Activate before building
+  artifacts, debugging runtime logs, or running tests.
 ---
 
 # Building, Serving & Testing SlapRF
@@ -105,7 +107,31 @@ bash ./scripts/test-e2e.sh --component-only --skip-build
 bash ./scripts/test-e2e.sh --api-only --skip-build
 ```
 
-## 4. Pre-Commit Hygiene Check
+## 4. Diagnostic Logging, Bug Corroboration & Live Instrumentation (`internal/applog`)
+
+SlapRF emits structured severity-leveled Go logs (`TRACE` < `DEBUG` < `INFO` [default] < `WARN` < `ERROR`) to stderr, a rolling side-by-side `slaprf.log` (`4 MB` active + `slaprf.log.1`), and Android `logcat` (`SlapRFGo`).
+
+1. **Corroborate Bug Reports Against Logs First**:
+   - Before hypothesizing from static code, inspect `slaprf.log` (next to the `slaprf` binary, `./slaprf.log` under `cmd/devserver`, or `/data/user/0/app.slaprf/files/slaprf.log` on Android) or query the live HTTP endpoint to match user-reported symptoms against actual timestamps, connection transitions, storage events, and protocol warnings:
+     ```bash
+     curl -fsS "http://127.0.0.1:8090/v1/logs?format=text&tailBytes=65536"
+     ```
+2. **Escalate Severity (`DEBUG` / `TRACE`) at Startup or Runtime**:
+   - Pass `-log-level debug` (or `trace`), `-log /custom/path/slaprf.log`, or `SLAPRF_LOG_LEVEL=debug` when launching `cmd/slaprf` or `cmd/devserver`.
+   - On an already-running server (desktop `:8090` or forwarded Android `:18090`), clear prior noise and raise severity without restarting:
+     ```bash
+     curl -fsS -X POST http://127.0.0.1:8090/v1/logs:clear
+     curl -fsS -X PUT http://127.0.0.1:8090/v1/logs/config \
+       -H "Content-Type: application/json" -d '{"level":"debug"}'
+     ```
+     (`DEBUG` adds HTTP request timing, non-default Hub `STATUS?` transitions, and TDMA slot bindings; `TRACE` adds high-rate per-poll and frame-level diagnostics. Restore `"info"` after triage.)
+3. **Iterative Live Instrumentation & Redeploy**:
+   - When live reproduction still lacks the signal needed to prove root cause, add targeted `applog` (`Debugf` / `Tracef`) instrumentation around the suspect state transition or decoder branch, rebuild/redeploy (`cmd/devserver`, `go run ./cmd/build-portable -skip-web -out ./dist/slaprf`, or `go run ./cmd/build-android -skip-web ...`), reproduce the issue, and verify both the failure mechanism and the fix in `slaprf.log`.
+   - Before committing, keep genuinely reusable operational diagnostics gated at `DEBUG` or `TRACE` and strip one-off temporary debug probes.
+
+---
+
+## 5. Pre-Commit Hygiene Check
 Before staging and committing:
 1. Revert timestamp-only edits to `internal/api/generated/version.json`:
    ```bash

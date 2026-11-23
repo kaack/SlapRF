@@ -6,7 +6,7 @@ Technical architecture, build entrypoints, and repository guardrails for AI codi
 
 SlapRF shares a single Go timing engine and TypeScript web UI across desktop, mobile, browser-only demo, and ESP32-C5 hardware targets:
 
-- `internal/`: Core Go packages (`domain`, `dsp`, `tracker`, `race`, `ingest`, `firmware`, `serialport`, `slaprf` + `slaprf/{usb,bluetooth}`, `laprf` + `laprf/usb`, `rotorhazard` + `rotorhazard/usb`, `multigp`, `api`, `storage`, `portable`, `devbundle`).
+- `internal/`: Core Go packages (`domain`, `dsp`, `tracker`, `race`, `ingest`, `firmware`, `serialport`, `slaprf` + `slaprf/{usb,bluetooth}`, `laprf` + `laprf/usb`, `rotorhazard` + `rotorhazard/usb`, `multigp`, `api`, `applog`, `storage`, `portable`, `devbundle`).
 - `web/`: Zero-framework TypeScript SPA (`web/src/`), styles (`web/styles/`), firmware asset staging (`web/firmware/`), and Chromium unit tests (`web/src/__tests__/`). Bundled directly by Go via `github.com/evanw/esbuild` (no `npm install` or `node_modules` required for web builds).
 - `docs-site/`: Hugo Extended (`0.170.1`, Hextra) documentation site served under `/docs/`, including an embedded WebSerial flasher (`cmd/build-docs`).
 - `cmd/devserver/`: Local development server (`127.0.0.1:8090`) that compiles TypeScript and WASM on the fly with `Cache-Control: no-store`.
@@ -25,8 +25,10 @@ SlapRF shares a single Go timing engine and TypeScript web UI across desktop, mo
    - Running `cmd/build-web` updates the build timestamp in `internal/api/generated/version.json`. Before committing source changes, revert timestamp-only diffs with `git checkout -- internal/api/generated/version.json`.
 3. **Windows Directory Locks on `_site`**:
    - `cmd/build-web` runs `os.RemoveAll("./_site")`. Never start a static file server with `./_site` as its current working directory on Windows; serve from the repo root (for example `python -m http.server 8099 --bind 127.0.0.1 -d ./_site`).
-4. **Evidence-First UI Debugging**:
-   - When diagnosing live browser UI, canvas, WebSerial, or WASM bugs, inspect runtime state over Chrome DevTools Protocol (`live-chrome-cdp` skill) before guessing from static code, and verify the fix in the live browser.
+4. **Evidence-First Debugging, Log Corroboration & Live Instrumentation**:
+   - Corroborate every bug report against actual diagnostic logs (`slaprf.log`, `GET /v1/logs?format=text`, `adb logcat -s SlapRFGo` on Android) and live runtime state (`/v1/*` + WS snapshots, or Chrome DevTools Protocol via `live-chrome-cdp` for browser UI/canvas/WASM) before guessing from static code.
+   - Escalate runtime log severity (`PUT /v1/logs/config` with `{"level":"debug"}` or `"trace"`, `-log-level debug`, or `SLAPRF_LOG_LEVEL=debug`) whenever deeper request, state, or wire-frame traces are needed.
+   - When existing logs do not isolate a live issue, instrument the suspect code path with targeted diagnostic logs (`internal/applog`), redeploy (`cmd/devserver`, `cmd/build-portable -skip-web`, or `cmd/build-android -skip-web`), corroborate the root cause and fix against live logs, and either keep high-value diagnostics gated at `DEBUG`/`TRACE` or remove temporary probes before committing.
 5. **Git Checkpointing, Conventional Commits & Rebase Hygiene**:
    - Commit locally early and often at logical, tested milestones using **Conventional Commits** (`feat(scope): ...`, `fix(scope): ...`, `docs: ...`, `ci: ...`, `test: ...`, `chore: ...`) so work-in-progress is never lost, even when holding `git push` for user preview.
    - Stage explicit file paths (never blind `git add -A`), and rebase/autosquash noisy unpushed fixup commits onto `origin/main` before pushing (`git-and-github-hygiene` skill).
@@ -36,7 +38,7 @@ SlapRF shares a single Go timing engine and TypeScript web UI across desktop, mo
 Activate the relevant skill below whenever a task involves environment setup, building/testing, API/protocol changes, UI performance, browser debugging, documentation/STE writing, screenshots, Android deployment, firmware, hardware bench debugging, Git hygiene, or CI/releases:
 
 - `dev-setup` (`.agents/skills/dev-setup/SKILL.md`): Install and verify Go, Hugo Extended, Playwright Chromium, `gh`, Python `pyserial`/`esptool`, Android SDK/NDK/JDK 17, and ESP-IDF `v5.5.1`.
-- `build-and-test` (`.agents/skills/build-and-test/SKILL.md`): Run `devserver`, build web/docs/portable/Android targets, and execute Go, frontend, and Playwright E2E test suites.
+- `build-and-test` (`.agents/skills/build-and-test/SKILL.md`): Run `devserver`, build web/docs/portable/Android targets, inspect/escalate `slaprf.log` & live instrumentation, and execute Go, frontend, and Playwright E2E test suites.
 - `api-and-specs-sync` (`.agents/skills/api-and-specs-sync/SKILL.md`): Keep `/v1` Go REST/WS handlers, WASM bridge, IndexedDB persistence, TypeScript models, and OpenAPI 3.1 / AsyncAPI 3.0 specs in lockstep.
 - `wire-protocols-and-sim-parity` (`.agents/skills/wire-protocols-and-sim-parity/SKILL.md`): Maintain byte-level parity across ESP32-C5 `0xC5` / `SLAPRF02` C structs, Go decoders, Android USB/BLE shims, RotorHazard/LapRF links, and simulators.
 - `realtime-ui-and-mobile-perf` (`.agents/skills/realtime-ui-and-mobile-perf/SKILL.md`): 60 FPS canvas telemetry rules, cached view `onActivate`/`onDeactivate` lifecycle, gesture-safe audio/TTS unlock, and mobile touch UX.

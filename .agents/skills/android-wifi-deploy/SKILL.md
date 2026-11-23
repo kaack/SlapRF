@@ -127,8 +127,12 @@ curl -fsS http://127.0.0.1:9223/json/list
 
 ## 5. Live Hub + Spoke Telemetry Triage Playbook (`127.0.0.1:18090`)
 
-Before asking the user to unplug physical timers from gates, isolate any "missing signal / 0 samples" bug across the 3 pipeline stages over the forwarded `127.0.0.1:18090` server:
+Before guessing from static code or asking the user to unplug physical timers from gates, corroborate the report in logs first, isolate across the 3 pipeline stages over forwarded `127.0.0.1:18090`, and instrument + redeploy if extra runtime signal is needed:
 
+0. **Step 0 — Corroborate with `slaprf.log` & `SlapRFGo` First, Instrument & Redeploy When Needed**:
+   - Pull `curl -fsS "http://127.0.0.1:18090/v1/logs?format=text"` and `adb -s <DEVICE> logcat -d -s SlapRFGo` immediately to verify startup restore, BLE auth/key recovery, `STATUS?` transitions, and TDMA slot-binding logs against what the user observed.
+   - If `INFO` logs are insufficient, clear the log and raise severity to `debug` or `trace` (`POST /v1/logs:clear` + `PUT /v1/logs/config` `{"level":"debug"}`) while reproducing live; restore `"info"` afterward.
+   - If existing log points still do not isolate a live bug, add targeted `applog` (`Debugf`/`Tracef`) probes in Go, run a fast ~2 s Go-only APK rebuild (`go run ./cmd/build-android -skip-web -arch arm64 -out dist/slaprf-android-arm64.apk`), `adb -s <DEVICE> install -r` + restart `app.slaprf/.SlapRFHost`, capture the corroborating log trace, and either keep durable diagnostics under `DEBUG`/`TRACE` or remove temporary probes before committing.
 1. **Stage 1 — Link & Hub `STATUS?` (`GET /v1/slaprf/{bluetooth,usb}/connections`)**:
    - Sample twice `1.5 s` apart and inspect `slots[0].lastStatus`:
      - `spokes[]` (`slot`, `fp`, `label`, `frames`, `msAgo`, `dbm`): verifies 2.4 GHz ESP-NOW Spoke -> Hub delivery.
