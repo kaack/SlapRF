@@ -413,6 +413,63 @@ func (e *Engine) recomputePracticeSessionLapsLocked(sess *domain.PracticeSession
 	}
 }
 
+func (e *Engine) syncActivePracticeLapsLocked(target *domain.PracticeSession) {
+	if target == nil || !target.Active || e.practiceState.ActiveSessionID != target.SessionID || e.isLiveRaceHeatActiveLocked() {
+		return
+	}
+	e.laps = cloneLaps(target.Laps)
+	e.overallBestSec = make(map[string]float64)
+	e.pilotBestSec = make(map[string]float64)
+	e.sectorHistory = make(map[string][]domain.SectorSplit)
+	for _, lap := range e.laps {
+		if lap.Invalidated {
+			continue
+		}
+		for _, split := range lap.Sectors {
+			pKey := pairKey(split.FromGateID, split.ToGateID)
+			sKey := sectorKey(lap.SlotIndex, pKey)
+			e.sectorHistory[sKey] = append(e.sectorHistory[sKey], split)
+			if split.SplitSeconds > 0 {
+				if e.overallBestSec[pKey] == 0 || split.SplitSeconds < e.overallBestSec[pKey] {
+					e.overallBestSec[pKey] = split.SplitSeconds
+				}
+				if e.pilotBestSec[sKey] == 0 || split.SplitSeconds < e.pilotBestSec[sKey] {
+					e.pilotBestSec[sKey] = split.SplitSeconds
+				}
+			}
+		}
+	}
+}
+
+func (e *Engine) clearActivePilotLapBuffersLocked(slotIndex int) {
+	delete(e.progress, slotIndex)
+	suffix := fmt.Sprintf(":%d", slotIndex)
+	for k := range e.lastAcceptedUs {
+		if strings.HasSuffix(k, suffix) {
+			delete(e.lastAcceptedUs, k)
+		}
+	}
+	for k := range e.passProfiles {
+		if k.slotIndex == slotIndex {
+			delete(e.passProfiles, k)
+		}
+	}
+	keptCrossings := make([]domain.GateCrossingEvent, 0, len(e.crossings))
+	for _, c := range e.crossings {
+		if c.SlotIndex != slotIndex {
+			keptCrossings = append(keptCrossings, c)
+		}
+	}
+	e.crossings = keptCrossings
+	keptFiltered := make([]domain.FilteredDetection, 0, len(e.filtered))
+	for _, f := range e.filtered {
+		if f.SlotIndex != slotIndex {
+			keptFiltered = append(keptFiltered, f)
+		}
+	}
+	e.filtered = keptFiltered
+}
+
 // computePracticeSessionSummariesLocked computes PilotTrackSummary rows strictly for the pilots
 // currently assigned in `sess.Pilots`, derived from `sess.Laps`.
 func (e *Engine) computePracticeSessionSummariesLocked(sess *domain.PracticeSession) []domain.PilotTrackSummary {
@@ -1320,30 +1377,101 @@ func (e *Engine) PracticeAction(req PracticeActionPayload) (domain.PracticeManag
 		}
 		e.recomputePracticeSessionLapsLocked(target)
 		target.UpdatedAt = now
-		if target.Active && e.practiceState.ActiveSessionID == target.SessionID && !e.isLiveRaceHeatActiveLocked() {
-			e.laps = cloneLaps(target.Laps)
-			e.overallBestSec = make(map[string]float64)
-			e.pilotBestSec = make(map[string]float64)
-			e.sectorHistory = make(map[string][]domain.SectorSplit)
-			for _, lap := range e.laps {
-				if lap.Invalidated {
-					continue
-				}
-				for _, split := range lap.Sectors {
-					pKey := pairKey(split.FromGateID, split.ToGateID)
-					sKey := sectorKey(lap.SlotIndex, pKey)
-					e.sectorHistory[sKey] = append(e.sectorHistory[sKey], split)
-					if split.SplitSeconds > 0 {
-						if e.overallBestSec[pKey] == 0 || split.SplitSeconds < e.overallBestSec[pKey] {
-							e.overallBestSec[pKey] = split.SplitSeconds
-						}
-						if e.pilotBestSec[sKey] == 0 || split.SplitSeconds < e.pilotBestSec[sKey] {
-							e.pilotBestSec[sKey] = split.SplitSeconds
-						}
-					}
-				}
+		e.syncActivePracticeLapsLocked(target)
+		target.Summaries = e.computePracticeSessionSummariesLocked(target)
+
+	case "delete_session_lap":
+		target := e.findPracticeSessionLocked(resolveTargetID())
+		if target == nil {
+			snap := clonePracticeManagerState(e.practiceState)
+			e.mu.Unlock()
+			return snap, fmt.Errorf("practice session not found")
+		}
+		delIdx := -1
+		var deletedSlot int
+		for i := range target.Laps {
+			if target.Laps[i].LapID == req.LapID {
+				delIdx = i
+				deletedSlot = target.Laps[i].SlotIndex
+				break
 			}
 		}
+		if delIdx < 0 {
+			snap := clonePracticeManagerState(e.practiceState)
+			e.mu.Unlock()
+			return snap, fmt.Errorf("lap %d not found in session", req.LapID)
+		}
+		target.Laps = append(target.Laps[:delIdx], target.Laps[delIdx+1:]...)
+		lapSeq := 0
+		for i := range target.Laps {
+			if target.Laps[i].SlotIndex == deletedSlot {
+				lapSeq++
+				target.Laps[i].LapNumber = lapSeq
+			}
+		}
+		if lapSeq == 0 {
+			keptCrossings := make([]domain.GateCrossingEvent, 0, len(target.Crossings))
+			for _, c := range target.Crossings {
+				if c.SlotIndex != deletedSlot {
+					keptCrossings = append(keptCrossings, c)
+				}
+			}
+			target.Crossings = keptCrossings
+			keptFiltered := make([]domain.FilteredDetection, 0, len(target.Filtered))
+			for _, f := range target.Filtered {
+				if f.SlotIndex != deletedSlot {
+					keptFiltered = append(keptFiltered, f)
+				}
+			}
+			target.Filtered = keptFiltered
+			if target.Active && e.practiceState.ActiveSessionID == target.SessionID && !e.isLiveRaceHeatActiveLocked() {
+				e.clearActivePilotLapBuffersLocked(deletedSlot)
+			}
+		}
+		e.recomputePracticeSessionLapsLocked(target)
+		target.UpdatedAt = now
+		e.syncActivePracticeLapsLocked(target)
+		target.Summaries = e.computePracticeSessionSummariesLocked(target)
+
+	case "clear_pilot_laps":
+		target := e.findPracticeSessionLocked(resolveTargetID())
+		if target == nil {
+			snap := clonePracticeManagerState(e.practiceState)
+			e.mu.Unlock()
+			return snap, fmt.Errorf("practice session not found")
+		}
+		if req.SlotIndex < 1 || req.SlotIndex > domain.MaxPilotPoolSize {
+			snap := clonePracticeManagerState(e.practiceState)
+			e.mu.Unlock()
+			return snap, fmt.Errorf("invalid pilot slotIndex %d", req.SlotIndex)
+		}
+		keptLaps := make([]domain.LapRecord, 0, len(target.Laps))
+		for _, l := range target.Laps {
+			if l.SlotIndex != req.SlotIndex {
+				keptLaps = append(keptLaps, l)
+			}
+		}
+		target.Laps = keptLaps
+		keptCrossings := make([]domain.GateCrossingEvent, 0, len(target.Crossings))
+		for _, c := range target.Crossings {
+			if c.SlotIndex != req.SlotIndex {
+				keptCrossings = append(keptCrossings, c)
+			}
+		}
+		target.Crossings = keptCrossings
+		keptFiltered := make([]domain.FilteredDetection, 0, len(target.Filtered))
+		for _, f := range target.Filtered {
+			if f.SlotIndex != req.SlotIndex {
+				keptFiltered = append(keptFiltered, f)
+			}
+		}
+		target.Filtered = keptFiltered
+		e.recomputePracticeSessionLapsLocked(target)
+		target.UpdatedAt = now
+		if target.Active && e.practiceState.ActiveSessionID == target.SessionID && !e.isLiveRaceHeatActiveLocked() {
+			e.clearActivePilotLapBuffersLocked(req.SlotIndex)
+		}
+		e.syncActivePracticeLapsLocked(target)
 		target.Summaries = e.computePracticeSessionSummariesLocked(target)
 
 	default:

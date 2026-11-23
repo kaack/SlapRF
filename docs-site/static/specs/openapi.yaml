@@ -1308,6 +1308,42 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
                 error: "practice session not found"
+    delete:
+      tags: [Practice Sessions]
+      summary: Delete recorded laps in a practice session (for one pilot or all pilots)
+      operationId: deletePracticeSessionLaps
+      parameters:
+        - name: slotIndex
+          in: query
+          required: false
+          description: Optional 1-based pilot slot index (`1`..`128`). When provided, deletes only that pilot's recorded laps, crossings, and in-progress lap; when omitted, clears all laps in the session.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 128
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid slotIndex query parameter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid slotIndex \"0\" (must be 1..128)"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session not found"
 
   /v1/practice/sessions/{sessionId}/laps/{lapId}:
     parameters:
@@ -1351,6 +1387,25 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
                 error: "request body must specify boolean field 'invalidated'"
+        "404":
+          description: Practice session or lap record not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session or lap not found"
+    delete:
+      tags: [Practice Sessions]
+      summary: Permanently delete a single recorded practice lap
+      operationId: deletePracticeSessionLap
+      responses:
+        "200":
+          description: Updated full state with remaining pilot laps renumbered sequentially
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
         "404":
           description: Practice session or lap record not found
           content:

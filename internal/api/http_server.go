@@ -236,7 +236,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /v1/practice/sessions/{sessionId}/pilots/{slotIndex}", wrap(s.handleUpdatePracticeSessionPilot))
 	mux.HandleFunc("DELETE /v1/practice/sessions/{sessionId}/pilots/{slotIndex}", wrap(s.handleDeletePracticeSessionPilot))
 	mux.HandleFunc("GET /v1/practice/sessions/{sessionId}/laps", s.handleGetPracticeSessionLaps)
+	mux.HandleFunc("DELETE /v1/practice/sessions/{sessionId}/laps", wrap(s.handleDeletePracticeSessionLaps))
 	mux.HandleFunc("PATCH /v1/practice/sessions/{sessionId}/laps/{lapId}", wrap(s.handlePatchPracticeSessionLap))
+	mux.HandleFunc("DELETE /v1/practice/sessions/{sessionId}/laps/{lapId}", wrap(s.handleDeletePracticeSessionLap))
 	mux.HandleFunc("POST /v1/practice/sessions/{sessionId}/laps/{lapId}", wrap(s.handlePracticeSessionLapCustomAction))
 	s.registerScopedTrackRoutes(mux, wrap, trackScopePractice)
 

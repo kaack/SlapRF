@@ -1,8 +1,11 @@
 import { Component } from "../../core/component";
-import { fmtAgo, fmtDelta, fmtRaceClock, fmtTime } from "../../core/format";
+import { esc, fmtAgo, fmtDelta, fmtRaceClock, fmtTime } from "../../core/format";
+import { icons } from "../../core/icons";
 import { currentLap, practiceStats } from "../../state/analysis";
+import { allLapsFor } from "../../state/selectors";
 import { ApiClient } from "../../services/api_client";
 import { AppStore } from "../../state/store";
+import { openConfirmModal } from "../../widgets/ConfirmModal";
 import { LapTimesCard } from "../../widgets/LapTimesCard";
 import { renderStatTiles, StatTile } from "../../widgets/markup";
 import { PilotLaps } from "../../widgets/PilotLaps";
@@ -19,10 +22,13 @@ const NEGLIGIBLE_SEC = 0.01;
  */
 export class PilotPanel extends Component {
   private readonly store: AppStore;
+  private readonly api: ApiClient;
+  private clearFlashTimer: number | null = null;
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
     super(el);
     this.store = store;
+    this.api = api;
 
     el.innerHTML = `
       <div class="stat-row" data-slot="stats" data-practice-mobile-pane="overview"></div>
@@ -32,20 +38,51 @@ export class PilotPanel extends Component {
         <div data-slot="records"></div>
       </section>
       <section class="card card-flush practice-laps-card practice-desktop-laps-card">
-        <header class="card-head"><div class="settings-intro"><h2>Laps</h2><p>Completed laps, newest first, with section splits compared to personal best.</p></div></header>
+        <header class="card-head">
+          <div class="settings-intro"><h2>Laps</h2><p>Completed laps, newest first. Click a lap to scratch or delete it.</p></div>
+          <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="clear-pilot-laps" title="Clear pilot laps" aria-label="Clear pilot laps">
+            ${icons.trash(17)}
+          </button>
+        </header>
         <div data-slot="laps"></div>
       </section>`;
+
+    this.listen(el, "click", (e) => {
+      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-action="clear-pilot-laps"]');
+      if (!btn || btn.disabled) return;
+      e.stopPropagation();
+      const pilot = this.store.pilot(this.store.selectedPilot);
+      if (!pilot) return;
+      this.confirmClearPilotLaps(pilot.slotIndex, btn);
+    });
 
     this.adopt(new LapTimesCard(this.slot("laptimes"), store, { slotIndex: () => store.selectedPilot }));
     this.adopt(new SectionRecords(this.slot("records"), store));
     this.adopt(
-      new PilotLaps(this.slot("laps"), store, (lapId) => {
-        const sid = store.selectedPracticeSession?.sessionId;
-        void api.practiceAction({ action: "toggle_session_lap", sessionId: sid, lapId }).catch(() => {
-          // Ignore if no backend connected in standalone test
-        });
+      new PilotLaps(this.slot("laps"), store, {
+        onToggleLap: (lapId) => {
+          const sid = store.selectedPracticeSession?.sessionId;
+          void api.practiceAction({ action: "toggle_session_lap", sessionId: sid, lapId }).catch(() => {
+            // Ignore if no backend connected in standalone test
+          });
+        },
+        onDeleteLap: (lapId) => {
+          const sid = store.selectedPracticeSession?.sessionId;
+          void api.practiceAction({ action: "delete_session_lap", sessionId: sid, lapId }).catch(() => {
+            // Ignore if no backend connected in standalone test
+          });
+        },
+        onClearPilotLaps: (slotIndex) => {
+          this.confirmClearPilotLaps(slotIndex);
+        },
       })
     );
+
+    this.onDispose(() => {
+      if (this.clearFlashTimer !== null) {
+        window.clearTimeout(this.clearFlashTimer);
+      }
+    });
 
     const timer = window.setInterval(() => this.renderStats(), CLOCK_REFRESH_MS);
     this.onDispose(() => window.clearInterval(timer));
@@ -55,11 +92,57 @@ export class PilotPanel extends Component {
     this.renderStats();
   }
 
+  private confirmClearPilotLaps(slotIndex: number, flashBtn?: HTMLButtonElement): void {
+    const pilot = this.store.pilot(slotIndex);
+    if (!pilot) return;
+    const lapCount = allLapsFor(this.store, slotIndex).length;
+    const sess = this.store.selectedPracticeSession;
+    const sessLabel = sess ? `<strong>${esc(sess.name)}</strong>` : "this practice session";
+    openConfirmModal({
+      title: "Clear Pilot Laps?",
+      messageHtml: `<p>Delete all ${lapCount > 0 ? `${lapCount} ` : ""}recorded lap${lapCount === 1 ? "" : "s"} for <strong>${esc(pilot.callsign)}</strong> in ${sessLabel}?</p>`,
+      confirmLabel: "Clear Laps",
+      danger: true,
+      onConfirm: async () => {
+        if (flashBtn) {
+          flashBtn.classList.remove("btn-ghost");
+          flashBtn.classList.add("btn-armed");
+          if (this.clearFlashTimer !== null) {
+            window.clearTimeout(this.clearFlashTimer);
+          }
+          this.clearFlashTimer = window.setTimeout(() => {
+            this.clearFlashTimer = null;
+            flashBtn.classList.remove("btn-armed");
+            flashBtn.classList.add("btn-ghost");
+          }, 350);
+        }
+        const curSess = this.store.selectedPracticeSession;
+        this.store.clearPracticePilotLaps(slotIndex);
+        await this.api
+          .practiceAction({
+            action: "clear_pilot_laps",
+            sessionId: curSess?.sessionId,
+            slotIndex,
+          })
+          .catch(() => {
+            // Ignore if no backend connected in standalone test
+          });
+      },
+    });
+  }
+
   private renderStats(): void {
     const pilot = this.store.pilot(this.store.selectedPilot);
+    const clearBtn = this.el.querySelector<HTMLButtonElement>('[data-action="clear-pilot-laps"]');
     if (!pilot) {
+      if (clearBtn) clearBtn.disabled = true;
       this.slot("stats").innerHTML = "";
       return;
+    }
+    if (clearBtn) {
+      clearBtn.disabled =
+        allLapsFor(this.store, pilot.slotIndex).length === 0 &&
+        !currentLap(this.store, pilot.slotIndex);
     }
     const s = practiceStats(this.store, pilot);
     this.slot("stats").innerHTML = renderStatTiles([

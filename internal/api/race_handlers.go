@@ -596,6 +596,82 @@ func (s *Server) handlePracticeSessionLapCustomAction(w http.ResponseWriter, r *
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
+// handleDeletePracticeSessionLap serves `DELETE /v1/practice/sessions/{sessionId}/laps/{lapId}`.
+func (s *Server) handleDeletePracticeSessionLap(w http.ResponseWriter, r *http.Request) {
+	rawID := r.PathValue("sessionId")
+	lapID, ok := parseUint64PathValue(w, r, "lapId")
+	if !ok {
+		return
+	}
+	eng := s.activeEngine()
+	sess, targetID := resolvePracticeSession(eng, rawID)
+	if sess == nil {
+		writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("practice session %q not found", rawID))
+		return
+	}
+	found := false
+	for i := range sess.Laps {
+		if sess.Laps[i].LapID == lapID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("lap %d not found in practice session %q", lapID, targetID))
+		return
+	}
+	if _, err := eng.PracticeAction(tracker.PracticeActionPayload{
+		Action:    "delete_session_lap",
+		SessionID: targetID,
+		LapID:     lapID,
+	}); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+// handleDeletePracticeSessionLaps serves `DELETE /v1/practice/sessions/{sessionId}/laps`
+// (clearing either a single pilot's laps when `?slotIndex=N` is provided, or all session laps).
+func (s *Server) handleDeletePracticeSessionLaps(w http.ResponseWriter, r *http.Request) {
+	rawID := r.PathValue("sessionId")
+	eng := s.activeEngine()
+	sess, targetID := resolvePracticeSession(eng, rawID)
+	if sess == nil {
+		writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("practice session %q not found", rawID))
+		return
+	}
+	rawSlot := strings.TrimSpace(r.URL.Query().Get("slotIndex"))
+	if rawSlot != "" {
+		slotIndex, err := strconv.Atoi(rawSlot)
+		if err != nil || slotIndex < 1 || slotIndex > domain.MaxPilotPoolSize {
+			writeErrorJSON(w, http.StatusBadRequest, fmt.Sprintf("invalid slotIndex %q (must be 1..%d)", rawSlot, domain.MaxPilotPoolSize))
+			return
+		}
+		if _, err := eng.PracticeAction(tracker.PracticeActionPayload{
+			Action:    "clear_pilot_laps",
+			SessionID: targetID,
+			SlotIndex: slotIndex,
+		}); err != nil {
+			writeEngineError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+		return
+	}
+	if _, err := eng.PracticeAction(tracker.PracticeActionPayload{
+		Action:    "clear_session_laps",
+		SessionID: targetID,
+	}); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	if eng.IsRaceArmed() && s.hooks.OnTimingStarted != nil {
+		s.hooks.OnTimingStarted()
+	}
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
 // --- Race Sessions Resource Hierarchy (`/v1/race/sessions` - symmetric with `/v1/practice/sessions`) ---
 
 func findRaceSessionSnapshot(eng *tracker.Engine, rawID string) (*domain.RaceTournamentState, string) {

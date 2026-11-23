@@ -834,7 +834,9 @@ export interface PracticeActionPayload {
     | "remove_session_pilot"
     | "set_session_pilot_channel"
     | "clear_session_laps"
-    | "toggle_session_lap";
+    | "clear_pilot_laps"
+    | "toggle_session_lap"
+    | "delete_session_lap";
   sessionId?: string;
   name?: string;
   tags?: string[];

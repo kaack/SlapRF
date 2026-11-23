@@ -274,3 +274,155 @@ func TestPracticeSessionPauseResumeAndStopLifecycle(t *testing.T) {
 		t.Fatalf("expected inactive unpaused session after stop_session, got %+v", ps)
 	}
 }
+
+func feedSimulatedRun(t *testing.T, e *Engine, slotIndex int, startSec float64, lapSecs []float64) {
+	t.Helper()
+	var pilotIdx = -1
+	for i, p := range e.pilots {
+		if p.SlotIndex == slotIndex {
+			pilotIdx = i
+			break
+		}
+	}
+	if pilotIdx < 0 {
+		t.Fatalf("slotIndex %d not found", slotIndex)
+	}
+	samples := []struct {
+		dtUs uint64
+		rssi float32
+	}{
+		{0, -85}, {20_000, -85}, {40_000, -72}, {60_000, -56},
+		{80_000, -46}, {100_000, -41}, {120_000, -40}, {140_000, -41},
+		{160_000, -46}, {180_000, -56}, {200_000, -72}, {220_000, -85},
+		{240_000, -85}, {260_000, -85}, {280_000, -85}, {300_000, -85},
+		{320_000, -85}, {340_000, -85}, {360_000, -85},
+	}
+	emitPass := func(timerID uint8, atSec float64) {
+		baseUs := uint64(atSec * 1e6)
+		for _, s := range samples {
+			var frame domain.TimerTelemetryFrame
+			frame.TimerID = timerID
+			frame.TimestampUs = baseUs + s.dtUs
+			for k := range frame.RSSI {
+				frame.RSSI[k] = -90
+			}
+			frame.RSSI[pilotIdx] = s.rssi
+			e.IngestTelemetryFrame(frame)
+		}
+	}
+	curSec := startSec
+	emitPass(e.gates[0].AssignedTimerID, curSec)
+	for _, lapSec := range lapSecs {
+		q := lapSec / 4.0
+		emitPass(e.gates[1].AssignedTimerID, curSec+q)
+		emitPass(e.gates[2].AssignedTimerID, curSec+2*q)
+		emitPass(e.gates[3].AssignedTimerID, curSec+3*q)
+		emitPass(e.gates[0].AssignedTimerID, curSec+lapSec)
+		curSec += lapSec
+	}
+}
+
+func TestPracticeSessionDeleteLapAndClearPilotLaps(t *testing.T) {
+	e := NewEngine()
+	ps := e.PracticeSnapshot()
+	sid := ps.Sessions[0].SessionID
+
+	// Pilot 1 records 3 laps (16.0s, 11.2s PB, 13.6s); Pilot 2 records 2 laps (12.0s, 14.0s).
+	feedSimulatedRun(t, e, 1, 10.0, []float64{16.0, 11.2, 13.6})
+	feedSimulatedRun(t, e, 2, 60.0, []float64{12.0, 14.0})
+
+	ps = e.PracticeSnapshot()
+	if len(ps.Sessions[0].Laps) != 5 {
+		t.Fatalf("expected 5 total laps, got %d", len(ps.Sessions[0].Laps))
+	}
+	pilot1FastestLapID := ps.Sessions[0].Laps[1].LapID
+
+	// Delete Pilot 1's 11.2s PB lap -> remaining Pilot 1 laps renumber 1..2, 13.6s becomes PB,
+	// and Pilot 2's 12.0s lap sectors become OVERALL_BEST.
+	ps, err := e.PracticeAction(PracticeActionPayload{
+		Action:    "delete_session_lap",
+		SessionID: sid,
+		LapID:     pilot1FastestLapID,
+	})
+	if err != nil {
+		t.Fatalf("delete_session_lap failed: %v", err)
+	}
+	if len(ps.Sessions[0].Laps) != 4 {
+		t.Fatalf("expected 4 laps after deleting 1 lap, got %d", len(ps.Sessions[0].Laps))
+	}
+	var p1Laps []domain.LapRecord
+	var p2Laps []domain.LapRecord
+	for _, l := range ps.Sessions[0].Laps {
+		if l.SlotIndex == 1 {
+			p1Laps = append(p1Laps, l)
+		} else if l.SlotIndex == 2 {
+			p2Laps = append(p2Laps, l)
+		}
+	}
+	if len(p1Laps) != 2 || p1Laps[0].LapNumber != 1 || p1Laps[1].LapNumber != 2 {
+		t.Fatalf("expected Pilot 1 laps sequentially renumbered 1..2, got %+v", p1Laps)
+	}
+	if !p1Laps[1].IsBestLap || p1Laps[0].IsBestLap {
+		t.Fatalf("expected Pilot 1's second remaining lap (13.6s) to become PB, got %+v", p1Laps)
+	}
+	if len(p2Laps) != 2 || len(p2Laps[0].Sectors) == 0 || p2Laps[0].Sectors[0].Badge != domain.BadgeOverallBest {
+		t.Fatalf("expected Pilot 2's 12.0s lap sectors promoted to OVERALL_BEST, got %+v", p2Laps)
+	}
+
+	// Deleting an already-deleted lap returns an error.
+	if _, err := e.PracticeAction(PracticeActionPayload{
+		Action:    "delete_session_lap",
+		SessionID: sid,
+		LapID:     pilot1FastestLapID,
+	}); err == nil {
+		t.Fatalf("expected error deleting non-existent lapId %d", pilot1FastestLapID)
+	}
+
+	// Start a half-finished lap for Pilot 1 so e.progress[1] is populated, then clear_pilot_laps for SlotIndex 1.
+	for step, timerID := range []uint8{e.gates[0].AssignedTimerID, e.gates[1].AssignedTimerID} {
+		baseUs := uint64((130.0 + float64(step)*3.5) * 1e6)
+		for _, dt := range []struct {
+			dtUs uint64
+			rssi float32
+		}{
+			{0, -85}, {40_000, -70}, {80_000, -45}, {120_000, -40}, {160_000, -45},
+			{200_000, -70}, {240_000, -85}, {280_000, -85}, {320_000, -85},
+		} {
+			var frame domain.TimerTelemetryFrame
+			frame.TimerID = timerID
+			frame.TimestampUs = baseUs + dt.dtUs
+			for k := range frame.RSSI {
+				frame.RSSI[k] = -90
+			}
+			frame.RSSI[0] = dt.rssi
+			e.IngestTelemetryFrame(frame)
+		}
+	}
+	if _, hasProg := e.progress[1]; !hasProg {
+		t.Fatalf("expected active in-progress lap state for Pilot 1 before clear_pilot_laps")
+	}
+
+	ps, err = e.PracticeAction(PracticeActionPayload{
+		Action:    "clear_pilot_laps",
+		SessionID: sid,
+		SlotIndex: 1,
+	})
+	if err != nil {
+		t.Fatalf("clear_pilot_laps failed: %v", err)
+	}
+	if _, hasProg := e.progress[1]; hasProg {
+		t.Fatalf("expected Pilot 1 in-progress lap state cleared on clear_pilot_laps")
+	}
+	for _, l := range ps.Sessions[0].Laps {
+		if l.SlotIndex == 1 {
+			t.Fatalf("expected 0 laps remaining for Pilot 1, got %+v", l)
+		}
+	}
+	if len(ps.Sessions[0].Laps) != 2 {
+		t.Fatalf("expected Pilot 2's 2 laps preserved after clearing Pilot 1, got %d", len(ps.Sessions[0].Laps))
+	}
+	_, _, activeLaps, _, _ := e.StateSnapshot()
+	if len(activeLaps) != 2 {
+		t.Fatalf("expected active engine laps synced to 2 remaining laps, got %d", len(activeLaps))
+	}
+}

@@ -752,6 +752,48 @@ export class PracticeView extends Component {
       return;
     }
 
+    const lapDeleteBtn = target.closest<HTMLButtonElement>("[data-practice-delete-lap]");
+    if (lapDeleteBtn) {
+      const lapId = Number(lapDeleteBtn.dataset.practiceDeleteLap ?? "0");
+      if (lapId > 0) {
+        this.store.deletePracticeLap(lapId);
+        const sid = this.store.selectedPracticeSession?.sessionId;
+        void this.api
+          .practiceAction({ action: "delete_session_lap", sessionId: sid, lapId })
+          .catch(this.reportErr);
+      }
+      return;
+    }
+
+    const clearPilotLapsBtn = target.closest<HTMLButtonElement>("[data-practice-clear-pilot-laps]");
+    if (clearPilotLapsBtn && !clearPilotLapsBtn.disabled) {
+      const slotIndex = Number(clearPilotLapsBtn.dataset.practiceClearPilotLaps ?? "0");
+      const pilot = slotIndex > 0 ? this.workspaceStore.pilot(slotIndex) : undefined;
+      if (pilot) {
+        const lapCount = allLapsFor(this.workspaceStore, pilot.slotIndex).length;
+        const sess = this.store.selectedPracticeSession;
+        const sessLabel = sess ? `<strong>${esc(sess.name)}</strong>` : "this practice session";
+        openConfirmModal({
+          title: "Clear Pilot Laps?",
+          messageHtml: `<p>Delete all ${lapCount > 0 ? `${lapCount} ` : ""}recorded lap${lapCount === 1 ? "" : "s"} for <strong>${esc(pilot.callsign)}</strong> in ${sessLabel}?</p>`,
+          confirmLabel: "Clear Laps",
+          danger: true,
+          onConfirm: async () => {
+            const curSess = this.store.selectedPracticeSession;
+            this.store.clearPracticePilotLaps(pilot.slotIndex);
+            await this.api
+              .practiceAction({
+                action: "clear_pilot_laps",
+                sessionId: curSess?.sessionId,
+                slotIndex: pilot.slotIndex,
+              })
+              .catch(this.reportErr);
+          },
+        });
+      }
+      return;
+    }
+
     const lapToggleEl = target.closest<HTMLElement>("[data-practice-toggle-lap]");
     if (lapToggleEl) {
       const lapId = Number(lapToggleEl.dataset.practiceToggleLap ?? "0");
@@ -2842,7 +2884,11 @@ export class PracticeView extends Component {
             <table class="table table-compact practice-sectors-table">
               <thead>
                 <tr>
-                  <th>Lap</th>
+                  ${
+                    pilot
+                      ? `<th class="col-lap-head"><span class="th-lap-head"><span>Lap</span><button type="button" class="lap-clear-all-btn" data-practice-clear-pilot-laps="${pilot.slotIndex}" title="Clear all laps for ${esc(pilot.callsign)}" aria-label="Clear all laps for ${esc(pilot.callsign)}">${icons.trash(12)}</button></span></th>`
+                      : `<th>Lap</th>`
+                  }
                   ${checkedCols
                     .map(
                       (c) =>
@@ -2879,18 +2925,35 @@ export class PracticeView extends Component {
                           : "best";
                     const toggleTitle = isInvalid
                       ? `Restore Lap ${lap.lapNumber}`
-                      : `Scratch Lap ${lap.lapNumber} (exclude from stats)`;
-                    return `<tr class="${isInvalid ? "is-invalidated" : ""}" data-practice-toggle-lap="${lap.lapId}" title="${esc(toggleTitle)}">
-                      <td class="mono col-mobile-lap-num">
-                        <button
+                      : `Scratch Lap ${lap.lapNumber} (click again to restore or delete)`;
+                    const lapNumContent = isInvalid
+                      ? `<span class="lap-num-cell"><button
                           type="button"
                           role="checkbox"
-                          aria-checked="${isInvalid ? "false" : "true"}"
+                          aria-checked="false"
                           class="lap-num-toggle"
                           data-practice-toggle-lap="${lap.lapId}"
                           title="${esc(toggleTitle)}"
                           aria-label="${esc(toggleTitle)}"
-                        >${lap.lapNumber}</button>
+                        >${lap.lapNumber}</button><button
+                          type="button"
+                          class="lap-delete-btn"
+                          data-practice-delete-lap="${lap.lapId}"
+                          title="Delete Lap ${lap.lapNumber}"
+                          aria-label="Delete Lap ${lap.lapNumber}"
+                        >${icons.trash(13)}</button></span>`
+                      : `<button
+                          type="button"
+                          role="checkbox"
+                          aria-checked="true"
+                          class="lap-num-toggle"
+                          data-practice-toggle-lap="${lap.lapId}"
+                          title="${esc(toggleTitle)}"
+                          aria-label="${esc(toggleTitle)}"
+                        >${lap.lapNumber}</button>`;
+                    return `<tr class="${isInvalid ? "is-invalidated" : ""}" data-lap-row="${lap.lapId}" data-practice-toggle-lap="${lap.lapId}" title="${esc(toggleTitle)}">
+                      <td class="mono col-mobile-lap-num">
+                        ${lapNumContent}
                       </td>
                       ${cells}
                       <td class="num mono strong ${!isInvalid && lap.isBestLap ? "tone-good" : ""}">${fmtTime(lap.lapTimeSec)}</td>

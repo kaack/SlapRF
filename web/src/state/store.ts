@@ -1191,6 +1191,12 @@ export class AppStore {
       togglePracticeLap: {
         value: base.togglePracticeLap.bind(base),
       },
+      deletePracticeLap: {
+        value: base.deletePracticeLap.bind(base),
+      },
+      clearPracticePilotLaps: {
+        value: base.clearPracticePilotLaps.bind(base),
+      },
     };
     if (overrides.rules) {
       props.rules = { get: overrides.rules, enumerable: true };
@@ -1779,71 +1785,142 @@ export class AppStore {
     this.emit("practice", "config", "laps", "crossings", "selection");
   }
 
+  private recomputePracticeLapList(list: LapRecord[]): void {
+    const bestBySlot = new Map<number, number>();
+    const overallBestSec = new Map<string, number>();
+    const pilotBestSec = new Map<string, number>();
+
+    for (const l of list) {
+      if (l.invalidated || !(l.lapTimeSec > 0)) continue;
+      const curBest = bestBySlot.get(l.slotIndex);
+      if (curBest === undefined || l.lapTimeSec < curBest) {
+        bestBySlot.set(l.slotIndex, l.lapTimeSec);
+      }
+      for (const s of l.sectors ?? []) {
+        if (!(s.splitSeconds > 0)) continue;
+        const pKey = `${s.fromGateId}>${s.toGateId}`;
+        const sKey = `${l.slotIndex}:${pKey}`;
+        const oCur = overallBestSec.get(pKey);
+        if (oCur === undefined || s.splitSeconds < oCur) overallBestSec.set(pKey, s.splitSeconds);
+        const pCur = pilotBestSec.get(sKey);
+        if (pCur === undefined || s.splitSeconds < pCur) pilotBestSec.set(sKey, s.splitSeconds);
+      }
+    }
+
+    for (const l of list) {
+      if (l.invalidated) {
+        l.isBestLap = false;
+        continue;
+      }
+      const bestLap = bestBySlot.get(l.slotIndex) ?? 0;
+      if (bestLap > 0) {
+        l.isBestLap = Math.abs(l.lapTimeSec - bestLap) < 0.0005;
+        l.deltaToBest = l.isBestLap ? 0 : Math.round((l.lapTimeSec - bestLap) * 1000) / 1000;
+      }
+      for (const s of l.sectors ?? []) {
+        const pKey = `${s.fromGateId}>${s.toGateId}`;
+        const sKey = `${l.slotIndex}:${pKey}`;
+        const pBest = pilotBestSec.get(sKey) ?? 0;
+        const oBest = overallBestSec.get(pKey) ?? 0;
+        s.deltaToBestSec = pBest > 0 ? Math.round((s.splitSeconds - pBest) * 1000) / 1000 : 0;
+        if (oBest > 0 && s.splitSeconds <= oBest + 0.0005) {
+          s.badge = "OVERALL_BEST";
+        } else if (pBest > 0 && s.splitSeconds <= pBest + 0.0005) {
+          s.badge = "PERSONAL_BEST";
+        } else if (pBest > 0 && s.splitSeconds > pBest * 1.1) {
+          s.badge = "OFF_PACE";
+        } else {
+          s.badge = "NORMAL";
+        }
+      }
+    }
+  }
+
   /** Optimistically toggles `invalidated` on a practice lap and recomputes personal bests and badges across valid laps. */
   public togglePracticeLap(lapId: number): void {
-    const recomputeList = (list: LapRecord[]): void => {
-      const bestBySlot = new Map<number, number>();
-      const overallBestSec = new Map<string, number>();
-      const pilotBestSec = new Map<string, number>();
-
+    const toggleIn = (list: LapRecord[]): void => {
       for (const l of list) {
         if (l.lapId === lapId) {
           l.invalidated = !l.invalidated;
         }
       }
-
-      for (const l of list) {
-        if (l.invalidated || !(l.lapTimeSec > 0)) continue;
-        const curBest = bestBySlot.get(l.slotIndex);
-        if (curBest === undefined || l.lapTimeSec < curBest) {
-          bestBySlot.set(l.slotIndex, l.lapTimeSec);
-        }
-        for (const s of l.sectors ?? []) {
-          if (!(s.splitSeconds > 0)) continue;
-          const pKey = `${s.fromGateId}>${s.toGateId}`;
-          const sKey = `${l.slotIndex}:${pKey}`;
-          const oCur = overallBestSec.get(pKey);
-          if (oCur === undefined || s.splitSeconds < oCur) overallBestSec.set(pKey, s.splitSeconds);
-          const pCur = pilotBestSec.get(sKey);
-          if (pCur === undefined || s.splitSeconds < pCur) pilotBestSec.set(sKey, s.splitSeconds);
-        }
-      }
-
-      for (const l of list) {
-        if (l.invalidated) {
-          l.isBestLap = false;
-          continue;
-        }
-        const bestLap = bestBySlot.get(l.slotIndex) ?? 0;
-        if (bestLap > 0) {
-          l.isBestLap = Math.abs(l.lapTimeSec - bestLap) < 0.0005;
-          l.deltaToBest = l.isBestLap ? 0 : Math.round((l.lapTimeSec - bestLap) * 1000) / 1000;
-        }
-        for (const s of l.sectors ?? []) {
-          const pKey = `${s.fromGateId}>${s.toGateId}`;
-          const sKey = `${l.slotIndex}:${pKey}`;
-          const pBest = pilotBestSec.get(sKey) ?? 0;
-          const oBest = overallBestSec.get(pKey) ?? 0;
-          s.deltaToBestSec = pBest > 0 ? Math.round((s.splitSeconds - pBest) * 1000) / 1000 : 0;
-          if (oBest > 0 && s.splitSeconds <= oBest + 0.0005) {
-            s.badge = "OVERALL_BEST";
-          } else if (pBest > 0 && s.splitSeconds <= pBest + 0.0005) {
-            s.badge = "PERSONAL_BEST";
-          } else if (pBest > 0 && s.splitSeconds > pBest * 1.1) {
-            s.badge = "OFF_PACE";
-          } else {
-            s.badge = "NORMAL";
-          }
-        }
-      }
+      this.recomputePracticeLapList(list);
     };
 
-    recomputeList(this._laps);
     const sess = this.selectedPracticeSession;
+    const isActiveSelected = !sess || sess.sessionId === this.activePracticeSession?.sessionId;
+    if (isActiveSelected) {
+      toggleIn(this._laps);
+    }
     if (sess && sess.laps !== this._laps) {
-      recomputeList(sess.laps);
+      toggleIn(sess.laps);
     }
     this.emit("laps", "practice");
+  }
+
+  /** Optimistically removes a single practice lap, renumbers remaining laps for that pilot, and recomputes bests/badges. */
+  public deletePracticeLap(lapId: number): void {
+    let deletedSlot = 0;
+    const removeFrom = (list: LapRecord[]): number => {
+      const idx = list.findIndex((l) => l.lapId === lapId);
+      if (idx < 0) return -1;
+      const slot = list[idx].slotIndex;
+      list.splice(idx, 1);
+      let seq = 0;
+      for (const l of list) {
+        if (l.slotIndex === slot) {
+          seq++;
+          l.lapNumber = seq;
+        }
+      }
+      this.recomputePracticeLapList(list);
+      return seq;
+    };
+
+    const sess = this.selectedPracticeSession;
+    const isActiveSelected = !sess || sess.sessionId === this.activePracticeSession?.sessionId;
+    const targetLap =
+      sess?.laps.find((l) => l.lapId === lapId) ??
+      (isActiveSelected ? this._laps.find((l) => l.lapId === lapId) : undefined);
+    if (targetLap) {
+      deletedSlot = targetLap.slotIndex;
+    }
+
+    const remActive = isActiveSelected ? removeFrom(this._laps) : -1;
+    let remSess = remActive;
+    if (sess && sess.laps !== this._laps) {
+      remSess = removeFrom(sess.laps);
+    }
+    if (deletedSlot > 0 && (remActive === 0 || remSess === 0)) {
+      if (isActiveSelected && remActive === 0) {
+        this._crossings = this._crossings.filter((c) => c.slotIndex !== deletedSlot);
+        this._filtered = this._filtered.filter((f) => f.slotIndex !== deletedSlot);
+      }
+      if (sess && remSess === 0) {
+        sess.crossings = sess.crossings.filter((c) => c.slotIndex !== deletedSlot);
+        sess.filtered = sess.filtered.filter((f) => f.slotIndex !== deletedSlot);
+      }
+    }
+    this.emit("laps", "crossings", "practice");
+  }
+
+  /** Optimistically clears all recorded laps and crossings for `slotIndex` in the selected practice session. */
+  public clearPracticePilotLaps(slotIndex: number): void {
+    const sess = this.selectedPracticeSession;
+    const isActiveSelected = !sess || sess.sessionId === this.activePracticeSession?.sessionId;
+    if (isActiveSelected) {
+      this._laps = this._laps.filter((l) => l.slotIndex !== slotIndex);
+      this._crossings = this._crossings.filter((c) => c.slotIndex !== slotIndex);
+      this._filtered = this._filtered.filter((f) => f.slotIndex !== slotIndex);
+      this.recomputePracticeLapList(this._laps);
+    }
+    if (sess) {
+      sess.laps = sess.laps.filter((l) => l.slotIndex !== slotIndex);
+      sess.crossings = sess.crossings.filter((c) => c.slotIndex !== slotIndex);
+      sess.filtered = sess.filtered.filter((f) => f.slotIndex !== slotIndex);
+      this.recomputePracticeLapList(sess.laps);
+    }
+    this.emit("laps", "crossings", "practice");
   }
 
   public ingestRace(

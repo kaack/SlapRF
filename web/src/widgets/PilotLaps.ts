@@ -1,5 +1,6 @@
 import { Component } from "../core/component";
 import { esc, fmtDelta, fmtTime } from "../core/format";
+import { icons } from "../core/icons";
 import { sectionKey } from "../state/analysis";
 import { allLapsFor, gateColor, sectionLabel, sectionShort } from "../state/selectors";
 import { AppStore } from "../state/store";
@@ -41,17 +42,53 @@ function formatLapWallClock(store: AppStore, lap: LapRecord): string {
   });
 }
 
+export interface PilotLapsCallbacks {
+  onToggleLap?: (lapId: number) => void;
+  onDeleteLap?: (lapId: number) => void;
+  onClearPilotLaps?: (slotIndex: number) => void;
+}
+
 /** The selected pilot's completed laps, newest first, with every section split. */
 export class PilotLaps extends Component {
   private readonly store: AppStore;
   private readonly onToggleLap?: (lapId: number) => void;
+  private readonly onDeleteLap?: (lapId: number) => void;
+  private readonly onClearPilotLaps?: (slotIndex: number) => void;
 
-  constructor(el: HTMLElement, store: AppStore, onToggleLap?: (lapId: number) => void) {
+  constructor(
+    el: HTMLElement,
+    store: AppStore,
+    callbacks?: ((lapId: number) => void) | PilotLapsCallbacks
+  ) {
     super(el);
     this.store = store;
-    this.onToggleLap = onToggleLap;
+    if (typeof callbacks === "function") {
+      this.onToggleLap = callbacks;
+    } else if (callbacks) {
+      this.onToggleLap = callbacks.onToggleLap;
+      this.onDeleteLap = callbacks.onDeleteLap;
+      this.onClearPilotLaps = callbacks.onClearPilotLaps;
+    }
     this.listen(el, "click", (e) => {
-      const btn = (e.target as HTMLElement).closest<HTMLElement>("[data-practice-toggle-lap]");
+      const target = e.target as HTMLElement;
+      const delBtn = target.closest<HTMLButtonElement>("[data-practice-delete-lap]");
+      if (delBtn) {
+        e.stopPropagation();
+        const lapId = Number(delBtn.dataset.practiceDeleteLap);
+        if (!(lapId > 0)) return;
+        this.store.deletePracticeLap(lapId);
+        this.onDeleteLap?.(lapId);
+        return;
+      }
+      const clearBtn = target.closest<HTMLButtonElement>("[data-practice-clear-pilot-laps]");
+      if (clearBtn) {
+        e.stopPropagation();
+        const slotIndex = Number(clearBtn.dataset.practiceClearPilotLaps);
+        if (!(slotIndex > 0)) return;
+        this.onClearPilotLaps?.(slotIndex);
+        return;
+      }
+      const btn = target.closest<HTMLElement>("[data-practice-toggle-lap]");
       if (!btn) return;
       e.stopPropagation();
       const lapId = Number(btn.dataset.practiceToggleLap);
@@ -91,8 +128,12 @@ export class PilotLaps extends Component {
       .join("");
 
     const pilotTh = isAllMode ? `<th>Pilot</th>` : "";
+    const lapTh =
+      !isAllMode && pilot
+        ? `<th class="col-lap-head"><span class="th-lap-head"><span>Lap</span><button type="button" class="lap-clear-all-btn" data-practice-clear-pilot-laps="${pilot.slotIndex}" title="Clear all laps for ${esc(pilot.callsign)}" aria-label="Clear all laps for ${esc(pilot.callsign)}">${icons.trash(12)}</button></span></th>`
+        : `<th>Lap</th>`;
     const tableInnerHtml = `
-          <thead><tr>${pilotTh}<th>Lap</th><th class="col-lap-clock">Time</th>${head}<th class="num">Lap time</th><th class="num">vs best</th></tr></thead>
+          <thead><tr>${pilotTh}${lapTh}<th class="col-lap-clock">Time</th>${head}<th class="num">Lap time</th><th class="num">vs best</th></tr></thead>
           <tbody>${rows}</tbody>`;
 
     const existingTable = this.el.querySelector<HTMLElement>("table.table-compact");
@@ -139,20 +180,37 @@ export class PilotLaps extends Component {
     const clockText = formatLapWallClock(this.store, lap);
     const toggleTitle = isInvalid
       ? `Restore Lap ${lap.lapNumber}`
-      : `Scratch Lap ${lap.lapNumber} (exclude from stats)`;
-    return `
-      <tr class="${isInvalid ? "is-invalidated" : ""}" data-lap-row="${lap.lapId}" data-practice-toggle-lap="${lap.lapId}" title="${esc(toggleTitle)}">
-        ${pilotTd}
-        <td class="mono col-lap-num">
-          <button
+      : `Scratch Lap ${lap.lapNumber} (click again to restore or delete)`;
+    const lapNumContent = isInvalid
+      ? `<span class="lap-num-cell"><button
             type="button"
             role="checkbox"
-            aria-checked="${isInvalid ? "false" : "true"}"
+            aria-checked="false"
             class="lap-num-toggle"
             data-practice-toggle-lap="${lap.lapId}"
             title="${esc(toggleTitle)}"
             aria-label="${esc(toggleTitle)}"
-          >${lap.lapNumber}</button>
+          >${lap.lapNumber}</button><button
+            type="button"
+            class="lap-delete-btn"
+            data-practice-delete-lap="${lap.lapId}"
+            title="Delete Lap ${lap.lapNumber}"
+            aria-label="Delete Lap ${lap.lapNumber}"
+          >${icons.trash(13)}</button></span>`
+      : `<button
+            type="button"
+            role="checkbox"
+            aria-checked="true"
+            class="lap-num-toggle"
+            data-practice-toggle-lap="${lap.lapId}"
+            title="${esc(toggleTitle)}"
+            aria-label="${esc(toggleTitle)}"
+          >${lap.lapNumber}</button>`;
+    return `
+      <tr class="${isInvalid ? "is-invalidated" : ""}" data-lap-row="${lap.lapId}" data-practice-toggle-lap="${lap.lapId}" title="${esc(toggleTitle)}">
+        ${pilotTd}
+        <td class="mono col-lap-num">
+          ${lapNumContent}
         </td>
         <td class="mono muted col-lap-clock">${esc(clockText)}</td>
         ${cells}

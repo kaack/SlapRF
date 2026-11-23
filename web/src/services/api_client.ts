@@ -1090,11 +1090,23 @@ export class ApiClient {
           {}
         );
         break;
+      case "clear_pilot_laps":
+        state = await this.transport.request<FullStateResponse>(
+          "DELETE",
+          `/v1/practice/sessions/${sid}/laps?slotIndex=${encodeURIComponent(String(payload.slotIndex ?? 0))}`
+        );
+        break;
       case "toggle_session_lap":
         state = await this.transport.request<FullStateResponse>(
           "POST",
           `/v1/practice/sessions/${sid}/laps/${payload.lapId ?? 0}:toggle`,
           {}
+        );
+        break;
+      case "delete_session_lap":
+        state = await this.transport.request<FullStateResponse>(
+          "DELETE",
+          `/v1/practice/sessions/${sid}/laps/${payload.lapId ?? 0}`
         );
         break;
       default:

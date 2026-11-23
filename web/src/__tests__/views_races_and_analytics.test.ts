@@ -1,4 +1,4 @@
-import { dispatchRacesTopBarCommand, Router, setAnalyticsScope } from "../core/router";
+import { dispatchRacesTopBarCommand, replaceAppHash, Router, setAnalyticsScope } from "../core/router";
 import { TopBar } from "../layout/TopBar";
 import { Announcer } from "../services/announcer";
 import { PracticeView } from "../views/PracticeView";
@@ -644,7 +644,7 @@ describe("views/RacesView — Directory, Per-Canvas Lock State & Race Control Hi
 
 describe("views/PracticeView, PilotView & TopBar Integration", () => {
   it("prompts to pause an ongoing race when starting a Practice session in PracticeView, then dispatches practiceAction on confirm", async () => {
-    window.history.replaceState(null, "", "/#/practice");
+    replaceAppHash("#/practice");
     const activeRace = buildTwoStageConfiguredRace({
       raceId: "race-live",
       lifecycle: "active",
@@ -1834,6 +1834,198 @@ describe("views/PracticeView, PilotView & TopBar Integration", () => {
       expect(closedStageNotice!.textContent).toContain("Reopen Race");
       expect(cockpit().querySelector("[data-stage-ctrl='reopen_stage_early']")).not.toBeNull();
     } finally {
+      view.destroy();
+    }
+  });
+});
+
+describe("PracticeView two-step lap deletion and per-pilot lap clearing", () => {
+  it("scratches a lap first to reveal inline delete, renumbers on delete, and clears all laps for the selected pilot on desktop and mobile", async () => {
+    const pilots = [
+      makePilot(1, { callsign: "FAERRY", channel: 1, enabled: true }),
+      makePilot(2, { callsign: "NOVA", channel: 2, enabled: true }),
+    ];
+    const gates = [
+      makeGate(1, { name: "Start/Finish", trackOrder: 1 }),
+      makeGate(2, { name: "Split-S", trackOrder: 2 }),
+    ];
+    const laps = [
+      makeLap(101, 1, 1, 14.5, {
+        callsign: "FAERRY",
+        isBestLap: false,
+        deltaToBest: 3.3,
+        sectors: [
+          makeSectorSplit(0, 1, 2, 7.2),
+          makeSectorSplit(1, 2, 1, 7.3),
+        ],
+      }),
+      makeLap(102, 1, 2, 11.2, {
+        callsign: "FAERRY",
+        isBestLap: true,
+        deltaToBest: 0,
+        sectors: [
+          makeSectorSplit(0, 1, 2, 5.5, { badge: "OVERALL_BEST" }),
+          makeSectorSplit(1, 2, 1, 5.7, { badge: "OVERALL_BEST" }),
+        ],
+      }),
+      makeLap(103, 1, 3, 12.8, {
+        callsign: "FAERRY",
+        isBestLap: false,
+        deltaToBest: 1.6,
+        sectors: [
+          makeSectorSplit(0, 1, 2, 6.3),
+          makeSectorSplit(1, 2, 1, 6.5),
+        ],
+      }),
+      makeLap(201, 2, 1, 12.1, {
+        callsign: "NOVA",
+        isBestLap: true,
+        deltaToBest: 0,
+        sectors: [
+          makeSectorSplit(0, 1, 2, 6.0, { badge: "PERSONAL_BEST" }),
+          makeSectorSplit(1, 2, 1, 6.1, { badge: "PERSONAL_BEST" }),
+        ],
+      }),
+    ];
+    const sess = makePracticeSession("prac-del-1", {
+      name: "Evening Practice",
+      active: true,
+      trackInitialized: true,
+      trackSnapshot: gates,
+      pilots: [
+        { slotIndex: 1, channel: 1 },
+        { slotIndex: 2, channel: 2 },
+      ],
+      laps: structuredClone(laps),
+    });
+    replaceAppHash("#/practice");
+    const store = makeStore({
+      pilots,
+      gates,
+      laps: structuredClone(laps),
+      practiceState: {
+        initialized: true,
+        activeSessionId: "prac-del-1",
+        selectedSessionId: "prac-del-1",
+        sessions: [sess],
+      },
+    });
+    const { api, calls } = makeMockApiClient(store);
+
+    const root = mountHtml('<div id="prac-del-root"></div>');
+    const host = root.querySelector<HTMLElement>("#prac-del-root")!;
+    const view = new PracticeView(host, store, api);
+    view.onActivate();
+    await flushMicrotasks();
+
+    try {
+      host.querySelector<HTMLButtonElement>("[data-practice-act='open-session']")!.click();
+      await flushMicrotasks();
+
+      // Switch to Practice -> Laps tab (mounts PilotPanel/PilotLaps for Desktop AND mobile sectors table for Mobile)
+      host.querySelector<HTMLButtonElement>("[data-practice-mobile-tab='laps']")!.click();
+      await flushMicrotasks();
+
+      // 1. Desktop PilotLaps: normal valid rows do NOT render [data-practice-delete-lap], while Lap <th> has [data-practice-clear-pilot-laps='1']
+      const desktopTable = host.querySelector<HTMLElement>(".practice-laps-table")!;
+      expect(desktopTable).not.toBeNull();
+      expect(desktopTable.querySelector("[data-practice-clear-pilot-laps='1']")).not.toBeNull();
+      expect(desktopTable.querySelector("[data-practice-delete-lap]")).toBeNull();
+
+      // 2. Step 1 of two-step delete: click Lap 2 (lapId 102) -> scratches it AND reveals inline delete button
+      const lap102Toggle = desktopTable.querySelector<HTMLButtonElement>(
+        "button.lap-num-toggle[data-practice-toggle-lap='102']"
+      )!;
+      expect(lap102Toggle).not.toBeNull();
+      lap102Toggle.click();
+      await flushMicrotasks();
+
+      const scratchedRow = desktopTable.querySelector<HTMLElement>("tr[data-lap-row='102']")!;
+      expect(scratchedRow.classList.contains("is-invalidated")).toBe(true);
+      const inlineDelBtn = scratchedRow.querySelector<HTMLButtonElement>(
+        "button.lap-delete-btn[data-practice-delete-lap='102']"
+      );
+      expect(inlineDelBtn).not.toBeNull();
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "practiceAction" &&
+            (c.args[0] as { action?: string; lapId?: number })?.action === "toggle_session_lap" &&
+            (c.args[0] as { lapId?: number })?.lapId === 102
+        )
+      ).toBe(true);
+
+      // 3. Step 2 of two-step delete: click inline delete button -> removes lapId 102, renumbers remaining Pilot 1 laps 1..2, promotes 12.8s to PB
+      inlineDelBtn!.click();
+      await flushMicrotasks();
+
+      expect(desktopTable.querySelector("tr[data-lap-row='102']")).toBeNull();
+      const p1Remaining = store.selectedPracticeSession!.laps.filter((l) => l.slotIndex === 1);
+      expect(p1Remaining.map((l) => ({ id: l.lapId, num: l.lapNumber, best: l.isBestLap }))).toEqual([
+        { id: 101, num: 1, best: false },
+        { id: 103, num: 2, best: true },
+      ]);
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "practiceAction" &&
+            (c.args[0] as { action?: string; lapId?: number })?.action === "delete_session_lap" &&
+            (c.args[0] as { lapId?: number })?.lapId === 102
+        )
+      ).toBe(true);
+
+      // 4. Mobile Laps table (.practice-sectors-table): also enforces two-step delete AND header clear-all button
+      const mobileTable = host.querySelector<HTMLElement>(".practice-sectors-table")!;
+      expect(mobileTable).not.toBeNull();
+      expect(mobileTable.querySelector("[data-practice-delete-lap]")).toBeNull();
+
+      // Scratch lap 101 on mobile -> delete icon appears; click again on lap number -> restores and hides delete icon
+      mobileTable
+        .querySelector<HTMLButtonElement>("button.lap-num-toggle[data-practice-toggle-lap='101']")!
+        .click();
+      await flushMicrotasks();
+      expect(
+        host.querySelector(".practice-sectors-table [data-practice-delete-lap='101']")
+      ).not.toBeNull();
+
+      host
+        .querySelector<HTMLButtonElement>(
+          ".practice-sectors-table button.lap-num-toggle[data-practice-toggle-lap='101']"
+        )!
+        .click();
+      await flushMicrotasks();
+      expect(
+        host.querySelector(".practice-sectors-table [data-practice-delete-lap='101']")
+      ).toBeNull();
+
+      // 5. Click Lap header trash button [data-practice-clear-pilot-laps='1'] -> opens ConfirmModal and clears only Pilot 1's laps
+      const mobileClearAllBtn = host.querySelector<HTMLButtonElement>(
+        ".practice-sectors-table [data-practice-clear-pilot-laps='1']"
+      )!;
+      expect(mobileClearAllBtn).not.toBeNull();
+      mobileClearAllBtn.click();
+      await flushMicrotasks();
+
+      const modal = document.querySelector<HTMLElement>(".slaprf-modal-backdrop");
+      expect(modal).not.toBeNull();
+      expect(modal!.textContent).toContain("Clear Pilot Laps?");
+      expect(modal!.textContent).toContain("FAERRY");
+
+      const confirmBtn = modal!.querySelector<HTMLButtonElement>("[data-modal-confirm]")!;
+      confirmBtn.click();
+      await flushMicrotasks();
+
+      expect(store.selectedPracticeSession!.laps.map((l) => l.slotIndex)).toEqual([2]);
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "practiceAction" &&
+            (c.args[0] as { action?: string; slotIndex?: number })?.action === "clear_pilot_laps" &&
+            (c.args[0] as { slotIndex?: number })?.slotIndex === 1
+        )
+      ).toBe(true);
+    } finally {
+      document.querySelectorAll(".slaprf-modal-backdrop").forEach((m) => m.remove());
       view.destroy();
     }
   });

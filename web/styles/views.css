@@ -1985,6 +1985,13 @@ html[data-theme="light"] .practice-sector-checkbox.is-checked::after {
   font-size: 12px;
 }
 
+.lap-num-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
 .lap-num-toggle {
   display: inline-flex;
   align-items: center;
@@ -1997,21 +2004,83 @@ html[data-theme="light"] .practice-sector-checkbox.is-checked::after {
   cursor: pointer;
 }
 
+.lap-delete-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: -3px 0;
+  padding: 0;
+  border-radius: 5px;
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--bad);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.12s ease, border-color 0.12s ease, transform 0.1s ease;
+}
+
+.lap-delete-btn:hover,
+.lap-delete-btn:focus-visible {
+  background: rgba(239, 68, 68, 0.24);
+  border-color: rgba(239, 68, 68, 0.55);
+}
+
+.lap-delete-btn:active {
+  transform: scale(0.94);
+}
+
+.th-lap-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.lap-clear-all-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin: -2px 0;
+  padding: 0;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.12s ease, background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.lap-clear-all-btn:hover,
+.lap-clear-all-btn:focus-visible {
+  color: var(--bad);
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.28);
+}
+
 .practice-laps-table tbody tr[data-practice-toggle-lap],
 .practice-sectors-table tbody tr[data-practice-toggle-lap] {
   cursor: pointer;
 }
 
-.practice-laps-table tr.is-invalidated td,
-.practice-laps-table tr.is-invalidated td *,
-.practice-sectors-table tr.is-invalidated td,
-.practice-sectors-table tr.is-invalidated td * {
+.practice-laps-table tr.is-invalidated td:not(.col-lap-num),
+.practice-laps-table tr.is-invalidated td:not(.col-lap-num) *,
+.practice-sectors-table tr.is-invalidated td:not(.col-mobile-lap-num),
+.practice-sectors-table tr.is-invalidated td:not(.col-mobile-lap-num) *,
+.practice-laps-table tr.is-invalidated .lap-num-toggle,
+.practice-sectors-table tr.is-invalidated .lap-num-toggle {
   text-decoration: line-through;
   text-decoration-thickness: 1.5px;
 }
 
-.practice-laps-table tr.is-invalidated td,
-.practice-sectors-table tr.is-invalidated td {
+.practice-laps-table tr.is-invalidated td:not(.col-lap-num),
+.practice-sectors-table tr.is-invalidated td:not(.col-mobile-lap-num),
+.practice-laps-table tr.is-invalidated .lap-num-toggle,
+.practice-sectors-table tr.is-invalidated .lap-num-toggle {
   opacity: 0.45;
 }
 

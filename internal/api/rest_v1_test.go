@@ -158,8 +158,65 @@ func TestRESTv1CRUDSemanticsSingletonsCustomActionsAndSymmetry(t *testing.T) {
 		t.Fatalf("expected 404 deleting absent pilot from practice session, got %d", delMissingPilot.Code)
 	}
 
-	// Activate practice session via :start -> deleting while active returns 409 Conflict; :pause then DELETE returns 200 OK
+	// Activate practice session via :start -> deleting while active returns 409 Conflict;
+	// verify per-lap DELETE /laps/{lapId} and per-pilot DELETE /laps?slotIndex=1; :pause then DELETE returns 200 OK
 	decodeState(t, reqJSON(t, h, http.MethodPost, pLoc+":start", map[string]any{}))
+	decodeCreatedState(t, reqJSON(t, h, http.MethodPost, pLoc+"/pilots", map[string]any{"slotIndex": 1, "channel": 1}))
+	decodeCreatedState(t, reqJSON(t, h, http.MethodPost, pLoc+"/pilots", map[string]any{"slotIndex": 2, "channel": 2}))
+	_, orderedGates, _, _, _ := simEng.StateSnapshot()
+	feedGateRun := func(slot int, startSec float64, lapsCount int) {
+		pilotIdx := slot - 1
+		emitPass := func(timerID uint8, atSec float64) {
+			baseUs := uint64(atSec * 1e6)
+			for _, dt := range []struct {
+				dtUs uint64
+				rssi float32
+			}{
+				{0, -85}, {40_000, -70}, {80_000, -45}, {120_000, -40}, {160_000, -45},
+				{200_000, -70}, {240_000, -85}, {280_000, -85}, {320_000, -85},
+			} {
+				var frame domain.TimerTelemetryFrame
+				frame.TimerID = timerID
+				frame.TimestampUs = baseUs + dt.dtUs
+				for k := range frame.RSSI {
+					frame.RSSI[k] = -90
+				}
+				frame.RSSI[pilotIdx] = dt.rssi
+				simEng.IngestTelemetryFrame(frame)
+			}
+		}
+		curSec := startSec
+		emitPass(orderedGates[0].AssignedTimerID, curSec)
+		for lapIdx := 0; lapIdx < lapsCount; lapIdx++ {
+			for gIdx := 1; gIdx < len(orderedGates); gIdx++ {
+				curSec += 3.2
+				emitPass(orderedGates[gIdx].AssignedTimerID, curSec)
+			}
+			curSec += 3.2
+			emitPass(orderedGates[0].AssignedTimerID, curSec)
+		}
+	}
+	feedGateRun(1, 10.0, 2)
+	feedGateRun(2, 50.0, 1)
+	_, _, lapsSnap, _, _ := simEng.StateSnapshot()
+	if len(lapsSnap) != 3 {
+		t.Fatalf("expected 3 practice laps recorded via simEng, got %d", len(lapsSnap))
+	}
+	firstLapID := lapsSnap[0].LapID
+	afterDelLap := decodeState(t, reqJSON(t, h, http.MethodDelete, fmt.Sprintf("%s/laps/%d", pLoc, firstLapID), nil))
+	if len(afterDelLap.Laps) != 2 || afterDelLap.Laps[0].SlotIndex != 1 || afterDelLap.Laps[0].LapNumber != 1 {
+		t.Fatalf("expected 2 laps and Pilot 1 remaining lap renumbered to 1 after DELETE lap, got %+v", afterDelLap.Laps)
+	}
+	if delMissingLap := reqJSON(t, h, http.MethodDelete, fmt.Sprintf("%s/laps/%d", pLoc, firstLapID), nil); delMissingLap.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 deleting already-deleted practice lap %d, got %d", firstLapID, delMissingLap.Code)
+	}
+	if badSlotClear := reqJSON(t, h, http.MethodDelete, pLoc+"/laps?slotIndex=999", nil); badSlotClear.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on out-of-range ?slotIndex=999, got %d", badSlotClear.Code)
+	}
+	afterClearP1 := decodeState(t, reqJSON(t, h, http.MethodDelete, pLoc+"/laps?slotIndex=1", nil))
+	if len(afterClearP1.Laps) != 1 || afterClearP1.Laps[0].SlotIndex != 2 {
+		t.Fatalf("expected only Pilot 2's lap remaining after DELETE %s/laps?slotIndex=1, got %+v", pLoc, afterClearP1.Laps)
+	}
 	if delLivePrac := reqJSON(t, h, http.MethodDelete, pLoc, nil); delLivePrac.Code != http.StatusConflict {
 		t.Fatalf("expected 409 Conflict deleting live practice session %s, got %d", pID, delLivePrac.Code)
 	}
