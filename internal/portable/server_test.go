@@ -928,8 +928,10 @@ func TestDiagnosticLogsSideBySideAndRuntimeLevels(t *testing.T) {
 	simOffResp := doJSONReq(t, http.MethodPatch, ts.URL+"/v1/sim", "", map[string]any{"running": false})
 	simOffResp.Body.Close()
 	pracStartReal := doJSONReq(t, http.MethodPost, ts.URL+"/v1/practice/sessions/current:start", "", map[string]any{})
+	_, _ = io.Copy(io.Discard, pracStartReal.Body)
 	pracStartReal.Body.Close()
 	pracStopReal := doJSONReq(t, http.MethodPost, ts.URL+"/v1/practice/sessions/current:stop", "", map[string]any{})
+	_, _ = io.Copy(io.Discard, pracStopReal.Body)
 	pracStopReal.Body.Close()
 
 	txtResp, err := http.Get(ts.URL + "/v1/logs?format=text")
@@ -947,7 +949,7 @@ func TestDiagnosticLogsSideBySideAndRuntimeLevels(t *testing.T) {
 		"[INFO] [Server] Simulation mode DISABLED",
 		"[INFO] [Practice] Session",
 		"action=stop",
-		"[DEBUG] [HTTP] POST /v1/practice/sessions/current:stop",
+		"[DEBUG] [HTTP] POST /v1/practice/sessions/current:start",
 	} {
 		if !strings.Contains(rawStr, want) {
 			t.Fatalf("expected %q in slaprf.log download, got:\n%s", want, rawStr)
