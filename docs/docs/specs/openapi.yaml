@@ -132,6 +132,12 @@ tags:
       - **Real & Simulator Snapshots**: Export or restore real-hardware state via `/v1/storage` and simulator state via `/v1/storage/sim`.
       - **Maintenance Actions**: Check `bbolt` file size and record counts via `GET /v1/storage/status`, seed the showcase event via `POST /v1/storage:restoreDemo`, or wipe back to clean defaults via `POST /v1/storage:reset`.
 
+  - name: Logs
+    description: |
+      Server diagnostic logging inspection, download, runtime severity configuration, and log rotation management (`/v1/logs*`).
+      - **Log Inspection & Download (`/v1/logs`)**: Read recent chronological log lines in JSON or download the rolling `slaprf.log` plain-text file (`?format=text`).
+      - **Severity & Maintenance (`/v1/logs/config`, `/v1/logs:clear`)**: Inspect or update the active log threshold (`trace`, `debug`, `info`, `warn`, `error`) at runtime without restarting, or truncate `slaprf.log` and rotated backups before reproducing an issue.
+
 paths:
   /v1/version:
     get:
@@ -6035,6 +6041,93 @@ paths:
                     type: string
                     example: "Invalid MultiGP Chapter API key"
 
+  /v1/logs:
+    get:
+      tags: [Logs]
+      summary: Read recent Go server diagnostic log lines or download slaprf.log
+      operationId: getLogs
+      parameters:
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [json, text]
+          description: Set to `text` to download the full rolling `slaprf.log` plain-text file
+        - name: tail
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+          description: Maximum number of chronological recent lines to return in JSON mode
+      responses:
+        "200":
+          description: Diagnostic log snapshot or plain-text file
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiagnosticLogResponse"
+            text/plain:
+              schema:
+                type: string
+
+  /v1/logs/config:
+    get:
+      tags: [Logs]
+      summary: Read active diagnostic log level and slaprf.log file status
+      operationId: getLogsConfig
+      responses:
+        "200":
+          description: Diagnostic log configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiagnosticLogStatus"
+    put:
+      tags: [Logs]
+      summary: Update runtime diagnostic log severity threshold
+      operationId: putLogsConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [level]
+              properties:
+                level:
+                  type: string
+                  enum: [trace, debug, info, warn, error]
+                  example: debug
+      responses:
+        "200":
+          description: Updated diagnostic log configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiagnosticLogStatus"
+        "400":
+          description: Invalid log level
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/logs:clear:
+    post:
+      tags: [Logs]
+      summary: Truncate slaprf.log, remove rotated backups, and reset the in-memory log buffer
+      operationId: clearLogs
+      responses:
+        "200":
+          description: Cleared diagnostic log status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiagnosticLogStatus"
+
   /v1/storage/status:
     get:
       tags: [Storage]
@@ -7361,3 +7454,49 @@ components:
         slot:
           type: integer
           example: 1
+
+    DiagnosticLogStatus:
+      type: object
+      required: [logPath, sizeBytes, level, levels, lineCount]
+      properties:
+        logPath:
+          type: string
+          description: Absolute path to the active side-by-side `slaprf.log` file (empty when running in-memory only)
+          example: "/opt/slaprf/slaprf.log"
+        sizeBytes:
+          type: integer
+          description: Combined size in bytes of `slaprf.log` and any rotated `slaprf.log.1` backup
+          example: 24576
+        level:
+          type: string
+          enum: [trace, debug, info, warn, error]
+          description: Active runtime log severity threshold
+          example: info
+        levels:
+          type: array
+          items:
+            type: string
+            enum: [trace, debug, info, warn, error]
+          example: [trace, debug, info, warn, error]
+        lineCount:
+          type: integer
+          description: Number of recent log lines currently buffered in memory
+          example: 84
+        maxLines:
+          type: integer
+          description: Capacity of the bounded in-memory ring buffer when running without an on-disk log file (such as standalone Browser Demo Mode)
+          example: 1000
+
+    DiagnosticLogResponse:
+      allOf:
+        - $ref: "#/components/schemas/DiagnosticLogStatus"
+        - type: object
+          required: [lines]
+          properties:
+            lines:
+              type: array
+              items:
+                type: string
+              description: Chronological diagnostic log lines formatted as `TIMESTAMP [LEVEL] [Component] message`
+              example:
+                - "2026-11-22T23:14:03.055-08:00 [INFO] [Server] SlapRF ready: db=slaprf.db log=slaprf.log level=info"
