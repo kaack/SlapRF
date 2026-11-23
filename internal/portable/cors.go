@@ -114,16 +114,39 @@ func (s *Server) withCORSAndPNA(next http.Handler) http.Handler {
 			rec := &httpStatusRecorder{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rec, r)
 			dur := time.Since(start).Round(100 * time.Microsecond)
+			httpTag := "[HTTP]"
+			if s.isSimScopedHTTPPath(r.URL.Path) {
+				httpTag = "[SIM][HTTP]"
+			}
 			switch {
 			case rec.status >= 500:
-				s.appLog.Errorf("[HTTP] %s %s -> %d (%s)", r.Method, r.URL.Path, rec.status, dur)
+				s.appLog.Errorf("%s %s %s -> %d (%s)", httpTag, r.Method, r.URL.Path, rec.status, dur)
 			case rec.status >= 400:
-				s.appLog.Warnf("[HTTP] %s %s -> %d (%s)", r.Method, r.URL.Path, rec.status, dur)
+				s.appLog.Warnf("%s %s %s -> %d (%s)", httpTag, r.Method, r.URL.Path, rec.status, dur)
 			case r.Method != http.MethodGet && r.Method != http.MethodHead:
-				s.appLog.Debugf("[HTTP] %s %s -> %d (%s)", r.Method, r.URL.Path, rec.status, dur)
+				s.appLog.Debugf("%s %s %s -> %d (%s)", httpTag, r.Method, r.URL.Path, rec.status, dur)
 			}
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) isSimScopedHTTPPath(path string) bool {
+	if strings.HasPrefix(path, "/v1/sim") || strings.HasPrefix(path, "/v1/storage/sim") {
+		return true
+	}
+	if strings.HasPrefix(path, "/v1/slaprf/") ||
+		strings.HasPrefix(path, "/v1/laprf/") ||
+		strings.HasPrefix(path, "/v1/rotorhazard/") ||
+		strings.HasPrefix(path, "/v1/logs") ||
+		strings.HasPrefix(path, "/v1/auth/") ||
+		path == "/v1/storage" ||
+		path == "/v1/storage/status" ||
+		path == "/v1/storage:recordBackup" ||
+		path == "/v1/capabilities" ||
+		path == "/v1/version" {
+		return false
+	}
+	return s.sim != nil && s.sim.IsRunning()
 }

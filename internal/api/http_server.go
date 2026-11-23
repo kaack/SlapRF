@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"slaprf/internal/applog"
 	"slaprf/internal/domain"
 	"slaprf/internal/ingest"
 	"slaprf/internal/laprf"
@@ -97,6 +98,7 @@ type Server struct {
 	realEngine  *tracker.Engine
 	simulator   *ingest.TrackSimulator
 	laprfServer *laprf.Server
+	appLog      *applog.Logger
 	hooks       ServerHooks
 }
 
@@ -424,6 +426,9 @@ func (s *Server) handlePutArm(w http.ResponseWriter, r *http.Request) {
 	eng := s.activeEngine()
 	wasArmed := eng.IsRaceArmed()
 	eng.SetRaceArmed(*body.Armed)
+	if wasArmed != *body.Armed {
+		s.logUserAction("Timing", "Timing armed=%v", *body.Armed)
+	}
 	if !wasArmed && *body.Armed && s.hooks.OnTimingStarted != nil {
 		s.hooks.OnTimingStarted()
 	}
@@ -446,7 +451,11 @@ func (s *Server) handlePutOperatingMode(w http.ResponseWriter, r *http.Request) 
 		writeErrorJSON(w, http.StatusBadRequest, "mode must be 'practice' or 'race'")
 		return
 	}
+	prev := s.activeEngine().OperatingMode()
 	s.activeEngine().SetOperatingMode(body.Mode)
+	if prev != body.Mode {
+		s.logUserAction("Timing", "Operating mode changed from %s to %s", prev, body.Mode)
+	}
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -516,6 +525,7 @@ func (s *Server) handleCreateTimer(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Timers", "Provisioned timer #%d (role=%s, label=%q, fp=%s)", id, body.Role, body.TimerLabel, body.Fingerprint)
 	w.Header().Set("Location", fmt.Sprintf("/v1/timers/%d", id))
 	writeJSON(w, http.StatusCreated, s.buildFullStateResponse())
 }
@@ -536,6 +546,7 @@ func (s *Server) handlePatchTimer(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Timers", "Updated timer #%d color=%s", timerID, body.Color)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -577,6 +588,7 @@ func (s *Server) handleDeleteTimer(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Timers", "Deleted timer #%d", timerID)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -597,6 +609,7 @@ func (s *Server) handleResetStorage(w http.ResponseWriter, r *http.Request) {
 	if s.hooks.OnStorageReset != nil {
 		s.hooks.OnStorageReset()
 	}
+	s.logUserAction("Storage", "Wiped application data and restored factory defaults")
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -616,6 +629,7 @@ func (s *Server) handleRestoreDemoData(w http.ResponseWriter, r *http.Request) {
 	if s.hooks.OnStorageImport != nil {
 		s.hooks.OnStorageImport()
 	}
+	s.logUserAction("Storage", "Restored showcase demo dataset")
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -636,6 +650,7 @@ func (s *Server) handleImportStorage(w http.ResponseWriter, r *http.Request) {
 	if s.hooks.OnStorageImport != nil {
 		s.hooks.OnStorageImport()
 	}
+	s.logRealAction("Storage", "Imported real-hardware application data backup")
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -662,6 +677,7 @@ func (s *Server) handleImportSimStorage(w http.ResponseWriter, r *http.Request) 
 	if s.hooks.OnStorageImport != nil {
 		s.hooks.OnStorageImport()
 	}
+	s.logSimAction("Storage", "Imported simulator application data backup")
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 

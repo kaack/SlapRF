@@ -91,6 +91,7 @@ func (s *Server) handleScopedResetTrack(kind trackScopeKind) http.HandlerFunc {
 			writeEngineError(w, err)
 			return
 		}
+		s.logUserAction("Track", "Reset track to defaults on %s id=%s", kind, targetID)
 		writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 	}
 }
@@ -117,6 +118,7 @@ func (s *Server) handleScopedPutThresholds(kind trackScopeKind) http.HandlerFunc
 			writeEngineError(w, err)
 			return
 		}
+		s.logUserAction("Track", "Updated %d threshold(s) on %s id=%s", len(updates), kind, targetID)
 		writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 	}
 }
@@ -158,6 +160,7 @@ func (s *Server) handleScopedPutRules(kind trackScopeKind) http.HandlerFunc {
 			writeEngineError(w, err)
 			return
 		}
+		s.logUserAction("Track", "Updated timing rules on %s id=%s", kind, targetID)
 		writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 	}
 }
@@ -243,6 +246,7 @@ func (s *Server) handleScopedCreateGate(kind trackScopeKind) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Location", fmt.Sprintf("/v1/%s/sessions/%s/track/gates/%d", kind, targetID, created.GateID))
+		s.logUserAction("Track", "Added gate #%d %q (timer=%d) on %s id=%s", created.GateID, created.Name, created.AssignedTimerID, kind, targetID)
 		writeJSON(w, http.StatusCreated, s.buildFullStateResponse())
 	}
 }
@@ -274,6 +278,7 @@ func (s *Server) handleScopedUpdateGate(kind trackScopeKind) http.HandlerFunc {
 			writeEngineError(w, err)
 			return
 		}
+		s.logUserAction("Track", "Updated gate #%d on %s id=%s", gateID, kind, targetID)
 		writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 	}
 }
@@ -299,6 +304,7 @@ func (s *Server) handleScopedDeleteGate(kind trackScopeKind) http.HandlerFunc {
 			writeEngineError(w, err)
 			return
 		}
+		s.logUserAction("Track", "Deleted gate #%d on %s id=%s", gateID, kind, targetID)
 		writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 	}
 }
@@ -356,6 +362,7 @@ func (s *Server) handleScopedPutGateRules(kind trackScopeKind) http.HandlerFunc 
 			writeEngineError(w, err)
 			return
 		}
+		s.logUserAction("Track", "Updated rule overrides for gate #%d on %s id=%s", gateID, kind, targetID)
 		writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 	}
 }
@@ -385,6 +392,7 @@ func (s *Server) handleScopedResetGateRules(kind trackScopeKind) http.HandlerFun
 			writeEngineError(w, err)
 			return
 		}
+		s.logUserAction("Track", "Reset rule overrides for gate #%d on %s id=%s", gateID, kind, targetID)
 		writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 	}
 }
@@ -450,6 +458,7 @@ func (s *Server) handleScopedPutPilotGateRules(kind trackScopeKind) http.Handler
 			writeEngineError(w, err)
 			return
 		}
+		s.logUserAction("Track", "Updated rule overrides for pilot slot=%d at gate #%d on %s id=%s", slotIndex, gateID, kind, targetID)
 		writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 	}
 }
@@ -483,6 +492,7 @@ func (s *Server) handleScopedResetPilotGateRules(kind trackScopeKind) http.Handl
 			writeEngineError(w, err)
 			return
 		}
+		s.logUserAction("Track", "Reset rule overrides for pilot slot=%d at gate #%d on %s id=%s", slotIndex, gateID, kind, targetID)
 		writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 	}
 }

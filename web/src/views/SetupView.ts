@@ -79,7 +79,7 @@ export class SetupView extends Component {
         <section class="settings-section" data-section-anchor="diagnostics" data-slot="diagnostics-section">
           <div class="settings-intro">
             <h2>Diagnostics</h2>
-            <p>Server and hardware link events are written side-by-side to <span class="mono">slaprf.log</span> (and Android <span class="mono">logcat</span>). Raise the level to <span class="mono">DEBUG</span> or <span class="mono">TRACE</span> when troubleshooting timers.</p>
+            <p>User actions, race &amp; practice events, laps, and hardware links are written side-by-side to <span class="mono">slaprf.log</span> (and Android <span class="mono">logcat</span>), with simulated activity tagged <span class="mono">[SIM]</span>. Raise the level to <span class="mono">DEBUG</span> or <span class="mono">TRACE</span> when troubleshooting timers.</p>
           </div>
           <div class="settings-cards" data-slot="diagnostics"></div>
         </section>

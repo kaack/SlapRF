@@ -916,6 +916,16 @@ func TestDiagnosticLogsSideBySideAndRuntimeLevels(t *testing.T) {
 
 	armResp := doJSONReq(t, http.MethodPut, ts.URL+"/v1/timing/arm", "", map[string]any{"armed": true})
 	armResp.Body.Close()
+	pracStartSim := doJSONReq(t, http.MethodPost, ts.URL+"/v1/practice/sessions/current:start", "", map[string]any{})
+	pracStartSim.Body.Close()
+
+	// Disable simulator and run real-workspace practice actions -> must log WITHOUT [SIM]
+	simOffResp := doJSONReq(t, http.MethodPatch, ts.URL+"/v1/sim", "", map[string]any{"running": false})
+	simOffResp.Body.Close()
+	pracStartReal := doJSONReq(t, http.MethodPost, ts.URL+"/v1/practice/sessions/current:start", "", map[string]any{})
+	pracStartReal.Body.Close()
+	pracStopReal := doJSONReq(t, http.MethodPost, ts.URL+"/v1/practice/sessions/current:stop", "", map[string]any{})
+	pracStopReal.Body.Close()
 
 	txtResp, err := http.Get(ts.URL + "/v1/logs?format=text")
 	if err != nil || txtResp.StatusCode != http.StatusOK {
@@ -924,8 +934,17 @@ func TestDiagnosticLogsSideBySideAndRuntimeLevels(t *testing.T) {
 	rawBytes, _ := io.ReadAll(txtResp.Body)
 	txtResp.Body.Close()
 	rawStr := string(rawBytes)
-	if !strings.Contains(rawStr, "[DEBUG] [HTTP] PUT /v1/timing/arm") {
-		t.Fatalf("expected DEBUG HTTP trace in slaprf.log download, got:\n%s", rawStr)
+	for _, want := range []string{
+		"[DEBUG] [SIM][HTTP] PUT /v1/timing/arm",
+		"[INFO] [SIM][Practice] Session",
+		"[INFO] [Server] Simulation mode DISABLED",
+		"[INFO] [Practice] Session",
+		"action=stop",
+		"[DEBUG] [HTTP] POST /v1/practice/sessions/current:stop",
+	} {
+		if !strings.Contains(rawStr, want) {
+			t.Fatalf("expected %q in slaprf.log download, got:\n%s", want, rawStr)
+		}
 	}
 
 	ts.Close()

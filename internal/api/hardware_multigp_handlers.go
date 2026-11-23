@@ -29,6 +29,7 @@ func (s *Server) handlePutHardwareMode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	isSim := s.simulator.IsRunning()
+	prevMode := s.activeEngine().TimingHardwareMode()
 	s.activeEngine().SetRHDebugStream(0, false)
 	if isSim {
 		_ = s.simulator.SetRHUSBScanLive(0, false, 0, 0, 0)
@@ -36,6 +37,9 @@ func (s *Server) handlePutHardwareMode(w http.ResponseWriter, r *http.Request) {
 	s.activeEngine().SetTimingHardwareMode(body.Mode, isSim)
 	if isSim {
 		s.simulator.SyncHardwareMode()
+	}
+	if prevMode != s.activeEngine().TimingHardwareMode() {
+		s.logUserAction("Hardware", "Timing hardware mode changed from %s to %s", prevMode, s.activeEngine().TimingHardwareMode())
 	}
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
@@ -92,6 +96,7 @@ func (s *Server) handleMultiGPImportRace(w http.ResponseWriter, r *http.Request)
 	if created.RaceID != "" {
 		w.Header().Set("Location", "/v1/race/sessions/"+created.RaceID)
 	}
+	s.logUserAction("Race", "Imported MultiGP race %q (id=%s, importMode=%s)", created.Config.EventName, created.RaceID, body.ImportMode)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"createdRace": created,
 		"state":       s.buildFullStateResponse(),
@@ -117,6 +122,7 @@ func (s *Server) handleMultiGPAppendZippyQ(w http.ResponseWriter, r *http.Reques
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Race", "Appended %d MultiGP ZippyQ heat(s) to race %q (id=%s)", added, updatedRace.Config.EventName, updatedRace.RaceID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"addedHeats": added,
 		"raceState":  updatedRace,
@@ -159,6 +165,7 @@ func (s *Server) handleMultiGPMarkSynced(w http.ResponseWriter, r *http.Request)
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Race", "Synced MultiGP results for race id=%s (heats=%d, overall=%v)", body.RaceID, len(body.SyncedHeatIDs), body.OverallSynced)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -184,15 +191,22 @@ func (s *Server) handlePatchSim(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Running != nil && s.simulator.IsRunning() != *body.Running {
 		s.simulator.SetRunning(*body.Running)
+		if *body.Running {
+			s.logSimAction("", "Simulation mode ENABLED")
+		} else {
+			s.logRealAction("Server", "Simulation mode DISABLED (active workspace=real hardware)")
+		}
 		if s.hooks.OnModeChanged != nil {
 			s.hooks.OnModeChanged(*body.Running)
 		}
 	}
 	if body.SpeedMultiplier != nil {
 		s.simulator.SetSpeedMultiplier(*body.SpeedMultiplier)
+		s.logSimAction("", "Playback speed set to %dx", *body.SpeedMultiplier)
 	}
 	if body.TrackWalker != nil {
 		s.simulator.SetTrackWalker(*body.TrackWalker)
+		s.logSimAction("", "Track walk set to %v", *body.TrackWalker)
 	}
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
@@ -203,6 +217,7 @@ func (s *Server) handleSimPackBurst(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.simulator.TriggerPackBurst()
+	s.logSimAction("", "Triggered synchronized flight pack burst")
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -228,6 +243,7 @@ func (s *Server) handleSimPilotCustomAction(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.simulator.TriggerPilotAction(slotIndex, body.Action)
+	s.logSimAction("Pilot", "Triggered pilot slot=%d action=%s", slotIndex, body.Action)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -245,6 +261,7 @@ func (s *Server) handleCreateSimTimer(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
+	s.logSimAction("Timers", "Added simulated board timer=#%d (role=%s, label=%q)", createdID, body.Role, body.Label)
 	w.Header().Set("Location", fmt.Sprintf("/v1/sim/slaprf/timers/%d", createdID))
 	writeJSON(w, http.StatusCreated, s.buildFullStateResponse())
 }
@@ -255,6 +272,7 @@ func (s *Server) handleResetSimTimers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.simulator.ResetTimersAndTrackToDefault()
+	s.logSimAction("Timers", "Reset simulated boards and track to defaults")
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -344,6 +362,7 @@ func (s *Server) handleSimTimerCustomAction(w http.ResponseWriter, r *http.Reque
 		writeErrorJSON(w, http.StatusBadRequest, fmt.Sprintf("unknown simulated timer action %q", op))
 		return
 	}
+	s.logSimAction("Timers", "Board timer=#%d action=%s", timerID, op)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -356,6 +375,7 @@ func (s *Server) handleDeleteSimTimer(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
+	s.logSimAction("Timers", "Deleted simulated board timer=#%d", timerID)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -708,5 +728,6 @@ func (s *Server) handleSimMultiGPAdminAction(w http.ResponseWriter, r *http.Requ
 		writeEngineError(w, err)
 		return
 	}
+	s.logSimAction("MultiGP", "Admin action=%s", req.Action)
 	writeJSON(w, http.StatusOK, updated)
 }

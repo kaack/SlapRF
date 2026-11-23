@@ -10,6 +10,7 @@ import (
 	"github.com/coder/websocket"
 
 	"slaprf/internal/api"
+	"slaprf/internal/applog"
 	"slaprf/internal/domain"
 	"slaprf/internal/tracker"
 )
@@ -24,23 +25,34 @@ type wsStreamClient struct {
 }
 
 type engineStreamForwarder struct {
-	hub    *streamHub
-	engine *tracker.Engine
-	allow  func() bool
+	hub         *streamHub
+	engine      *tracker.Engine
+	appLog      *applog.Logger
+	isSimEngine bool
+	allow       func() bool
 
 	mu      sync.Mutex
 	pending []domain.TimerTelemetryFrame
 	encBuf  []byte
 }
 
-func newEngineStreamForwarder(hub *streamHub, engine *tracker.Engine, allow func() bool) *engineStreamForwarder {
+func newEngineStreamForwarder(hub *streamHub, engine *tracker.Engine, appLog *applog.Logger, isSimEngine bool, allow func() bool) *engineStreamForwarder {
 	f := &engineStreamForwarder{
-		hub:    hub,
-		engine: engine,
-		allow:  allow,
+		hub:         hub,
+		engine:      engine,
+		appLog:      appLog,
+		isSimEngine: isSimEngine,
+		allow:       allow,
 	}
 	engine.Subscribe(f)
 	return f
+}
+
+func (f *engineStreamForwarder) logPrefix() string {
+	if f.isSimEngine {
+		return "[SIM]"
+	}
+	return ""
 }
 
 func (f *engineStreamForwarder) flushTelemetry() {
@@ -113,14 +125,32 @@ func (f *engineStreamForwarder) OnTelemetryFrame(frame domain.TimerTelemetryFram
 }
 
 func (f *engineStreamForwarder) OnGateCrossing(ev domain.GateCrossingEvent) {
+	if f.appLog != nil && (f.allow == nil || f.allow()) {
+		pfx := f.logPrefix()
+		if ev.StartedLap {
+			f.appLog.Infof("%s[Crossing] %s (slot=%d) started lap at gate #%d %q (peak=%.1f dBm, eventId=%d)",
+				pfx, ev.Callsign, ev.SlotIndex, ev.GateID, ev.GateName, ev.PeakRSSIDbm, ev.EventID)
+		} else {
+			f.appLog.Debugf("%s[Crossing] %s (slot=%d) crossed gate #%d %q (peak=%.1f dBm, hold=%.0f ms, eventId=%d)",
+				pfx, ev.Callsign, ev.SlotIndex, ev.GateID, ev.GateName, ev.PeakRSSIDbm, ev.HoldMs, ev.EventID)
+		}
+	}
 	f.sendJSON("crossing", ev)
 }
 
 func (f *engineStreamForwarder) OnDetectionFiltered(det domain.FilteredDetection) {
+	if f.appLog != nil && (f.allow == nil || f.allow()) {
+		f.appLog.Debugf("%s[Filter] Rejected detection for %s (slot=%d) at gate #%d: reason=%s peak=%.1f dBm (%s)",
+			f.logPrefix(), det.Callsign, det.SlotIndex, det.GateID, det.Reason, det.PeakRSSIDbm, det.Detail)
+	}
 	f.sendJSON("filtered", det)
 }
 
 func (f *engineStreamForwarder) OnLapCompleted(lap domain.LapRecord, summaries []domain.PilotTrackSummary) {
+	if f.appLog != nil && (f.allow == nil || f.allow()) {
+		f.appLog.Infof("%s[Lap] %s (slot=%d) completed lap #%d in %.3fs (lapId=%d, best=%v)",
+			f.logPrefix(), lap.Callsign, lap.SlotIndex, lap.LapNumber, lap.LapTimeSec, lap.LapID, lap.IsBestLap)
+	}
 	f.sendJSON("lap", map[string]any{
 		"lap":       lap,
 		"summaries": summaries,
@@ -140,6 +170,10 @@ func (f *engineStreamForwarder) OnConfigUpdated(pilots []domain.PilotSlot, gates
 }
 
 func (f *engineStreamForwarder) OnRaceUpdated(state domain.RaceTournamentState, eventState domain.EventManagerState, announcement *domain.RaceAnnouncement) {
+	if f.appLog != nil && announcement != nil && announcement.Kind != "countdown_prompt" && (f.allow == nil || f.allow()) {
+		f.appLog.Infof("%s[RaceEvent] kind=%s race=%q (id=%s, heat=%q, pilot=%q) %s",
+			f.logPrefix(), announcement.Kind, state.Config.EventName, state.RaceID, announcement.HeatID, announcement.Callsign, announcement.Text)
+	}
 	var serverTsUs uint64
 	if f.engine != nil {
 		serverTsUs = f.engine.NowUs()
@@ -165,13 +199,13 @@ type streamHub struct {
 	stopOnce sync.Once
 }
 
-func newStreamHub(simEngine, realEngine *tracker.Engine, isSim func() bool) *streamHub {
+func newStreamHub(simEngine, realEngine *tracker.Engine, isSim func() bool, appLog *applog.Logger) *streamHub {
 	h := &streamHub{
 		clients: make(map[*wsStreamClient]struct{}),
 		stopCh:  make(chan struct{}),
 	}
-	h.simFwd = newEngineStreamForwarder(h, simEngine, isSim)
-	h.realFwd = newEngineStreamForwarder(h, realEngine, func() bool { return !isSim() })
+	h.simFwd = newEngineStreamForwarder(h, simEngine, appLog, true, isSim)
+	h.realFwd = newEngineStreamForwarder(h, realEngine, appLog, false, func() bool { return !isSim() })
 
 	// Flush pending telemetry batches at 50 Hz (20 ms) so UI graphs run at silky 50-60 FPS
 	// with minimal WebSocket frame overhead.

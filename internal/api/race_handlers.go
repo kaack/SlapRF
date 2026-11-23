@@ -64,6 +64,7 @@ func (s *Server) handleCreatePilot(w http.ResponseWriter, r *http.Request) {
 	if createdSlot > 0 {
 		w.Header().Set("Location", fmt.Sprintf("/v1/pilots/%d", createdSlot))
 	}
+	s.logUserAction("Pilots", "Created pilot %q (slot=%d)", body.Callsign, createdSlot)
 	writeJSON(w, http.StatusCreated, state)
 }
 
@@ -73,6 +74,7 @@ func (s *Server) handleResetPilots(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.activeEngine().ResetPilotsToDefault(s.simulator.IsRunning())
+	s.logUserAction("Pilots", "Reset pilot roster to defaults")
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -121,6 +123,7 @@ func (s *Server) handleUpdatePilot(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Pilots", "Updated pilot slot=%d (%q, freq=%d MHz)", slotIndex, slot.Callsign, slot.FrequencyMHz)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -133,6 +136,7 @@ func (s *Server) handleDeletePilot(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Pilots", "Deleted pilot slot=%d", slotIndex)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -172,6 +176,7 @@ func (s *Server) handleImportPilots(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Pilots", "Imported pilots (added=%d, updated=%d)", summary.Added, summary.Updated)
 	resp := s.buildFullStateResponse()
 	resp.ImportSummary = &summary
 	writeJSON(w, http.StatusOK, resp)
@@ -237,10 +242,14 @@ func (s *Server) handleCreatePracticeSession(w http.ResponseWriter, r *http.Requ
 		writeEngineError(w, err)
 		return
 	}
+	createdID := ""
+	createdName := body.Name
 	if n := len(ps.Sessions); n > 0 {
-		createdID := ps.Sessions[n-1].SessionID
+		createdID = ps.Sessions[n-1].SessionID
+		createdName = ps.Sessions[n-1].Name
 		w.Header().Set("Location", "/v1/practice/sessions/"+createdID)
 	}
+	s.logUserAction("Practice", "Created session %q (id=%s)", createdName, createdID)
 	writeJSON(w, http.StatusCreated, s.buildFullStateResponse())
 }
 
@@ -277,6 +286,7 @@ func (s *Server) handlePatchPracticeSession(w http.ResponseWriter, r *http.Reque
 			writeEngineError(w, err)
 			return
 		}
+		s.logUserAction("Practice", "Renamed session id=%s to %q", targetID, *body.Name)
 	}
 	if body.Tags != nil {
 		if _, err := eng.PracticeAction(tracker.PracticeActionPayload{
@@ -287,6 +297,7 @@ func (s *Server) handlePatchPracticeSession(w http.ResponseWriter, r *http.Reque
 			writeEngineError(w, err)
 			return
 		}
+		s.logUserAction("Practice", "Updated tags on session %q (id=%s)", sess.Name, targetID)
 	}
 	if body.Selected != nil && *body.Selected {
 		if _, err := eng.PracticeAction(tracker.PracticeActionPayload{
@@ -296,6 +307,7 @@ func (s *Server) handlePatchPracticeSession(w http.ResponseWriter, r *http.Reque
 			writeEngineError(w, err)
 			return
 		}
+		s.logUserAction("Practice", "Selected session %q (id=%s)", sess.Name, targetID)
 	}
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
@@ -346,6 +358,7 @@ func (s *Server) handlePracticeSessionCustomAction(w http.ResponseWriter, r *htt
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Practice", "Session %q (id=%s) action=%s", sess.Name, targetID, customVerb)
 	if (engineAction == "start_session" || engineAction == "resume_session" || (engineAction == "clear_session_laps" && eng.IsRaceArmed())) && s.hooks.OnTimingStarted != nil {
 		s.hooks.OnTimingStarted()
 	}
@@ -364,6 +377,7 @@ func (s *Server) handleDeletePracticeSession(w http.ResponseWriter, r *http.Requ
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Practice", "Deleted session id=%s", rawID)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -421,6 +435,7 @@ func (s *Server) handleAddPracticeSessionPilot(w http.ResponseWriter, r *http.Re
 	if assignedSlot > 0 {
 		w.Header().Set("Location", fmt.Sprintf("/v1/practice/sessions/%s/pilots/%d", targetID, assignedSlot))
 	}
+	s.logUserAction("Practice", "Added pilot slot=%d to session %q (id=%s)", assignedSlot, sess.Name, targetID)
 	writeJSON(w, http.StatusCreated, s.buildFullStateResponse())
 }
 
@@ -454,6 +469,7 @@ func (s *Server) handleUpdatePracticeSessionPilot(w http.ResponseWriter, r *http
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Practice", "Updated pilot slot=%d channel=%d in session %q (id=%s)", slotIndex, body.Channel, sess.Name, targetID)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -488,6 +504,7 @@ func (s *Server) handleDeletePracticeSessionPilot(w http.ResponseWriter, r *http
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Practice", "Removed pilot slot=%d from session %q (id=%s)", slotIndex, sess.Name, targetID)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -508,6 +525,7 @@ func (s *Server) handleResetActivePracticeLaps(w http.ResponseWriter, r *http.Re
 	}
 	eng := s.activeEngine()
 	eng.ResetSession()
+	s.logUserAction("Practice", "Reset active practice session laps")
 	if eng.IsRaceArmed() && s.hooks.OnTimingStarted != nil {
 		s.hooks.OnTimingStarted()
 	}
@@ -555,6 +573,7 @@ func (s *Server) handlePatchPracticeSessionLap(w http.ResponseWriter, r *http.Re
 			writeEngineError(w, err)
 			return
 		}
+		s.logUserAction("Practice", "Set lap #%d invalidated=%v in session %q (id=%s)", lapID, *body.Invalidated, sess.Name, targetID)
 	}
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
@@ -593,6 +612,7 @@ func (s *Server) handlePracticeSessionLapCustomAction(w http.ResponseWriter, r *
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Practice", "Toggled lap #%d validity in session %q (id=%s)", lapID, sess.Name, targetID)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -628,6 +648,7 @@ func (s *Server) handleDeletePracticeSessionLap(w http.ResponseWriter, r *http.R
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Practice", "Deleted lap #%d in session %q (id=%s)", lapID, sess.Name, targetID)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -667,6 +688,7 @@ func (s *Server) handlePatchPracticeSessionCrossing(w http.ResponseWriter, r *ht
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Practice", "Adjusted crossing #%d timestamp=%d us in session %q (id=%s)", eventID, *body.TimestampUs, sess.Name, targetID)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -698,6 +720,7 @@ func (s *Server) handlePatchRaceSessionCrossing(w http.ResponseWriter, r *http.R
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Race", "Adjusted crossing #%d timestamp=%d us in race %q (id=%s)", eventID, *body.TimestampUs, rs.Config.EventName, targetID)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -726,6 +749,7 @@ func (s *Server) handleDeletePracticeSessionLaps(w http.ResponseWriter, r *http.
 			writeEngineError(w, err)
 			return
 		}
+		s.logUserAction("Practice", "Cleared laps for pilot slot=%d in session %q (id=%s)", slotIndex, sess.Name, targetID)
 		writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 		return
 	}
@@ -736,6 +760,7 @@ func (s *Server) handleDeletePracticeSessionLaps(w http.ResponseWriter, r *http.
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Practice", "Cleared all laps in session %q (id=%s)", sess.Name, targetID)
 	if eng.IsRaceArmed() && s.hooks.OnTimingStarted != nil {
 		s.hooks.OnTimingStarted()
 	}
@@ -835,6 +860,7 @@ func (s *Server) handleCreateRaceSession(w http.ResponseWriter, r *http.Request)
 	if createdID != "" {
 		w.Header().Set("Location", "/v1/race/sessions/"+createdID)
 	}
+	s.logUserAction("Race", "Created race %q (id=%s)", created.Config.EventName, createdID)
 	writeJSON(w, http.StatusCreated, state)
 }
 
@@ -870,6 +896,7 @@ func (s *Server) handlePatchRaceSession(w http.ResponseWriter, r *http.Request) 
 			writeEngineError(w, err)
 			return
 		}
+		s.logUserAction("Race", "Renamed race id=%s to %q", targetRaceID, *body.Name)
 	}
 	if body.Tags != nil {
 		if _, err := eng.EventAction(tracker.EventActionPayload{
@@ -880,6 +907,7 @@ func (s *Server) handlePatchRaceSession(w http.ResponseWriter, r *http.Request) 
 			writeEngineError(w, err)
 			return
 		}
+		s.logUserAction("Race", "Updated tags on race id=%s", targetRaceID)
 	}
 	if body.Selected != nil && *body.Selected {
 		selID := targetRaceID
@@ -895,6 +923,7 @@ func (s *Server) handlePatchRaceSession(w http.ResponseWriter, r *http.Request) 
 			writeEngineError(w, err)
 			return
 		}
+		s.logUserAction("Race", "Selected race id=%s", selID)
 	}
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
@@ -941,15 +970,25 @@ func (s *Server) handleRaceSessionCustomAction(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if _, err := eng.EventAction(tracker.EventActionPayload{
+	updatedRace, err := eng.EventAction(tracker.EventActionPayload{
 		Action:          "race_lifecycle",
 		RaceID:          targetRaceID,
 		LifecycleAction: lifecycleAction,
 		Reason:          body.Reason,
 		PreemptOngoing:  body.PreemptOngoing,
-	}); err != nil {
+	})
+	if err != nil {
 		writeEngineError(w, err)
 		return
+	}
+	raceIDLog := updatedRace.RaceID
+	if raceIDLog == "" {
+		raceIDLog = targetRaceID
+	}
+	if strings.TrimSpace(body.Reason) != "" {
+		s.logUserAction("Race", "Race %q (id=%s) action=%s reason=%q", updatedRace.Config.EventName, raceIDLog, customVerb, body.Reason)
+	} else {
+		s.logUserAction("Race", "Race %q (id=%s) action=%s", updatedRace.Config.EventName, raceIDLog, customVerb)
 	}
 	if (lifecycleAction == "start_race" || lifecycleAction == "resume_race") && s.hooks.OnTimingStarted != nil {
 		s.hooks.OnTimingStarted()
@@ -969,6 +1008,7 @@ func (s *Server) handleDeleteRaceSession(w http.ResponseWriter, r *http.Request)
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Race", "Deleted race id=%s", rawID)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -999,6 +1039,7 @@ func (s *Server) handlePutRaceSessionConfig(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	eng.ConfigureAndGenerateRaceForID(targetRaceID, body.Config, body.Generate, body.ApplyToExisting)
+	s.logUserAction("Race", "Updated config for race %q (id=%s, structure=%s, generate=%v)", body.Config.EventName, targetRaceID, body.Config.Structure, body.Generate)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -1067,6 +1108,7 @@ func (s *Server) handleAddRaceSessionPilot(w http.ResponseWriter, r *http.Reques
 	if assignedSlot > 0 {
 		w.Header().Set("Location", fmt.Sprintf("/v1/race/sessions/%s/pilots/%d", locRaceID, assignedSlot))
 	}
+	s.logUserAction("Race", "Added pilot slot=%d to race %q (id=%s)", assignedSlot, updated.Config.EventName, locRaceID)
 	writeJSON(w, http.StatusCreated, state)
 }
 
@@ -1088,6 +1130,7 @@ func (s *Server) handleCheckInAllRaceSessionPilots(w http.ResponseWriter, r *htt
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Race", "Checked in all pilots for race id=%s", targetRaceID)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -1122,6 +1165,7 @@ func (s *Server) handlePatchRaceSessionPilot(w http.ResponseWriter, r *http.Requ
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Race", "Updated pilot slot=%d attendance=%q in race id=%s", slotIndex, body.Attendance, targetRaceID)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -1148,6 +1192,7 @@ func (s *Server) handleRaceSessionStageCustomAction(w http.ResponseWriter, r *ht
 			writeEngineError(w, err)
 			return
 		}
+		s.logUserAction("Race", "Advanced stage in race id=%s", targetRaceID)
 		writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 
 	case "control":
@@ -1178,6 +1223,7 @@ func (s *Server) handleRaceSessionStageCustomAction(w http.ResponseWriter, r *ht
 			writeEngineError(w, err)
 			return
 		}
+		s.logUserAction("Race", "Stage control action=%s stage=%s in race id=%s", body.StageAction, stageRef, targetRaceID)
 		writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 
 	default:
@@ -1204,6 +1250,7 @@ func (s *Server) handleEditRaceSessionBracket(w http.ResponseWriter, r *http.Req
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Race", "Edited bracket action=%s in race id=%s", body.Action, body.RaceID)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -1240,6 +1287,7 @@ func (s *Server) handleRaceSessionHeatCustomAction(w http.ResponseWriter, r *htt
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Race", "Heat control action=%s heat=%q in race id=%s", body.Action, effectiveHeatID, targetRaceID)
 	if (body.Action == "start" || body.Action == "resume" || body.Action == "restart" || body.Action == "open_qual_start_pack") && s.hooks.OnTimingStarted != nil {
 		s.hooks.OnTimingStarted()
 	}
@@ -1286,6 +1334,7 @@ func (s *Server) handleRaceSessionHeatPilotCustomAction(w http.ResponseWriter, r
 		writeEngineError(w, err)
 		return
 	}
+	s.logUserAction("Race", "Marshal action=%s on pilot slot=%d in heat=%q (race id=%s)", body.Action, slotIndex, body.HeatID, body.RaceID)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 

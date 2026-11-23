@@ -116,7 +116,11 @@ func (s *Server) handleLogsConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	prevLvl := s.appLog.Level()
 	s.appLog.SetLevel(lvl)
+	if prevLvl != lvl {
+		s.appLog.Infof("[Logs] Log severity level changed from %s to %s", prevLvl.String(), lvl.String())
+	}
 	if s.store != nil {
 		_ = s.store.PutJSON(storage.KeyLogLevel, lvl.String())
 	}

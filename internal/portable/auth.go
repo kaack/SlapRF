@@ -121,6 +121,9 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !s.verifyCredentials(user, pass) {
+		if s.appLog != nil {
+			s.appLog.Warnf("[Auth] Failed login attempt for user=%q", user)
+		}
 		writeJSONNoStore(w, http.StatusUnauthorized, map[string]any{
 			"ok":    false,
 			"error": "Invalid username or password.",
@@ -131,6 +134,10 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	s.authMu.RLock()
 	cfg := s.authCfg
 	s.authMu.RUnlock()
+
+	if s.appLog != nil {
+		s.appLog.Infof("[Auth] Login succeeded for user=%q", cfg.Username)
+	}
 
 	w.Header().Set("Location", "/v1/auth/sessions/current")
 	writeJSONNoStore(w, http.StatusCreated, map[string]any{
@@ -195,6 +202,9 @@ func (s *Server) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
 
 		if s.store != nil {
 			_ = s.store.PutJSON(boltKeyAuthConfig, next)
+		}
+		if s.appLog != nil {
+			s.appLog.Infof("[Auth] Basic authentication updated: enabled=%v username=%q", next.Enabled, next.Username)
 		}
 
 		writeJSONNoStore(w, http.StatusOK, map[string]any{

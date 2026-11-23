@@ -214,6 +214,8 @@ func NewServer(cfg Config) *Server {
 	realHubRx := ingest.NewHubFrameDecoder(realEngine)
 	realHubRx.SetLogger(appLogger)
 	simHubRx := ingest.NewHubFrameDecoder(simEngine)
+	simHubRx.SetSimContext(true)
+	simHubRx.SetLogger(appLogger)
 
 	s := &Server{
 		cfg:        cfg,
@@ -287,10 +289,11 @@ func NewServer(cfg Config) *Server {
 
 	laprfSrv := laprf.NewServer(simEngine)
 	apiSrv := api.NewServer(simEngine, sim, laprfSrv, realEngine)
+	apiSrv.SetLogger(appLogger)
 	s.laprfSrv = laprfSrv
 	s.apiSrv = apiSrv
 
-	s.stream = newStreamHub(simEngine, realEngine, sim.IsRunning)
+	s.stream = newStreamHub(simEngine, realEngine, sim.IsRunning, appLogger)
 
 	sharedTimers := slaprf.NewKnownTimerRegistry(store)
 	s.usbTransport = slaprfusb.NewTransport(slaprfusb.Config{
