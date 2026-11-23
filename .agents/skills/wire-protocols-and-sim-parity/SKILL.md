@@ -25,8 +25,13 @@ Defined across C (`firmware/components/slaprf_radio/` & `firmware/components_ble
 - `0xC5 0x61` **SINGLE (`16` bytes)**: Single-sweep `0.5 dB` frame
 - **USB Stream Framing**: Binary Hub packets multiplexed on USB CDC alongside ASCII console lines are prefixed with `0x1E <pkt_len_u8>`.
 
-### Packed Struct & Size Invariants
+### Packed Struct, Size & TDMA Slot-Binding Invariants
 - Always mark wire structs `__attribute__((packed))` in C and add `_Static_assert(sizeof(...) == EXPECTED_LEN, ...)` in C plus matching length constants and unit tests in `internal/ingest/hub_frames_test.go`. A 1-byte struct padding mismatch silently drops every frame at `validCRC8()`!
+- **Dual-Path TDMA Slot Binding (`0xC5 0x5A` HELLO + `STATUS?` `spokes`)**:
+  - `NetworkView` channel bars read raw `0xC5 0x60` window frames keyed by TDMA `slot` (`1..7`), whereas the timing engine (`timers[]`, `gates[]`, and Practice/Race `Signals`) requires `HubFrameDecoder` (`r.slots[slot]`) to map `TDMA slot -> 8-hex Fingerprint -> Engine TimerID`.
+  - Whenever `Engine.RegisterTimerHello` registers a Hub or active Spoke from an authoritative `STATUS?` JSON push (`spokes[]` with real non-`53504Bxx` fingerprint and `msAgo < 5000`) or `SLAPRF02` readout, **`HubFrameDecoder.BindSlotHello` (`internal/slaprf/manager_io.go`) and `TimerConsole.syncHubHellosFromStatus` (`web/src/services/timer_console.ts`) MUST also bind `(slot -> fp)` idempotently** — never resetting `seenSeq` or `timelines` when `(slot, fp, label)` is already bound — so a missed binary `0xC5 0x5A` frame never leaves a timer online with `0` Engine RX samples.
+- **Scoped Track Refresh Invariant**: Whenever `Engine.loadTrackAndRulesIntoLiveEngineLocked` (`internal/tracker/scoped_track.go`) refreshes `e.gates` from a Practice/Race `TrackSnapshot` (including during `/v1/state` `PracticeSnapshot()`), preserve monotonic `FramesRxCount` for unchanged `(GateID, AssignedTimerID)` pairs.
+- **Host Pairing Identity Across Data Resets**: Hardware pairing keys (`hw.ble_host_key` + `slaprf.db.hostkey` in `internal/slaprf/known_timers.go`) represent host identity rather than session data and must always be preserved by `BoltStore.Wipe()` (`POST /v1/storage:reset`).
 
 ---
 

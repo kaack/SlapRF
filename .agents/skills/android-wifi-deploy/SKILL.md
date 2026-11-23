@@ -2,9 +2,10 @@
 name: android-wifi-deploy
 description: >-
   Build the signed SlapRF Android APK (cmd/build-android), pair and connect wireless adb over Wi-Fi,
-  push and launch app.slaprf/.SlapRFHost, stream Go/Java/WebView logcat logs, and forward the
-  Android WebView DevTools socket for live CDP inspection. Activate whenever building, deploying, or
-  debugging the Android app.
+  push and launch app.slaprf/.SlapRFHost, triage live Bluetooth/USB Hub + Spoke telemetry over
+  127.0.0.1:18090, stream Go/Java/WebView logcat logs, and forward the Android WebView DevTools
+  socket for live CDP inspection. Activate whenever building, deploying, or debugging the Android app
+  or live phone hardware links.
 ---
 
 # SlapRF Android Build & Wireless Wi-Fi Deployment
@@ -53,7 +54,13 @@ adb connect "${PHONE_IP}:5555"
 # Unplug USB cable; verify wireless target shows 'device' (not 'unauthorized'):
 adb devices -l
 ```
-- **Troubleshooting `unauthorized` After `adb tcpip 5555`**: If `adb devices -l` shows `unauthorized`, remind the user to check **"Always allow from this computer"** and tap **Allow** on the phone screen, then run `adb reconnect` and `adb connect "${PHONE_IP}:5555"`. If `adb tcpip 5555` was already run before reading `PHONE_IP`, scan the local `/24` subnet for open TCP port `5555` to locate the phone's Wi-Fi IP.
+- **DHCP IP Renewal (`No route to host`)**: Phones frequently renew their Wi-Fi DHCP lease between sessions. Before scanning the subnet or asking the user for the new IP, query mDNS directly:
+  ```bash
+  adb mdns services
+  # Connect to the discovered IP:5555 (or _adb-tls-connect._tcp port):
+  adb connect <DISCOVERED_IP>:<PORT>
+  ```
+- **Troubleshooting `unauthorized` After `adb tcpip 5555`**: If `adb devices -l` shows `unauthorized`, remind the user to check **"Always allow from this computer"** and tap **Allow** on the phone screen, then run `adb reconnect` and `adb connect "${PHONE_IP}:5555"`. If `adb tcpip 5555` was already run before reading `PHONE_IP` and `adb mdns services` is empty, scan the local `/24` subnet for open TCP port `5555` to locate the phone's Wi-Fi IP.
 
 *(Tip: On Linux user-space installs via `dev-setup`, `adb` is located at `~/.slaprf/android-toolchain/sdk/platform-tools/adb` or symlinked to `~/.local/bin/adb`. If connecting over USB on Ubuntu/Debian and `adb devices` shows `no permissions`, add `SUBSYSTEM=="usb", ATTR{idVendor}=="<VENDOR_HEX>", MODE="0666", GROUP="plugdev", TAG+="uaccess"` under `/etc/udev/rules.d/51-android.rules` or use Option A Wireless Debugging directly over Wi-Fi with zero udev setup. When multiple devices are listed in `adb devices`, pass `-s <SERIAL_OR_IP:PORT>` to every `adb` command.)*
 
@@ -109,3 +116,29 @@ PID=$(adb -s <DEVICE> shell pidof app.slaprf | tr -d '\r')
 adb -s <DEVICE> forward tcp:9223 localabstract:webview_devtools_remote_${PID}
 curl -fsS http://127.0.0.1:9223/json/list
 ```
+
+---
+
+## 5. Live Hub + Spoke Telemetry Triage Playbook (`127.0.0.1:18090`)
+
+Before asking the user to unplug physical timers from gates, isolate any "missing signal / 0 samples" bug across the 3 pipeline stages over the forwarded `127.0.0.1:18090` server:
+
+1. **Stage 1 — Link & Hub `STATUS?` (`GET /v1/slaprf/{bluetooth,usb}/connections`)**:
+   - Sample twice `1.5 s` apart and inspect `slots[0].lastStatus`:
+     - `spokes[]` (`slot`, `fp`, `label`, `frames`, `msAgo`, `dbm`): verifies 2.4 GHz ESP-NOW Spoke -> Hub delivery.
+     - `ble.txDrops` delta: verifies NimBLE GATT notification health (`0` delta = lossless BLE transport).
+   - Exact REST routes for live control (avoid guessing `:connect` or `/ws` suffixes):
+     - Connect slot: `POST /v1/slaprf/{bluetooth,usb}/connections` with `{"slotIndex":0,"portName":"ble:<FP8HEX>"}`
+     - Send console command (`STATUS?`, `PANIC?`, `BOOTLOG?`): `POST /v1/slaprf/{bluetooth,usb}:command` with `{"slotIndex":0,"command":"STATUS?"}`
+2. **Stage 2 — Raw `0xC5` Frame Demux (`ws://127.0.0.1:18090/v1/ws/slaprf/{bluetooth,usb}`)**:
+   - Read `hub_live` events (`payload.slots[]` keyed by TDMA `slot` `1..7`). **NetworkView** renders its per-timer channel bars directly from `hub_live`.
+   - If `hub_live` `frames` increments for a TDMA slot while `/v1/state` `timers[].framesRxCount` stays `0` (and `noiseFloorDbm` stays at default `-92` instead of `-91`), binary `0xC5 0x60` frames are reaching `slaprf.Manager` cleanly and being dropped in `HubFrameDecoder` (`internal/ingest/hub_frames.go`) — check `r.slots[slot]` TDMA-to-fingerprint binding (`BindSlotHello` / `0xC5 0x5A` HELLO).
+3. **Stage 3 — Timing Engine & Practice/Race Charts (`GET /v1/state` + `ws://127.0.0.1:18090/v1/ws/stream`)**:
+   - Compare two `/v1/state` snapshots `1.0–1.5 s` apart for **both**:
+     - `timers[].framesRxCount` (`Engine.detected`, ~50 Hz for BLE Hub, ~100 Hz for Spokes), and
+     - `gates[].framesRxCount` (`Engine.gates`, bound via `assignedTimerId`). If `timers[]` increments while `gates[]` does not, check `touchGateLocked` and `loadTrackAndRulesIntoLiveEngineLocked` (`internal/tracker/scoped_track.go`).
+   - Verify binary WebSocket frames (`opcode=2`) on `/v1/ws/stream`: header bytes `[ver=0x01, slots=0x08, count_lo, count_hi, gateId_u8, ...]` confirm live RSSI batches are streaming to Practice/Race `Signals` for each `gateId`.
+
+### BLE Pairing Key Persistence & Restart Nuances
+- **Host Pairing Identity (`hw.ble_host_key`)**: Stored in `BoltStore` (`preserved` across `BoltStore.Wipe()`), mirrored to `files/slaprf.db.hostkey`, and auto-recovered from historical `bbolt` leaf pages (`KnownTimerRegistry.HistoricalHostAuthKeys`) if a `ble:<FP>` Hub ever replies `auth_mismatch`. Never wipe `hw.ble_host_key` during session/lap resets.
+- **4 s BLE Supervision Timeout After Process Kill (`GATT status 147`)**: Killing `app.slaprf` (`am force-stop` or `adb install -r`) drops the Android process before sending a BLE disconnect, so the Hub keeps the old link open for ~4 s before advertising again. `Manager.SetActiveWithRestore` automatically enters `attemptAutoReconnect` on startup failure; if scripting immediate `POST /v1/slaprf/bluetooth/connections` right after `adb install -r`, wait ~4 s if the first attempt returns `GATT status 147`.
