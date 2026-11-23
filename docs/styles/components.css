@@ -526,6 +526,10 @@ html[data-theme="light"] .dot.is-hollow {
 .split-neutral {
   color: var(--text-2);
 }
+.split-best {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
 .split-good {
   color: var(--good);
   background: rgba(52, 211, 153, 0.1);
@@ -555,6 +559,9 @@ html[data-theme="light"] .dot.is-hollow {
   width: 10px;
   height: 10px;
   border-radius: 3px;
+}
+.legend-row i.split-best {
+  background: var(--accent);
 }
 .legend-row i.split-purple {
   background: var(--purple);
