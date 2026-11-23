@@ -587,3 +587,117 @@ func TestBLEMultiGateAndSynthesizedLive2(t *testing.T) {
 		t.Fatalf("expected synthesized LIVE 2 events from 0xC5 0x60 windows, got %d", gotLive)
 	}
 }
+
+func TestBLESpokeSlotBoundFromStatusWithoutBinaryHello(t *testing.T) {
+	eng := tracker.NewRealEngine()
+	eng.SetTimingHardwareMode(domain.HardwareModeSlapRFBLE, false)
+	_ = eng.UpdatePilotSlot(domain.PilotSlot{
+		SlotIndex: 1,
+		Callsign:  "OneEye",
+		Band:      domain.BandRaceband,
+		Channel:   7,
+		Enabled:   true,
+	})
+	hubRx := ingest.NewHubFrameDecoder(eng)
+
+	var activeStream *BLEStreamPort
+	var trMu sync.Mutex
+
+	bleTr := NewTransport(Config{
+		OpenPort: func(_ string, _ int) (firmware.SerialPort, error) {
+			tr := &echoHubTransport{fakeBLETransport: fakeBLETransport{maxWrite: 244}}
+			p := NewBLEStreamPort(tr)
+			tr.port = p
+			trMu.Lock()
+			activeStream = p
+			trMu.Unlock()
+			return p, nil
+		},
+	})
+	mgr := slaprf.NewManager(slaprf.Config{Transport: bleTr, Engine: eng, HubRx: hubRx})
+	defer mgr.Close()
+
+	if _, err := mgr.Connect(0, "ble:CAFE1234"); err != nil {
+		t.Fatalf("Connect ble:CAFE1234: %v", err)
+	}
+
+	trMu.Lock()
+	stream := activeStream
+	trMu.Unlock()
+
+	// Deliver Hub 1 Hz STATUS? announcing Spoke T3 in TDMA slot 4 (53E049F7) WITHOUT sending a
+	// binary 0xC5 0x5A HELLO frame for slot 4.
+	statusLine := `@{"t":"status","fw":"v0.1.6","role":1,"fp":"CAFE1234","label":"H1","sweepHz":50,"slot":1,"spokes":[{"slot":2,"fp":"7B1C4D9C","label":"T2","msAgo":6,"frames":100,"seq":10},{"slot":3,"fp":"D3FEDE5D","label":"T1","msAgo":5,"frames":100,"seq":20},{"slot":4,"fp":"53E049F7","label":"T3","msAgo":4,"frames":100,"seq":30}]}` + "\n"
+	stream.Deliver([]byte(statusLine))
+
+	var t3TimerID uint8
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		for _, dt := range eng.DetectedTimersSnapshot() {
+			if dt.Fingerprint == "53E049F7" {
+				t3TimerID = dt.TimerID
+				break
+			}
+		}
+		if t3TimerID != 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if t3TimerID == 0 {
+		t.Fatalf("expected Spoke T3 (53E049F7) registered from STATUS?, got %+v", eng.DetectedTimersSnapshot())
+	}
+
+	// Assign T3 to Sector Gate #2 on the active track.
+	if _, err := eng.AddGate("", t3TimerID); err != nil {
+		t.Fatalf("AddGate(T3): %v", err)
+	}
+
+	makeWin4 := func(slot byte, baseSeq byte, ch0Dbm float32) []byte {
+		samples := make([]domain.TimerTelemetryFrame, 4)
+		for i := 0; i < 4; i++ {
+			samples[i] = domain.TimerTelemetryFrame{
+				SeqNum: uint32(baseSeq + byte(i)),
+				RSSI:   [domain.MaxPilotPoolSize]float32{ch0Dbm, -127, -127, -127, -127, -127, -127, -127},
+			}
+		}
+		pkt := ingest.EncodeWindowFrame(slot, 4100, -91, samples)
+		return append([]byte{0x1E, byte(len(pkt))}, pkt...)
+	}
+
+	// Stream two overlapping 4-sample windows on slot 4 (seqs 40..43, then 42..45 -> 6 unique samples).
+	stream.Deliver(makeWin4(4, 40, -54.5))
+	// Push another 1 Hz STATUS? mid-stream to ensure BindSlotHello is idempotent and never resets seq dedupe.
+	stream.Deliver([]byte(statusLine))
+	stream.Deliver(makeWin4(4, 42, -52.0))
+
+	var gotFrames uint64
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		for _, dt := range eng.DetectedTimersSnapshot() {
+			if dt.TimerID == t3TimerID {
+				gotFrames = dt.FramesRxCount
+			}
+		}
+		if gotFrames >= 6 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if gotFrames != 6 {
+		t.Fatalf("expected exactly 6 unique Engine RX samples for T3 (slot 4), got %d", gotFrames)
+	}
+
+	_, gates, _, _, _ := eng.StateSnapshot()
+	var gate2Frames uint64
+	var gate2Rssi float32
+	for _, g := range gates {
+		if g.AssignedTimerID == t3TimerID {
+			gate2Frames = g.FramesRxCount
+			gate2Rssi = g.LastRSSI[0]
+		}
+	}
+	if gate2Frames != 6 || gate2Rssi < -60 {
+		t.Fatalf("expected Gate bound to T3 to receive 6 samples with live RSSI, got frames=%d rssi=%.1f", gate2Frames, gate2Rssi)
+	}
+}

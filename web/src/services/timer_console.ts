@@ -1690,6 +1690,61 @@ export class TimerConsole {
     this.flushHubPackets();
   }
 
+  /**
+   * Mirrors authoritative Hub `STATUS?` slot assignments (`slot 1` Hub + active `spokes` in
+   * `slots 2..7`) into `hubSlotHello` and synthesizes any missing 36-byte `0xC5 0x5A` HELLO
+   * frames for WASM `HubFrameDecoder` when a direct WebSerial connection missed an earlier HELLO.
+   */
+  private syncHubHellosFromStatus(st: TimerStatus): void {
+    if (st.role !== 1 || isBackendSerialPort(this.port)) return;
+    const emitSyntheticHello = (slot: number, role: number, fpHex: string, sweepHz: number, label: string): void => {
+      const cleanFp = fpHex.trim().toUpperCase();
+      if (!/^[0-9A-F]{8}$/.test(cleanFp) || cleanFp === "00000000" || cleanFp.startsWith("53504B")) {
+        return;
+      }
+      const cleanLabel = label.trim() || (slot === 1 ? "H1" : `T${slot - 1}`);
+      const prev = this.hubSlotHello.get(slot);
+      if (prev && prev.fp === cleanFp && prev.label === cleanLabel) {
+        return;
+      }
+      const fpNum = Number.parseInt(cleanFp, 16) >>> 0;
+      if (fpNum === 0) return;
+      const pkt = new Uint8Array(36);
+      pkt[0] = 0xc5;
+      pkt[1] = 0x5a;
+      pkt[2] = slot & 0xff;
+      pkt[3] = role & 0xff;
+      pkt[4] = fpNum & 0xff;
+      pkt[5] = (fpNum >>> 8) & 0xff;
+      pkt[6] = (fpNum >>> 16) & 0xff;
+      pkt[7] = (fpNum >>> 24) & 0xff;
+      pkt[9] = (sweepHz > 0 ? sweepHz : 100) & 0xff;
+      const lb = new TextEncoder().encode(cleanLabel);
+      pkt.set(lb.subarray(0, 24), 10);
+      let crc = 0;
+      for (let i = 0; i < 35; i++) crc ^= pkt[i];
+      pkt[35] = crc;
+      this.queueHubPacket(pkt, 0, 36);
+    };
+
+    const isBleHub = Boolean(st.image === "ble" || st.ble);
+    const hubHz = st.sweepHz && st.sweepHz > 0 ? st.sweepHz : isBleHub ? 50 : 100;
+    if (st.fp) {
+      emitSyntheticHello(1, 1, st.fp, hubHz, st.label || "H1");
+    }
+    if (Array.isArray(st.spokes)) {
+      for (const sp of st.spokes) {
+        if (!sp || sp.slot < 2 || sp.slot > 7 || !sp.fp) continue;
+        const framesOk = sp.frames === undefined || sp.frames > 0;
+        const msAgo = sp.msAgo !== undefined && sp.msAgo >= 0x80000000 ? 0 : sp.msAgo;
+        const freshOk = msAgo === undefined || msAgo < 5000;
+        if (!framesOk || !freshOk) continue;
+        emitSyntheticHello(sp.slot, 2, sp.fp, 100, sp.label || `T${sp.slot - 1}`);
+      }
+    }
+    this.flushHubPackets();
+  }
+
   /** Appends a USB read to `buf[bufStart, bufEnd)`, compacting or growing (amortized O(1)/byte). */
   private appendToBuffer(chunk: Uint8Array): void {
     const pending = this.bufEnd - this.bufStart;
@@ -2008,6 +2063,7 @@ export class TimerConsole {
               fp: st.fp,
               role: st.role === 1 ? "hub" : "spoke",
             });
+            this.syncHubHellosFromStatus(st);
             if (labelChanged || spokesChanged) {
               this.lastKnownSpokeSig = spokeSig;
               recordKnownTimerStatus(st);

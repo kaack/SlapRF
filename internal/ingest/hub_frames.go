@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -281,34 +282,67 @@ func (r *HubFrameDecoder) handleHello(raw []byte) {
 	if slot == 0 || fp == 0 || (fp&0xFFFFFF00) == 0x53504B00 {
 		return
 	}
-	label := cString(raw[10:34])
+	label := strings.TrimSpace(cString(raw[10:34]))
 	isHub := raw[3] == firmware.RoleHubTimer
 	fpHex := fmt.Sprintf("%08X", fp)
-	hello := helloInfo{
+	r.applyHello(slot, helloInfo{
 		fingerprint: fp,
 		fpHex:       fpHex,
 		isHub:       isHub,
 		sweepHz:     raw[9],
 		label:       label,
-	}
+	})
+}
 
+// BindSlotHello maps a Hub TDMA slot (1 = Hub, 2..7 = Spokes) to a board fingerprint learned from
+// an authoritative Hub STATUS? report or SLAPRF02 readout. If the slot is already bound to the same
+// board in the engine, this refreshes online status without resetting sequence/timeline state;
+// otherwise it registers the slot immediately so incoming 0xC5 0x60 telemetry frames are decoded
+// even if a binary 0xC5 0x5A HELLO frame was missed.
+func (r *HubFrameDecoder) BindSlotHello(slot uint8, fpHex string, isHub bool, sweepHz uint8, label string) bool {
+	if slot == 0 || slot > 7 {
+		return false
+	}
+	fpHex = strings.ToUpper(strings.TrimSpace(fpHex))
+	if len(fpHex) != 8 {
+		return false
+	}
+	parsed, err := strconv.ParseUint(fpHex, 16, 32)
+	if err != nil {
+		return false
+	}
+	fp := uint32(parsed)
+	if fp == 0 || (fp&0xFFFFFF00) == 0x53504B00 {
+		return false
+	}
+	return r.applyHello(slot, helloInfo{
+		fingerprint: fp,
+		fpHex:       fmt.Sprintf("%08X", fp),
+		isHub:       isHub,
+		sweepHz:     sweepHz,
+		label:       strings.TrimSpace(label),
+	})
+}
+
+func (r *HubFrameDecoder) applyHello(slot uint8, hello helloInfo) bool {
 	r.mu.Lock()
 	r.lastHello[slot] = hello
-	if !isHub && r.engine != nil && r.engine.IsDeletedSpokeFingerprint(fpHex) {
+	if !hello.isHub && r.engine != nil && r.engine.IsDeletedSpokeFingerprint(hello.fpHex) {
 		delete(r.slots, slot)
 		r.mu.Unlock()
-		return
+		return false
 	}
-	if cur, ok := r.slots[slot]; ok && cur.fingerprint == fp && cur.label == label && (r.engine == nil || r.engine.HasDetectedTimer(cur.timerID)) {
+	if cur, ok := r.slots[slot]; ok && cur.fingerprint == hello.fingerprint && strings.TrimSpace(cur.label) == hello.label && (r.engine == nil || r.engine.HasDetectedTimer(cur.timerID)) {
 		r.mu.Unlock()
 		if r.engine != nil {
 			r.engine.MarkTimerSeen(cur.timerID) // Keeps the collector Hub (HELLO-only) online
 		}
-		return // Already registered
+		return false // Already registered
 	}
 	r.mu.Unlock()
 
 	r.registerHello(slot, hello)
+	return true
 }
 
 func (r *HubFrameDecoder) registerHello(slot uint8, hello helloInfo) {

@@ -1115,7 +1115,11 @@ func (m *Manager) handleHubBinaryFrame(slot *connSlot, frame []byte) {
 				label = fmt.Sprintf("T%d", tdmaSlot-1)
 			}
 		}
+		prevHello, hadHello := slot.hubHello[tdmaSlot]
 		slot.hubHello[tdmaSlot] = slotHello{fp: fp, label: label, role: role, sweepHz: sweepHz}
+		if !hadHello || prevHello.fp != fp || prevHello.label != label {
+			m.logf("[SlapRF] slot %d HELLO rx: tdma=%d fp=%s role=%d sweepHz=%d label=%q", slot.index, tdmaSlot, fp, role, sweepHz, label)
+		}
 
 	case kind == ingest.FrameMagicWindow:
 		sampleCount := int(frame[3])
@@ -1531,6 +1535,7 @@ func (m *Manager) emitTextLine(slot *connSlot, raw []byte) {
 				slot.lastStatus = msg
 				slot.lastStatusAtMs = nowMs
 				slot.lastRealJsonStatusMs = nowMs
+				m.mirrorStatusHellosLocked(slot, msg)
 				curPort := slot.port
 				prevPortName := slot.portName
 				retarget := canonTarget != "" && prevPortName != "" && !strings.EqualFold(prevPortName, canonTarget)
@@ -1588,6 +1593,82 @@ func (m *Manager) recordKnownConfig(cfg *firmware.TimerReadout) {
 	m.registerConnectedHubInEngine(nil, cfg)
 }
 
+func (m *Manager) mirrorStatusHellosLocked(slot *connSlot, st map[string]any) {
+	if slot == nil || st == nil {
+		return
+	}
+	roleNum, _ := asInt(st["role"])
+	if roleNum != 1 {
+		return
+	}
+	hubSweepHz, _ := asInt(st["sweepHz"])
+	if hubSweepHz <= 0 {
+		hubSweepHz = m.traits.DefaultSweepHz
+	}
+	if hubSweepHz <= 0 {
+		hubSweepHz = firmware.SweepHz
+	}
+	if fp, _ := st["fp"].(string); fp != "" && !strings.HasPrefix(strings.ToUpper(fp), "53504B") {
+		label, _ := st["label"].(string)
+		label = strings.TrimSpace(label)
+		if label == "" {
+			label = "H1"
+		}
+		if cur, ok := slot.hubHello[1]; !ok || cur.fp == "" || strings.HasPrefix(cur.fp, "53504B") {
+			slot.hubHello[1] = slotHello{
+				fp:      strings.ToUpper(strings.TrimSpace(fp)),
+				label:   label,
+				role:    firmware.RoleHubTimer,
+				sweepHz: uint8(hubSweepHz),
+			}
+		}
+	}
+	rawSpokes, ok := st["spokes"].([]any)
+	if !ok {
+		return
+	}
+	for _, item := range rawSpokes {
+		sp, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		spSlot, _ := asInt(sp["slot"])
+		if spSlot < 2 || spSlot > 7 {
+			continue
+		}
+		spFp, _ := sp["fp"].(string)
+		spFp = strings.ToUpper(strings.TrimSpace(spFp))
+		if spFp == "" || strings.HasPrefix(spFp, "53504B") {
+			continue
+		}
+		frames, hasFrames := asInt(sp["frames"])
+		msAgo, hasMsAgo := asInt(sp["msAgo"])
+		if hasMsAgo && msAgo >= 0x80000000 {
+			msAgo = 0
+		}
+		if (hasFrames && frames <= 0) || (hasMsAgo && msAgo >= 5000) {
+			continue
+		}
+		spLabel, _ := sp["label"].(string)
+		spLabel = strings.TrimSpace(spLabel)
+		if spLabel == "" {
+			spLabel = fmt.Sprintf("T%d", spSlot-1)
+		}
+		spHz, _ := asInt(sp["sweepHz"])
+		if spHz <= 0 {
+			spHz = firmware.SweepHz
+		}
+		if cur, ok := slot.hubHello[uint8(spSlot)]; !ok || cur.fp != spFp {
+			slot.hubHello[uint8(spSlot)] = slotHello{
+				fp:      spFp,
+				label:   spLabel,
+				role:    firmware.RoleSpokeTimer,
+				sweepHz: uint8(spHz),
+			}
+		}
+	}
+}
+
 func (m *Manager) registerConnectedHubInEngine(st map[string]any, cfg *firmware.TimerReadout) {
 	m.mu.RLock()
 	simRunning := m.simMode
@@ -1595,20 +1676,38 @@ func (m *Manager) registerConnectedHubInEngine(st map[string]any, cfg *firmware.
 	if simRunning || m.cfg.Engine == nil {
 		return
 	}
+	defaultHubHz := m.traits.DefaultSweepHz
+	if defaultHubHz <= 0 {
+		defaultHubHz = firmware.SweepHz
+	}
 	if st != nil {
 		if roleNum, _ := asInt(st["role"]); roleNum == 1 {
 			fp, _ := st["fp"].(string)
 			label, _ := st["label"].(string)
+			hubHz, _ := asInt(st["sweepHz"])
+			if hubHz <= 0 {
+				hubHz = defaultHubHz
+			}
 			if fp != "" {
 				if tid, err := m.cfg.Engine.RegisterTimerHello(fp, true, label); err == nil && tid != 0 {
 					m.cfg.Engine.MarkTimerSeen(tid)
+				}
+				if m.cfg.HubRx != nil {
+					if m.cfg.HubRx.BindSlotHello(1, fp, true, uint8(hubHz), label) {
+						m.logf("[SlapRF] bound tdma=1 fp=%s label=%q sweepHz=%d from STATUS?", fp, label, hubHz)
+					}
 				}
 			}
 			if rawSpokes, ok := st["spokes"].([]any); ok {
 				for _, item := range rawSpokes {
 					if sp, ok := item.(map[string]any); ok {
+						spSlot, _ := asInt(sp["slot"])
 						spFp, _ := sp["fp"].(string)
 						spLabel, _ := sp["label"].(string)
+						spHz, _ := asInt(sp["sweepHz"])
+						if spHz <= 0 {
+							spHz = firmware.SweepHz
+						}
 						frames, hasFrames := asInt(sp["frames"])
 						msAgo, hasMsAgo := asInt(sp["msAgo"])
 						if hasMsAgo && msAgo >= 0x80000000 {
@@ -1623,6 +1722,11 @@ func (m *Manager) registerConnectedHubInEngine(st map[string]any, cfg *firmware.
 								if tid, err := m.cfg.Engine.RegisterTimerHello(spFp, false, spLabel); err == nil && tid != 0 {
 									if spokeActive {
 										m.cfg.Engine.MarkTimerSeen(tid)
+										if m.cfg.HubRx != nil && spSlot >= 2 && spSlot <= 7 {
+											if m.cfg.HubRx.BindSlotHello(uint8(spSlot), spFp, false, uint8(spHz), spLabel) {
+												m.logf("[SlapRF] bound tdma=%d fp=%s label=%q sweepHz=%d from STATUS?", spSlot, spFp, spLabel, spHz)
+											}
+										}
 									} else {
 										m.cfg.Engine.SetDetectedTimerOnline(tid, false)
 									}
@@ -1637,6 +1741,11 @@ func (m *Manager) registerConnectedHubInEngine(st map[string]any, cfg *firmware.
 	if cfg != nil && cfg.Role == "hub" && cfg.Fingerprint != "" {
 		if tid, err := m.cfg.Engine.RegisterTimerHello(cfg.Fingerprint, true, cfg.TimerLabel); err == nil && tid != 0 {
 			m.cfg.Engine.MarkTimerSeen(tid)
+		}
+		if m.cfg.HubRx != nil {
+			if m.cfg.HubRx.BindSlotHello(1, cfg.Fingerprint, true, uint8(defaultHubHz), cfg.TimerLabel) {
+				m.logf("[SlapRF] bound tdma=1 fp=%s label=%q sweepHz=%d from SLAPRF02", cfg.Fingerprint, cfg.TimerLabel, defaultHubHz)
+			}
 		}
 	}
 }
