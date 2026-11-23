@@ -2912,6 +2912,26 @@ html[data-theme="light"] .bar-time {
   gap: 10px;
   flex-shrink: 0;
 }
+.diag-log-info {
+  min-width: 0;
+  flex: 1 1 220px;
+}
+.diag-log-actions {
+  margin-left: auto;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.diag-log-actions .custom-select-wrap {
+  width: auto;
+  min-width: 138px;
+  flex: 0 0 auto;
+}
+.diag-log-actions .custom-select-trigger {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 26px 0 10px;
+  font-size: 12px;
+}
 .mgp-key-row {
   align-items: flex-start;
   gap: 16px;
@@ -2950,6 +2970,10 @@ html[data-theme="light"] .bar-time {
     justify-content: space-between;
     padding-top: 8px;
     border-top: 1px solid var(--border);
+  }
+  .diag-log-actions {
+    justify-content: flex-end;
+    flex-wrap: wrap;
   }
   .option-row > .switch {
     align-self: flex-start;
