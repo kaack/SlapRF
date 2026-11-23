@@ -303,7 +303,8 @@ func (m *Manager) SetActiveWithRestore(active bool, simMode bool, restoreSaved b
 		}
 		go func(slotIdx int, t string) {
 			if _, err := m.Connect(slotIdx, t); err != nil {
-				m.logf("[SlapRF:%s] Auto-restore %s on slot %d skipped: %v", m.tr.Name(), t, slotIdx, err)
+				m.logf("[SlapRF:%s] Auto-restore %s on slot %d retrying in background: %v", m.tr.Name(), t, slotIdx, err)
+				m.attemptAutoReconnect(m.slots[slotIdx], t)
 			}
 		}(idx, target)
 	}

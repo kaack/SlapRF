@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -699,5 +700,92 @@ func TestBLESpokeSlotBoundFromStatusWithoutBinaryHello(t *testing.T) {
 	}
 	if gate2Frames != 6 || gate2Rssi < -60 {
 		t.Fatalf("expected Gate bound to T3 to receive 6 samples with live RSSI, got frames=%d rssi=%.1f", gate2Frames, gate2Rssi)
+	}
+}
+
+type selectiveAuthHubTransport struct {
+	fakeBLETransport
+	port        *BLEStreamPort
+	expectedKey string
+	authed      bool
+	lineMu      sync.Mutex
+	line        []byte
+}
+
+func (s *selectiveAuthHubTransport) WriteWithoutResponse(p []byte) error {
+	if err := s.fakeBLETransport.WriteWithoutResponse(p); err != nil {
+		return err
+	}
+	s.lineMu.Lock()
+	defer s.lineMu.Unlock()
+	for _, c := range p {
+		if c != '\n' {
+			s.line = append(s.line, c)
+			continue
+		}
+		l := strings.TrimSpace(string(s.line))
+		s.line = nil
+		switch {
+		case strings.HasPrefix(l, "AUTH "):
+			got := strings.TrimSpace(strings.TrimPrefix(l, "AUTH "))
+			pRef := s.port
+			if got == s.expectedKey {
+				s.authed = true
+				go pRef.Deliver([]byte(`@{"t":"ok","cmd":"auth","paired":true,"claimed":false}` + "\n"))
+			} else {
+				go func() {
+					pRef.Deliver([]byte(`@{"t":"err","code":"auth_mismatch","msg":"Hub is paired to another device."}` + "\n"))
+					time.Sleep(25 * time.Millisecond)
+					pRef.Disconnected(errors.New("remote terminated"))
+				}()
+			}
+		case l == "STATUS?" && s.authed:
+			pRef := s.port
+			go pRef.Deliver([]byte(`@{"t":"status","fw":"v0.1.6","role":1,"fp":"EFE44224","label":"H1","sweepHz":50,"slot":1}` + "\n"))
+		}
+	}
+	return nil
+}
+
+func TestBLEHistoricalHostKeyAutoRecoveryOnAuthMismatch(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "ble_recover.db")
+	store, err := storage.OpenBoltStore(dbPath)
+	if err != nil {
+		t.Fatalf("OpenBoltStore: %v", err)
+	}
+	defer store.Close()
+
+	const oldHubKey = "DEADBEEF0123456789ABCDEF01234567"
+	const wrongNewKey = "FFFFFFFF000000001122334455667788"
+	if err := store.PutJSON(storage.KeyBLEHostKey, wrongNewKey); err != nil {
+		t.Fatalf("seed wrong key: %v", err)
+	}
+	f, err := os.OpenFile(dbPath, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("open db for historical page simulation: %v", err)
+	}
+	_, _ = f.WriteString(`hw.ble_host_key"` + oldHubKey + `"`)
+	_ = f.Close()
+
+	bleTr := NewTransport(Config{
+		OpenPort: func(_ string, _ int) (firmware.SerialPort, error) {
+			tr := &selectiveAuthHubTransport{
+				fakeBLETransport: fakeBLETransport{maxWrite: 244},
+				expectedKey:      oldHubKey,
+			}
+			p := NewBLEStreamPort(tr)
+			tr.port = p
+			return p, nil
+		},
+	})
+	mgr := slaprf.NewManager(slaprf.Config{Transport: bleTr, Store: store})
+	defer mgr.Close()
+
+	snap, err := mgr.Connect(0, "ble:EFE44224")
+	if err != nil {
+		t.Fatalf("expected Connect to recover historical host key, got err: %v", err)
+	}
+	if !snap.Connected || mgr.HostAuthKey() != oldHubKey {
+		t.Fatalf("expected connected=true and HostAuthKey=%s, got snap=%+v key=%s", oldHubKey, snap, mgr.HostAuthKey())
 	}
 }
