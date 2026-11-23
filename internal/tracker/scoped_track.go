@@ -295,6 +295,16 @@ func (e *Engine) ensureRaceTrackInitializedLocked(r *domain.RaceTournamentState)
 // so live RF crossing detectors and the 3D flight simulator run against the active course.
 func (e *Engine) loadTrackAndRulesIntoLiveEngineLocked(gates []domain.TrackGate, rules *domain.TimingRules) {
 	nextGates := e.enrichTrackGatesLocked(gates)
+	for i := range nextGates {
+		for j := range e.gates {
+			if e.gates[j].GateID == nextGates[i].GateID && e.gates[j].AssignedTimerID == nextGates[i].AssignedTimerID {
+				if e.gates[j].FramesRxCount > nextGates[i].FramesRxCount {
+					nextGates[i].FramesRxCount = e.gates[j].FramesRxCount
+				}
+				break
+			}
+		}
+	}
 	sameLayout := len(nextGates) == len(e.gates)
 	if sameLayout {
 		for i := range nextGates {
