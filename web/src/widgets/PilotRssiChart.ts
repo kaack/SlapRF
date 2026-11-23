@@ -5,24 +5,29 @@ import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { adaptColorForTheme, font, inkOnColor, theme, withAlpha } from "../core/theme";
 import { ApiClient } from "../services/api_client";
+import { playPreviewCrossingBeep } from "../services/crossing_beep";
 import { suggestThreshold } from "../state/calibration";
 import {
   enterThresholdAt,
   exitThresholdAt,
   gateColor,
   gateLabel,
+  gateOverrideBeepMode,
   gateRulesAt,
   pilotGateOverridesAt,
   pilotGateRulesAt,
+  resolveCrossingBeepMode,
 } from "../state/selectors";
 import { AppStore, HISTORY_SECONDS } from "../state/store";
 import {
+  CrossingBeepMode,
   FilterReason,
   GateRuleKey,
   GateRuleOverrides,
   GateThresholdUpdate,
   isLapRFMode,
   isRotorHazardMode,
+  NumericGateRuleKey,
   TimerTelemetryFrame,
   TimingHardwareMode,
   TimingRules,
@@ -57,13 +62,54 @@ const DEFAULT_TUNE_RULES: TimingRules = {
   maxLapSec: 120,
   minCrossingSec: 0.12,
   beepOnCross: false,
+  beepMode: "off",
 };
 
-function countOverrides(ovr: GateRuleOverrides | undefined): number {
+const TUNE_BEEP_MODES: ReadonlyArray<{ mode: CrossingBeepMode; label: string; title: string }> = [
+  { mode: "off", label: "Off", title: "No crossing beep" },
+  { mode: "enter", label: "Enter", title: "Beep on Enter — as signal crosses enter threshold" },
+  { mode: "peak", label: "Peak", title: "Beep on Peak — right at the signal crest over the gate" },
+  { mode: "exit", label: "Exit", title: "Beep on Exit — as signal drops below exit threshold" },
+];
+
+function renderTuneBeepModeSegHtml(activeMode: CrossingBeepMode): string {
+  return `<div class="scope-tune-seg beep-mode-seg" role="radiogroup" aria-label="Beep on crossing">
+    ${TUNE_BEEP_MODES.map(
+      (opt) => `<button
+        type="button"
+        role="radio"
+        aria-checked="${activeMode === opt.mode}"
+        class="scope-tune-seg-btn ${activeMode === opt.mode ? "is-active" : ""}"
+        data-tune-beep-mode="${opt.mode}"
+        title="${opt.title}"
+      >${opt.label}</button>`
+    ).join("")}
+  </div>`;
+}
+
+function countGateOverrides(ovr: GateRuleOverrides | undefined, baseRules: TimingRules): number {
   if (!ovr) return 0;
   let n = 0;
   for (const k of OVERRIDE_KEYS) {
-    if (ovr[k] !== undefined) n++;
+    if (ovr[k] !== undefined && Math.abs((ovr[k] as number) - baseRules[k as NumericGateRuleKey]) > 1e-6) {
+      n++;
+    }
+  }
+  const ovrMode = gateOverrideBeepMode(ovr);
+  const baseMode = resolveCrossingBeepMode(baseRules.beepMode, baseRules.beepOnCross);
+  if (ovrMode !== undefined && ovrMode !== baseMode) {
+    n++;
+  }
+  return n;
+}
+
+function countPilotOverrides(ovr: GateRuleOverrides | undefined, gateRules: TimingRules): number {
+  if (!ovr) return 0;
+  let n = 0;
+  for (const k of OVERRIDE_KEYS) {
+    if (ovr[k] !== undefined && Math.abs((ovr[k] as number) - gateRules[k as NumericGateRuleKey]) > 1e-6) {
+      n++;
+    }
   }
   return n;
 }
@@ -74,6 +120,9 @@ function countGlobalOverrides(rules: TimingRules): number {
     if (Math.abs(rules[spec.key] - DEFAULT_TUNE_RULES[spec.key]) > 1e-6) {
       n++;
     }
+  }
+  if (resolveCrossingBeepMode(rules.beepMode, rules.beepOnCross) !== "off") {
+    n++;
   }
   return n;
 }
@@ -460,7 +509,7 @@ export class PilotRssiChart extends Component {
 
     const handleTuneClick = (e: MouseEvent) => {
       const btn = (e.target as HTMLElement).closest<HTMLElement>(
-        "[data-tune-scope], [data-tune-act], [data-tune-step], [data-tune-reset-key], [data-tune-override-toggle]"
+        "[data-tune-scope], [data-tune-act], [data-tune-beep-mode], [data-tune-step], [data-tune-reset-key], [data-tune-override-toggle]"
       );
       if (!btn) return;
       if (btn.dataset.tuneScope) {
@@ -477,6 +526,14 @@ export class PilotRssiChart extends Component {
       }
       if (btn.dataset.tuneAct === "restore-defaults") {
         void this.restoreScopeTuneDefaults();
+        return;
+      }
+      if (btn.dataset.tuneBeepMode) {
+        void this.setTuneBeepMode(btn.dataset.tuneBeepMode as CrossingBeepMode);
+        return;
+      }
+      if (btn.dataset.tuneAct === "reset-beep") {
+        void this.resetTuneBeep();
         return;
       }
       if (btn.dataset.tuneOverrideToggle) {
@@ -647,6 +704,12 @@ export class PilotRssiChart extends Component {
           this.calibMessageShort = "";
           this.saveChartPrefs();
         }
+        if (
+          document.activeElement instanceof HTMLElement &&
+          this.tuneDrawerEl.contains(document.activeElement)
+        ) {
+          document.activeElement.blur();
+        }
         this.renderControls();
         this.renderCalib();
         this.renderLegend();
@@ -654,6 +717,12 @@ export class PilotRssiChart extends Component {
         return;
       }
       if (btn.dataset.focus) {
+        if (
+          document.activeElement instanceof HTMLElement &&
+          this.tuneDrawerEl.contains(document.activeElement)
+        ) {
+          document.activeElement.blur();
+        }
         this.focus = btn.dataset.focus === "all" ? null : Number(btn.dataset.focus);
         if (this.focus === null) {
           this.tuneDrawerOpen = false;
@@ -2824,8 +2893,9 @@ export class PilotRssiChart extends Component {
         `ready:${readyMask}`,
         this.store.nodes
           .map((p) => {
-            const gOvr = countOverrides(p.ruleOverrides);
-            const pOvr = countOverrides(pilotGateOverridesAt(p, activeSlot));
+            const gEff = gateRulesAt(this.store, p.gateId);
+            const gOvr = countGateOverrides(p.ruleOverrides, this.store.rules);
+            const pOvr = countPilotOverrides(pilotGateOverridesAt(p, activeSlot), gEff);
             const cal = isGateCalibrated(p.gateId) ? 1 : 0;
             const busy = this.calibratingGates.has(p.gateId) ? 1 : 0;
             const rdy = canAutoCalib && this.canGateCalibrateNow(p.gateId, activePilotIdx) ? 1 : 0;
@@ -2859,8 +2929,10 @@ export class PilotRssiChart extends Component {
             const hot = !this.isMultiPilotMode && dbm >= this.thresholdOf(p.gateId).dbm;
             const dim = this.focus !== null && this.focus !== p.gateId;
             const label = this.labelOfGate(p.gateId);
-            const gOvrCount = canTune ? countOverrides(p.ruleOverrides) : 0;
-            const pOvrCount = canTune ? countOverrides(pilotGateOverridesAt(p, activeSlot)) : 0;
+            const gOvrCount = canTune ? countGateOverrides(p.ruleOverrides, this.store.rules) : 0;
+            const pOvrCount = canTune
+              ? countPilotOverrides(pilotGateOverridesAt(p, activeSlot), gateRulesAt(this.store, p.gateId))
+              : 0;
             const hasOvr = gOvrCount + pOvrCount > 0;
             const isCal = isGateCalibrated(p.gateId);
             const isCalibrating = this.calibratingGates.has(p.gateId);
@@ -3019,26 +3091,93 @@ export class PilotRssiChart extends Component {
     }
   }
 
+  private async setTuneBeepMode(nextMode: CrossingBeepMode): Promise<void> {
+    if (this.store.isHistoricalTrack) return;
+    if (
+      nextMode !== "off" &&
+      nextMode !== "enter" &&
+      nextMode !== "peak" &&
+      nextMode !== "exit"
+    ) {
+      return;
+    }
+    const targetGateId = this.activeTuneGateId;
+    if (targetGateId === null) {
+      const curMode = resolveCrossingBeepMode(this.store.rules.beepMode, this.store.rules.beepOnCross);
+      this.optimisticallySelectTuneBeepMode(nextMode);
+      const previewGateId = this.store.nodes[0]?.gateId ?? 1;
+      playPreviewCrossingBeep(this.store, previewGateId, nextMode);
+      if (nextMode === curMode) return;
+      await this.api
+        .updateRules({
+          ...this.store.rules,
+          beepMode: nextMode,
+          beepOnCross: nextMode !== "off",
+        })
+        .catch(() => undefined);
+      return;
+    }
+    const gate = this.store.node(targetGateId);
+    const globalMode = resolveCrossingBeepMode(this.store.rules.beepMode, this.store.rules.beepOnCross);
+    const gateOvr = { ...(gate?.ruleOverrides ?? {}) };
+    this.optimisticallySelectTuneBeepMode(nextMode);
+    playPreviewCrossingBeep(this.store, targetGateId, nextMode);
+    if (nextMode === globalMode) {
+      delete gateOvr.beepMode;
+      delete gateOvr.beepOnCross;
+    } else {
+      gateOvr.beepMode = nextMode;
+      gateOvr.beepOnCross = nextMode !== "off";
+    }
+    await this.api.setGateRules(targetGateId, gateOvr).catch(() => undefined);
+  }
+
+  private optimisticallySelectTuneBeepMode(nextMode: CrossingBeepMode): void {
+    this.tuneDrawerEl.querySelectorAll<HTMLButtonElement>("[data-tune-beep-mode]").forEach((btn) => {
+      const active = btn.dataset.tuneBeepMode === nextMode;
+      btn.classList.toggle("is-active", active);
+      btn.setAttribute("aria-checked", String(active));
+    });
+  }
+
   private async restoreScopeTuneDefaults(): Promise<void> {
     if (this.store.isHistoricalTrack) return;
     const targetGateId = this.activeTuneGateId;
     if (targetGateId === null) {
-      await this.api
-        .updateRules({ ...DEFAULT_TUNE_RULES, beepOnCross: Boolean(this.store.rules.beepOnCross) })
-        .catch(() => undefined);
+      await this.api.updateRules(DEFAULT_TUNE_RULES).catch(() => undefined);
       return;
     }
     const slotIndex = this.activePilotSlot;
     if (this.tuningScope === "pilot") {
       await this.api.setPilotGateRules(targetGateId, slotIndex, {}).catch(() => undefined);
     } else {
-      const curOvr = this.store.node(targetGateId)?.ruleOverrides;
-      const preserved: GateRuleOverrides = {};
-      if (curOvr?.beepOnCross !== undefined) {
-        preserved.beepOnCross = curOvr.beepOnCross;
-      }
-      await this.api.setGateRules(targetGateId, preserved).catch(() => undefined);
+      await this.api.setGateRules(targetGateId, {}).catch(() => undefined);
     }
+  }
+
+  private async resetTuneBeep(): Promise<void> {
+    if (this.store.isHistoricalTrack) return;
+    const targetGateId = this.activeTuneGateId;
+    if (targetGateId === null) {
+      this.optimisticallySelectTuneBeepMode("off");
+      playPreviewCrossingBeep(this.store, 1, "off");
+      await this.api
+        .updateRules({ ...this.store.rules, beepMode: "off", beepOnCross: false })
+        .catch(() => undefined);
+      return;
+    }
+    const gate = this.store.node(targetGateId);
+    const nextOverrides: GateRuleOverrides = {
+      ...(gate?.ruleOverrides ?? {}),
+    };
+    delete nextOverrides.beepMode;
+    delete nextOverrides.beepOnCross;
+    const globalMode = resolveCrossingBeepMode(this.store.rules.beepMode, this.store.rules.beepOnCross);
+    this.optimisticallySelectTuneBeepMode(globalMode);
+    if (globalMode === "off") {
+      playPreviewCrossingBeep(this.store, targetGateId, "off");
+    }
+    await this.api.setGateRules(targetGateId, nextOverrides).catch(() => undefined);
   }
 
   /** Ensures the fine-tune card is mounted as a sibling box right below `.rc-signals-card-box` when inside a Signals panel. */
@@ -3119,15 +3258,53 @@ export class PilotRssiChart extends Component {
     const color = gate ? this.colorOf(gate.gateId) : "";
     const gateOverrides = gate?.ruleOverrides ?? {};
     const pilotOverrides = gate ? pilotGateOverridesAt(gate, pilot.slotIndex) : {};
-    const gateOvrCount = countOverrides(gateOverrides);
-    const pilotOvrCount = countOverrides(pilotOverrides);
+    const gateEffRules = gate ? gateRulesAt(this.store, gate.gateId) : this.store.rules;
+    const gateOvrCount = countGateOverrides(gateOverrides, this.store.rules);
+    const pilotOvrCount = countPilotOverrides(pilotOverrides, gateEffRules);
     const isPilotScope = !isGlobalScope && this.tuningScope === "pilot";
     const activeOverrides = isPilotScope ? pilotOverrides : gateOverrides;
     const effRules = gate
       ? isPilotScope
         ? pilotGateRulesAt(this.store, gate.gateId, pilot.slotIndex)
-        : gateRulesAt(this.store, gate.gateId)
+        : gateEffRules
       : this.store.rules;
+
+    const globalBeepMode = resolveCrossingBeepMode(
+      this.store.rules.beepMode,
+      this.store.rules.beepOnCross
+    );
+    const gateOvrBeepMode = gateOverrideBeepMode(gateOverrides);
+    const beepOverridden = isGlobalScope
+      ? globalBeepMode !== "off"
+      : gateOvrBeepMode !== undefined && gateOvrBeepMode !== globalBeepMode;
+    const beepEffMode: CrossingBeepMode = resolveCrossingBeepMode(
+      gateEffRules.beepMode,
+      gateEffRules.beepOnCross
+    );
+    const beepHelpText = `Plays a single beep on gate enter, at the signal peak, or on gate exit ${isGlobalScope ? "for all timers" : "at this timer"}.`;
+
+    const beepCardHtml = `
+      <div class="scope-tune-card is-beep-card ${beepOverridden ? "is-overridden" : ""}" data-tune-card="beepOnCross">
+        <div class="scope-tune-card-info">
+          <div class="scope-tune-card-title-row">
+            <span class="scope-tune-card-label">Beep on crossing</span>
+            ${
+              beepOverridden
+                ? `<span class="scope-tune-custom-icon" title="Customized" aria-label="Customized">${icons.pencil(12)}</span>`
+                : ""
+            }
+          </div>
+          <div class="scope-tune-card-help">${beepHelpText}</div>
+        </div>
+        <div class="scope-tune-card-controls">
+          ${renderTuneBeepModeSegHtml(beepEffMode)}
+          ${
+            beepOverridden
+              ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-tune-act="reset-beep" title="Restore default Beep on crossing" aria-label="Restore default Beep on crossing">${icons.reset(13)}</button>`
+              : `<span class="scope-tune-reset-spacer" aria-hidden="true"></span>`
+          }
+        </div>
+      </div>`;
 
     const cardsHtml = TUNE_RULES.map((spec) => {
       const isOverridden = isGlobalScope
@@ -3251,6 +3428,22 @@ export class PilotRssiChart extends Component {
         </div>`;
     }).join("");
 
+    const desktopBeepRowHtml = `
+      <div class="rule-row ${beepOverridden ? "is-overridden" : ""}" data-tune-card="beepOnCross">
+        <div class="rule-text">
+          <div class="rule-label">Beep on crossing</div>
+          <div class="rule-help">${beepHelpText}</div>
+        </div>
+        <div class="rule-input rule-switch-wrap">
+          ${renderTuneBeepModeSegHtml(beepEffMode)}
+          ${
+            beepOverridden
+              ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-tune-act="reset-beep" title="Restore default Beep on crossing" aria-label="Restore default Beep on crossing">${icons.reset(13)}</button>`
+              : `<span class="scope-tune-reset-spacer" aria-hidden="true"></span>`
+          }
+        </div>
+      </div>`;
+
     const desktopFootNote = isGlobalScope
       ? "Applies to new detections on this track."
       : isPilotScope
@@ -3290,9 +3483,11 @@ export class PilotRssiChart extends Component {
     const bodyContentHtml = this.isMobileLayout
       ? `<div class="scope-tune-grid">
           ${cardsHtml}
+          ${beepCardHtml}
         </div>`
       : `<div class="rules scope-tune-desktop-rules">
           ${desktopRowsHtml}
+          ${desktopBeepRowHtml}
           <div class="rules-foot">
             <p class="note">${desktopFootNote}</p>
             <button class="btn btn-ghost btn-sm" type="button" data-tune-act="restore-defaults">Restore defaults</button>

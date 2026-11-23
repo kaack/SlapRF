@@ -2,11 +2,17 @@ import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
-import { playSyntheticCrossingBeep } from "../services/crossing_beep";
+import { playPreviewCrossingBeep } from "../services/crossing_beep";
 import { usbPool } from "../services/timer_console";
-import { gateColor, gateLabel } from "../state/selectors";
+import {
+  gateColor,
+  gateLabel,
+  gateOverrideBeepMode,
+  resolveCrossingBeepMode,
+} from "../state/selectors";
 import { AppStore } from "../state/store";
 import {
+  CrossingBeepMode,
   FilterReason,
   GateRuleKey,
   GateRuleOverrides,
@@ -70,7 +76,15 @@ const DEFAULT_RULES: TimingRules = {
   maxLapSec: 120,
   minCrossingSec: 0.12,
   beepOnCross: false,
+  beepMode: "off",
 };
+
+const BEEP_MODES: ReadonlyArray<{ mode: CrossingBeepMode; label: string; title: string }> = [
+  { mode: "off", label: "Off", title: "No crossing beep" },
+  { mode: "enter", label: "Enter", title: "Beep on Enter — as signal crosses enter threshold" },
+  { mode: "peak", label: "Peak", title: "Beep on Peak — right at the signal crest over the gate" },
+  { mode: "exit", label: "Exit", title: "Beep on Exit — as signal drops below exit threshold" },
+];
 const RULES_SCOPE_STORAGE_KEY = "slaprf.ui.rules_scope.v1";
 
 /**
@@ -236,7 +250,7 @@ export class TimingRulesEditor extends Component {
     this.listen(el, "click", (e) => {
       const target = e.target as HTMLElement;
       const tuneBtn = target.closest<HTMLElement>(
-        "[data-tune-act], [data-tune-step], [data-tune-reset-key]"
+        "[data-tune-act], [data-tune-step], [data-tune-reset-key], [data-beep-mode]"
       );
       if (tuneBtn && this.mobileDrawerEl.contains(tuneBtn)) {
         if (tuneBtn.dataset.tuneAct === "close") {
@@ -244,8 +258,8 @@ export class TimingRulesEditor extends Component {
           return;
         }
         if (this.isReadOnlyFn()) return;
-        if (tuneBtn.dataset.tuneAct === "toggle-beep") {
-          this.toggleBeepForCurrentScope();
+        if (tuneBtn.dataset.beepMode) {
+          this.setBeepModeForCurrentScope(tuneBtn.dataset.beepMode as CrossingBeepMode);
           return;
         }
         if (tuneBtn.dataset.tuneAct === "reset-beep") {
@@ -306,9 +320,9 @@ export class TimingRulesEditor extends Component {
         }
         return;
       }
-      const beepToggleBtn = target.closest<HTMLButtonElement>("[data-beep-toggle]");
-      if (beepToggleBtn) {
-        this.toggleBeepForCurrentScope();
+      const beepModeBtn = target.closest<HTMLButtonElement>("[data-beep-mode]");
+      if (beepModeBtn && !beepModeBtn.disabled) {
+        this.setBeepModeForCurrentScope(beepModeBtn.dataset.beepMode as CrossingBeepMode);
         return;
       }
       const beepResetBtn = target.closest<HTMLButtonElement>("[data-beep-reset]");
@@ -420,50 +434,68 @@ export class TimingRulesEditor extends Component {
     return fixed.replace(/\.0+$/, "").replace(/(\.\d*?[1-9])0+$/, "$1");
   }
 
-  private toggleBeepForCurrentScope(): void {
-    if (this.scope === null) {
-      const nextBeep = !this.store.rules.beepOnCross;
-      this.optimisticallyFlipBeepSwitches(nextBeep);
-      if (nextBeep && this.store.nodes[0]) {
-        playSyntheticCrossingBeep(this.store, this.store.nodes[0].gateId);
-      }
-      void this.api.updateRules({ ...this.store.rules, beepOnCross: nextBeep });
-    } else {
-      const curGate = this.store.node(this.scope);
-      const curOvr = { ...this.overridesOf(curGate) };
-      const globalBeep = Boolean(this.store.rules.beepOnCross);
-      const curEff = curOvr.beepOnCross !== undefined ? Boolean(curOvr.beepOnCross) : globalBeep;
-      const nextBeep = !curEff;
-      this.optimisticallyFlipBeepSwitches(nextBeep);
-      if (nextBeep) {
-        playSyntheticCrossingBeep(this.store, this.scope);
-      }
-      if (nextBeep === globalBeep) {
-        delete curOvr.beepOnCross;
-      } else {
-        curOvr.beepOnCross = nextBeep;
-      }
-      void this.api.setGateRules(this.scope, curOvr);
+  private setBeepModeForCurrentScope(nextMode: CrossingBeepMode): void {
+    if (
+      nextMode !== "off" &&
+      nextMode !== "enter" &&
+      nextMode !== "peak" &&
+      nextMode !== "exit"
+    ) {
+      return;
     }
+    if (this.scope === null) {
+      const curMode = resolveCrossingBeepMode(this.store.rules.beepMode, this.store.rules.beepOnCross);
+      this.optimisticallySelectBeepMode(nextMode);
+      const previewGateId = this.store.nodes[0]?.gateId ?? 1;
+      playPreviewCrossingBeep(this.store, previewGateId, nextMode);
+      if (nextMode === curMode) return;
+      void this.api.updateRules({
+        ...this.store.rules,
+        beepMode: nextMode,
+        beepOnCross: nextMode !== "off",
+      });
+      return;
+    }
+    const curGate = this.store.node(this.scope);
+    if (!curGate) return;
+    const curOvr = { ...this.overridesOf(curGate) };
+    const globalMode = resolveCrossingBeepMode(this.store.rules.beepMode, this.store.rules.beepOnCross);
+    this.optimisticallySelectBeepMode(nextMode);
+    playPreviewCrossingBeep(this.store, this.scope, nextMode);
+    if (nextMode === globalMode) {
+      delete curOvr.beepMode;
+      delete curOvr.beepOnCross;
+    } else {
+      curOvr.beepMode = nextMode;
+      curOvr.beepOnCross = nextMode !== "off";
+    }
+    void this.api.setGateRules(this.scope, curOvr);
   }
 
-  private optimisticallyFlipBeepSwitches(nextOn: boolean): void {
-    this.el
-      .querySelectorAll<HTMLButtonElement>('[data-beep-toggle], [data-tune-act="toggle-beep"]')
-      .forEach((sw) => {
-        sw.classList.toggle("is-on", nextOn);
-        sw.setAttribute("aria-checked", String(nextOn));
-      });
+  private optimisticallySelectBeepMode(nextMode: CrossingBeepMode): void {
+    this.el.querySelectorAll<HTMLButtonElement>("[data-beep-mode]").forEach((btn) => {
+      const active = btn.dataset.beepMode === nextMode;
+      btn.classList.toggle("is-active", active);
+      btn.setAttribute("aria-checked", String(active));
+    });
   }
 
   private resetBeepForCurrentScope(): void {
     if (this.scope === null) {
-      this.optimisticallyFlipBeepSwitches(false);
-      void this.api.updateRules({ ...this.store.rules, beepOnCross: false });
+      this.optimisticallySelectBeepMode("off");
+      playPreviewCrossingBeep(this.store, 1, "off");
+      void this.api.updateRules({ ...this.store.rules, beepMode: "off", beepOnCross: false });
     } else {
-      const nextOvr = { ...this.overridesOf(this.store.node(this.scope)) };
+      const curGate = this.store.node(this.scope);
+      if (!curGate) return;
+      const nextOvr = { ...this.overridesOf(curGate) };
+      delete nextOvr.beepMode;
       delete nextOvr.beepOnCross;
-      this.optimisticallyFlipBeepSwitches(Boolean(this.store.rules.beepOnCross));
+      const globalMode = resolveCrossingBeepMode(this.store.rules.beepMode, this.store.rules.beepOnCross);
+      this.optimisticallySelectBeepMode(globalMode);
+      if (globalMode === "off") {
+        playPreviewCrossingBeep(this.store, this.scope, "off");
+      }
       void this.api.setGateRules(this.scope, nextOvr);
     }
   }
@@ -581,7 +613,8 @@ export class TimingRulesEditor extends Component {
     const overrides = this.overridesOf(gate);
     const readOnly = this.isReadOnlyFn();
 
-    let globalOvrCount = r.beepOnCross ? 1 : 0;
+    const globalBeepMode = resolveCrossingBeepMode(r.beepMode, r.beepOnCross);
+    let globalOvrCount = globalBeepMode !== "off" ? 1 : 0;
     for (const s of RULES) {
       if (Math.abs(r[s.key] - DEFAULT_RULES[s.key]) > 1e-6) globalOvrCount++;
     }
@@ -598,10 +631,8 @@ export class TimingRulesEditor extends Component {
       </button>`,
       ...this.store.nodes.map((p) => {
         const ovr = this.overridesOf(p);
-        let n =
-          ovr.beepOnCross !== undefined && Boolean(ovr.beepOnCross) !== Boolean(r.beepOnCross)
-            ? 1
-            : 0;
+        const ovrBeepMode = gateOverrideBeepMode(ovr);
+        let n = ovrBeepMode !== undefined && ovrBeepMode !== globalBeepMode ? 1 : 0;
         for (const s of RULES) {
           if (ovr[s.key] !== undefined && Math.abs(ovr[s.key]! - r[s.key]) > 1e-6) n++;
         }
@@ -658,7 +689,7 @@ export class TimingRulesEditor extends Component {
     }).join("");
 
     const beepRow = gate
-      ? this.renderGateBeepRow(r, overrides)
+      ? this.renderGateBeepRow(gate, r, overrides)
       : this.renderGlobalBeepRow(r);
 
     const foot = readOnly
@@ -706,15 +737,16 @@ export class TimingRulesEditor extends Component {
     const readOnly = this.isReadOnlyFn();
     const disAttr = readOnly ? "disabled" : "";
 
+    const globalBeepMode = resolveCrossingBeepMode(r.beepMode, r.beepOnCross);
+    const gateOvrBeepMode = gateOverrideBeepMode(activeOverrides);
     const beepOverridden = isGlobalScope
-      ? Boolean(r.beepOnCross) !== Boolean(DEFAULT_RULES.beepOnCross)
-      : activeOverrides.beepOnCross !== undefined &&
-        Boolean(activeOverrides.beepOnCross) !== Boolean(r.beepOnCross);
-    const beepEffOn = isGlobalScope
-      ? Boolean(r.beepOnCross)
-      : activeOverrides.beepOnCross !== undefined
-        ? Boolean(activeOverrides.beepOnCross)
-        : Boolean(r.beepOnCross);
+      ? globalBeepMode !== "off"
+      : gateOvrBeepMode !== undefined && gateOvrBeepMode !== globalBeepMode;
+    const beepEffMode: CrossingBeepMode = isGlobalScope
+      ? globalBeepMode
+      : gateOvrBeepMode !== undefined
+        ? gateOvrBeepMode
+        : globalBeepMode;
 
     const beepCardHtml = `
       <div class="scope-tune-card is-beep-card ${beepOverridden ? "is-overridden" : ""}" data-tune-card="beepOnCross">
@@ -727,22 +759,10 @@ export class TimingRulesEditor extends Component {
                 : ""
             }
           </div>
-          <div class="scope-tune-card-help">Plays an instant high-priority synthetic tone when a crossing is detected ${isGlobalScope ? "for all timers" : "at this timer"}.</div>
+          <div class="scope-tune-card-help">Plays a single beep on gate enter, at the signal peak, or on gate exit ${isGlobalScope ? "for all timers" : "at this timer"}.</div>
         </div>
         <div class="scope-tune-card-controls">
-          <div class="scope-tune-switch-slot">
-            <button
-              type="button"
-              role="switch"
-              aria-checked="${beepEffOn}"
-              class="scope-tune-switch ${beepEffOn ? "is-on" : ""}"
-              data-tune-act="toggle-beep"
-              aria-label="Beep on crossing"
-              ${disAttr}
-            >
-              <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
-            </button>
-          </div>
+          ${this.renderBeepModeSegHtml(beepEffMode, disAttr)}
           ${
             beepOverridden && !readOnly
               ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-tune-act="reset-beep" title="Restore default Beep on crossing" aria-label="Restore default Beep on crossing">${icons.reset(13)}</button>`
@@ -881,57 +901,55 @@ export class TimingRulesEditor extends Component {
     grid.classList.add("is-mobile-stacked");
   }
 
+  private renderBeepModeSegHtml(activeMode: CrossingBeepMode, disAttr = ""): string {
+    return `<div class="scope-tune-seg beep-mode-seg" role="radiogroup" aria-label="Beep on crossing">
+      ${BEEP_MODES.map(
+        (opt) => `<button
+          type="button"
+          role="radio"
+          aria-checked="${activeMode === opt.mode}"
+          class="scope-tune-seg-btn ${activeMode === opt.mode ? "is-active" : ""}"
+          data-beep-mode="${opt.mode}"
+          title="${opt.title}"
+          ${disAttr}
+        >${opt.label}</button>`
+      ).join("")}
+    </div>`;
+  }
+
   private renderGlobalBeepRow(r: TimingRules): string {
-    const isOn = Boolean(r.beepOnCross);
+    const effMode = resolveCrossingBeepMode(r.beepMode, r.beepOnCross);
+    const isCustom = effMode !== "off";
     return `
-      <div class="rule-row ${isOn ? "is-overridden" : ""}">
+      <div class="rule-row ${isCustom ? "is-overridden" : ""}">
         <div class="rule-text">
           <div class="rule-label">Beep on crossing</div>
-          <div class="rule-help">Plays an instant high-priority synthetic tone when a crossing is detected for all timers.</div>
+          <div class="rule-help">Plays a single beep on gate enter, at the signal peak, or on gate exit for all timers.</div>
         </div>
         <div class="rule-input rule-switch-wrap">
-          <button
-            type="button"
-            role="switch"
-            aria-checked="${isOn}"
-            class="scope-tune-switch ${isOn ? "is-on" : ""}"
-            data-beep-toggle
-            aria-label="Beep on crossing"
-          >
-            <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
-          </button>
+          ${this.renderBeepModeSegHtml(effMode)}
           ${
-            isOn
-              ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-beep-reset title="Restore default (OFF)" aria-label="Restore default Beep on crossing">${icons.reset(13)}</button>`
+            isCustom
+              ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-beep-reset title="Restore default (Off)" aria-label="Restore default Beep on crossing">${icons.reset(13)}</button>`
               : `<span class="scope-tune-reset-spacer" aria-hidden="true"></span>`
           }
         </div>
       </div>`;
   }
 
-  private renderGateBeepRow(r: TimingRules, overrides: GateRuleOverrides): string {
-    const hasOwn =
-      overrides.beepOnCross !== undefined &&
-      Boolean(overrides.beepOnCross) !== Boolean(r.beepOnCross);
-    const effOn =
-      overrides.beepOnCross !== undefined ? Boolean(overrides.beepOnCross) : Boolean(r.beepOnCross);
+  private renderGateBeepRow(_gate: TrackNode, r: TimingRules, overrides: GateRuleOverrides): string {
+    const globalMode = resolveCrossingBeepMode(r.beepMode, r.beepOnCross);
+    const ovrMode = gateOverrideBeepMode(overrides);
+    const hasOwn = ovrMode !== undefined && ovrMode !== globalMode;
+    const effMode = ovrMode !== undefined ? ovrMode : globalMode;
     return `
       <div class="rule-row ${hasOwn ? "is-overridden" : ""}">
         <div class="rule-text">
           <div class="rule-label">Beep on crossing</div>
-          <div class="rule-help">Plays an instant high-priority synthetic tone when a crossing is detected at this timer.</div>
+          <div class="rule-help">Plays a single beep on gate enter, at the signal peak, or on gate exit at this timer.</div>
         </div>
         <div class="rule-input rule-switch-wrap">
-          <button
-            type="button"
-            role="switch"
-            aria-checked="${effOn}"
-            class="scope-tune-switch ${effOn ? "is-on" : ""}"
-            data-beep-toggle
-            aria-label="Beep on crossing"
-          >
-            <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
-          </button>
+          ${this.renderBeepModeSegHtml(effMode)}
           ${
             hasOwn
               ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-beep-reset title="Restore default Beep on crossing" aria-label="Restore default Beep on crossing">${icons.reset(13)}</button>`
@@ -996,6 +1014,9 @@ export class TimingRulesEditor extends Component {
     // Only unlocked/edited rules become overrides (disabled inputs aren't in the form data).
     const prevOvr = this.overridesOf(this.store.node(this.scope));
     const overrides: GateRuleOverrides = {};
+    if (prevOvr.beepMode !== undefined) {
+      overrides.beepMode = prevOvr.beepMode;
+    }
     if (prevOvr.beepOnCross !== undefined) {
       overrides.beepOnCross = prevOvr.beepOnCross;
     }

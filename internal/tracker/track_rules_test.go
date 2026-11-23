@@ -251,9 +251,39 @@ func TestParentAgreementAutoCollapsesChildRuleOverrides(t *testing.T) {
 	// 5. Setting Gate 1 MinLapSec back to 6.0 (matching All Timers) collapses Gate 1 overrides to IsEmpty()
 	collapsed, err := e.SetPracticeGateRules(sid, 1, domain.GateRuleOverrides{MinLapSec: f64(6.0)})
 	if err != nil {
-		t.Fatalf("SetPracticeGateRules(matching parent) failed: %v", err)
+		t.Fatalf("SetPracticeRules(matching parent) failed: %v", err)
 	}
 	if !collapsed.IsEmpty() {
 		t.Fatalf("expected Gate 1 overrides completely empty when matching parent, got %+v", collapsed)
+	}
+
+	// 6. Multi-state BeepMode ("off" | "enter" | "peak" | "exit"): overriding Gate 1 to "enter" while All Timers is "peak"
+	// preserves the "enter" override, then switching All Timers to "enter" auto-collapses Gate 1's override.
+	rPeak := domain.DefaultTimingRules()
+	rPeak.BeepMode = domain.BeepModePeak
+	rPeak.BeepOnCross = true
+	if _, err := e.SetPracticeRules(sid, rPeak); err != nil {
+		t.Fatalf("SetPracticeRules(PEAK) failed: %v", err)
+	}
+	enterMode := domain.BeepModeEnter
+	ovrEnter, err := e.SetPracticeGateRules(sid, 1, domain.GateRuleOverrides{BeepMode: &enterMode})
+	if err != nil {
+		t.Fatalf("SetPracticeGateRules(ENTER) failed: %v", err)
+	}
+	if ovrEnter.BeepMode == nil || *ovrEnter.BeepMode != domain.BeepModeEnter {
+		t.Fatalf("expected Gate 1 BeepMode='enter' override preserved against 'peak' parent, got %+v", ovrEnter)
+	}
+	rEnter := domain.DefaultTimingRules()
+	rEnter.BeepMode = domain.BeepModeEnter
+	rEnter.BeepOnCross = true
+	if _, err := e.SetPracticeRules(sid, rEnter); err != nil {
+		t.Fatalf("SetPracticeRules(ENTER) failed: %v", err)
+	}
+	afterGlobalEnter, err := e.PracticeGateRules(sid, 1)
+	if err != nil {
+		t.Fatalf("PracticeGateRules failed: %v", err)
+	}
+	if afterGlobalEnter.BeepMode != nil || afterGlobalEnter.BeepOnCross != nil {
+		t.Fatalf("expected Gate 1 BeepMode override auto-collapsed when All Timers became 'enter', got %+v", afterGlobalEnter)
 	}
 }

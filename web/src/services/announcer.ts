@@ -1,12 +1,24 @@
 import { getAndroidBridge } from "../core/android_bridge";
 import { setWakeLockEnabled } from "../core/wake_lock";
 import { capabilitiesSnapshot, isServerDisconnectedLockout } from "../services/capabilities";
-import { hasAnyBeepOnCrossConfigured, pilotGateRulesAt } from "../state/selectors";
+import {
+  enterThresholdAt,
+  exitThresholdAt,
+  gateRulesAt,
+  hasAnyBeepOnCrossConfigured,
+  pilotGateRulesAt,
+  resolveCrossingBeepMode,
+} from "../state/selectors";
 import { AppStore } from "../state/store";
-import { GateCrossingEvent, LapRecord, RaceAnnouncement } from "../types/models";
+import {
+  GateCrossingEvent,
+  LapRecord,
+  RaceAnnouncement,
+  TimerTelemetryFrame,
+} from "../types/models";
 import {
   ensureCrossingBeepGestureUnlock,
-  playSyntheticCrossingBeep,
+  playShortCrossingBeep,
   warmCrossingBeepAudio,
 } from "./crossing_beep";
 import { sharedLapRFLink } from "./laprf_hardware_link";
@@ -212,13 +224,16 @@ export class Announcer {
     this.unsubscribers.push(sharedLapRFLink.onChange(() => this.scheduleTimingConnCheck()));
     this.unsubscribers.push(sharedRHLink.onChange(() => this.scheduleTimingConnCheck()));
 
-    store.onLapRecorded((lap) => this.onLap(lap));
-    store.onGateCrossing((ev) => this.onCrossingBeep(ev));
-    store.onStartGateDetected((ev) => this.onStartPass(ev));
-    store.onRaceAnnouncement((ann) => this.onRaceAnnouncement(ann));
+    this.unsubscribers.push(store.onLapRecorded((lap) => this.onLap(lap)));
+    this.unsubscribers.push(store.onGateCrossing((ev) => this.onCrossingBeep(ev)));
+    this.unsubscribers.push(store.onStartGateDetected((ev) => this.onStartPass(ev)));
+    this.unsubscribers.push(store.onRaceAnnouncement((ann) => this.onRaceAnnouncement(ann)));
+    this.unsubscribers.push(store.onTelemetryFrame((frame) => this.onTelemetryBeep(frame)));
     this.unsubscribers.push(
-      store.subscribe(["config", "rules"], () => {
-        if (hasAnyBeepOnCrossConfigured(this.store)) {
+      store.subscribe(["config", "rules", "practice", "race"], () => {
+        this.beepConfigDirty = true;
+        const nextCfg = this.resolveBeepScope();
+        if (hasAnyBeepOnCrossConfigured(nextCfg.scopedStore)) {
           ensureCrossingBeepGestureUnlock();
           warmCrossingBeepAudio();
         }
@@ -245,6 +260,10 @@ export class Announcer {
         const armedChanged = this.lastRaceArmed !== null && this.lastRaceArmed !== this.store.raceArmed;
         const hwChanged =
           this.lastTimingHwMode !== null && this.lastTimingHwMode !== this.store.timingHardwareMode;
+        if (simChanged || armedChanged || hwChanged) {
+          this.beepConfigDirty = true;
+          this.telemetryBeepStates.clear();
+        }
         if (simChanged) {
           this.clear();
         }
@@ -732,31 +751,298 @@ export class Announcer {
     this.say(lapCallout(callsign, lap.lapTimeSec, pilot?.phoneticName), false, false, lap.slotIndex);
   }
 
+  private beepConfigDirty = true;
+  private cachedBeepScope: {
+    active: boolean;
+    scopedStore: AppStore;
+    gatesByFrameTimerId: Map<
+      number,
+      {
+        gateId: number;
+        beepMode: "enter" | "peak" | "exit";
+        pilots: Array<{
+          slotIndex: number;
+          rssiIdx: number;
+          enterDbm: number;
+          exitDbm: number;
+        }>;
+      }
+    >;
+  } | null = null;
+  private readonly telemetryBeepStates = new Map<
+    string,
+    {
+      inGate: boolean;
+      peakBeepFired: boolean;
+      awaitingRearm: boolean;
+      enterTsUs: number;
+      peakRssi: number;
+      peakTsUs: number;
+      prevRssi: number;
+      fallingStreak: number;
+      lastExitUs: number;
+      lastSampleTsUs: number;
+      lastAudioWallMs: number;
+    }
+  >();
+
   /**
-   * Resolves the active scoped `AppStore` view (running race heat or active practice session)
-   * so `beepOnCross` inheritance and gate Start/Finish vs Sector tones always match the active track.
+   * Resolves the active scoped `AppStore` view (running race heat or active/selected practice session)
+   * so `beepMode` inheritance and gate tones always match the active track.
    */
   private getActiveCrossingScopeStore(): AppStore {
     const liveHit = this.getLiveRunningRaceHeatContext();
     if (liveHit) {
       return this.store.forRaceWorkspace(() => liveHit.race);
     }
-    const activeSess = this.store.activePracticeSession;
-    if (activeSess) {
-      return this.store.forPracticeTrackEditor(() => activeSess);
+    const pracSess = this.store.activePracticeSession ?? this.store.selectedPracticeSession;
+    if (pracSess) {
+      return this.store.forPracticeTrackEditor(() => pracSess);
     }
     return this.store;
   }
 
+  private resolveBeepScope() {
+    if (!this.beepConfigDirty && this.cachedBeepScope) {
+      return this.cachedBeepScope;
+    }
+    this.beepConfigDirty = false;
+    const scopedStore = this.getActiveCrossingScopeStore();
+    const gatesByFrameTimerId = new Map<
+      number,
+      {
+        gateId: number;
+        beepMode: "enter" | "peak" | "exit";
+        pilots: Array<{
+          slotIndex: number;
+          rssiIdx: number;
+          enterDbm: number;
+          exitDbm: number;
+        }>;
+      }
+    >();
+
+    // In Simulator mode, mute telemetry beeps when "Timing off" (!raceArmed). On real hardware,
+    // keep crossing beeps active during Practice walk-tests whenever beepMode is enabled.
+    const liveHit = this.getLiveRunningRaceHeatContext();
+    if (!liveHit && this.store.simulatorRunning && !this.store.raceArmed) {
+      this.cachedBeepScope = { active: false, scopedStore, gatesByFrameTimerId };
+      return this.cachedBeepScope;
+    }
+    if (!hasAnyBeepOnCrossConfigured(scopedStore)) {
+      this.cachedBeepScope = { active: false, scopedStore, gatesByFrameTimerId };
+      return this.cachedBeepScope;
+    }
+
+    let allowedSlots: Set<number> | null = null;
+    if (liveHit) {
+      allowedSlots = new Set(
+        liveHit.heat.seats
+          .filter((s) => s.pilotSlotIndex > 0 && s.status !== "dns" && s.status !== "dq")
+          .map((s) => s.pilotSlotIndex)
+      );
+    } else {
+      const pracSess = this.store.activePracticeSession ?? this.store.selectedPracticeSession;
+      if (pracSess && pracSess.pilots.length > 0) {
+        allowedSlots = new Set(
+          pracSess.pilots.filter((p) => (p.channel ?? 0) > 0).map((p) => p.slotIndex)
+        );
+      }
+    }
+
+    const basePilots = this.store.pilots;
+    for (const node of scopedStore.nodes) {
+      const eff = gateRulesAt(scopedStore, node.gateId);
+      const mode = resolveCrossingBeepMode(eff.beepMode, eff.beepOnCross);
+      if (mode === "off") continue;
+      const pilots: Array<{
+        slotIndex: number;
+        rssiIdx: number;
+        enterDbm: number;
+        exitDbm: number;
+      }> = [];
+      for (let i = 0; i < basePilots.length; i++) {
+        const p = basePilots[i];
+        if (allowedSlots ? !allowedSlots.has(p.slotIndex) : !p.enabled || p.channel <= 0) {
+          continue;
+        }
+        const enterDbm = enterThresholdAt(scopedStore, node.gateId, p.slotIndex).dbm;
+        const exitDbm = exitThresholdAt(scopedStore, node.gateId, p.slotIndex).dbm;
+        pilots.push({ slotIndex: p.slotIndex, rssiIdx: i, enterDbm, exitDbm });
+      }
+      if (pilots.length === 0) continue;
+      const entry = { gateId: node.gateId, beepMode: mode, pilots };
+      gatesByFrameTimerId.set(node.gateId, entry);
+      if (node.assignedTimerId && !gatesByFrameTimerId.has(node.assignedTimerId)) {
+        gatesByFrameTimerId.set(node.assignedTimerId, entry);
+      }
+    }
+
+    this.cachedBeepScope = {
+      active: gatesByFrameTimerId.size > 0,
+      scopedStore,
+      gatesByFrameTimerId,
+    };
+    return this.cachedBeepScope;
+  }
+
   /**
-   * High-priority synthetic WebAudio crossing beep: plays immediately on the hardware audio thread
-   * whenever `beepOnCross` is enabled for `gateId` (All timers or per-timer override on Track),
-   * independent of TTS speech synthesis or whether the Voice Announcer is enabled.
+   * Real-time zero-latency gate crossing sonification on incoming C1-smoothed telemetry frames:
+   * - `"enter"`: single beep the instant RSSI crosses above `enterThreshold`.
+   * - `"peak"`: single beep right as the RSSI crest turns the corner over the gate and begins dropping away.
+   * - `"exit"`: single beep the instant RSSI drops below `exitThreshold`.
+   */
+  private onTelemetryBeep(frame: TimerTelemetryFrame): void {
+    const cfg = this.resolveBeepScope();
+    if (!cfg.active) return;
+    const gateCfg = cfg.gatesByFrameTimerId.get(frame.timerId);
+    if (!gateCfg) return;
+
+    const tsUs = frame.timestampUs;
+    const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const vol = this.prefs.volume > 0 ? this.prefs.volume : 0.9;
+
+    for (let i = 0; i < gateCfg.pilots.length; i++) {
+      const p = gateCfg.pilots[i];
+      const s = frame.rssi[p.rssiIdx];
+      const key = `${gateCfg.gateId}:${p.slotIndex}`;
+      let st = this.telemetryBeepStates.get(key);
+      if (!st) {
+        st = {
+          inGate: false,
+          peakBeepFired: false,
+          awaitingRearm: false,
+          enterTsUs: 0,
+          peakRssi: -127,
+          peakTsUs: 0,
+          prevRssi: -127,
+          fallingStreak: 0,
+          lastExitUs: 0,
+          lastSampleTsUs: 0,
+          lastAudioWallMs: 0,
+        };
+        this.telemetryBeepStates.set(key, st);
+      }
+
+      if (s === undefined || s <= -120) {
+        st.inGate = false;
+        st.peakBeepFired = false;
+        st.awaitingRearm = false;
+        continue;
+      }
+      if (
+        st.lastSampleTsUs > 0 &&
+        (tsUs < st.lastSampleTsUs || tsUs - st.lastSampleTsUs > 350_000)
+      ) {
+        st.inGate = false;
+        st.peakBeepFired = false;
+        st.awaitingRearm = false;
+      }
+      st.lastSampleTsUs = tsUs;
+
+      const enterDbm = p.enterDbm;
+      const effExit =
+        p.exitDbm === 0 || p.exitDbm > enterDbm - 2 ? enterDbm - 2 : p.exitDbm;
+
+      if (!st.inGate) {
+        if (st.awaitingRearm) {
+          const rearmed =
+            s <= effExit ||
+            (s <= enterDbm - 3 && tsUs >= st.lastExitUs + 600_000) ||
+            (s < enterDbm && tsUs >= st.lastExitUs + 2_500_000);
+          if (!rearmed) continue;
+          st.awaitingRearm = false;
+        }
+        const lockedOut = st.lastExitUs > 0 && tsUs <= st.lastExitUs + 250_000;
+        if (s >= enterDbm && !lockedOut) {
+          st.inGate = true;
+          st.peakBeepFired = false;
+          st.enterTsUs = tsUs;
+          st.peakRssi = s;
+          st.peakTsUs = tsUs;
+          st.prevRssi = s;
+          st.fallingStreak = 0;
+          if (gateCfg.beepMode === "enter") {
+            st.lastAudioWallMs = nowMs;
+            playShortCrossingBeep(cfg.scopedStore, gateCfg.gateId, vol);
+          }
+        }
+        continue;
+      }
+
+      if (s >= st.peakRssi) {
+        st.peakRssi = s;
+        st.peakTsUs = tsUs;
+        st.fallingStreak = 0;
+      } else if (s <= st.prevRssi - 0.05) {
+        st.fallingStreak++;
+      } else if (s > st.prevRssi + 0.2) {
+        st.fallingStreak = 0;
+      }
+      st.prevRssi = s;
+
+      // In "peak" mode, trigger right as the smoothed envelope turns the corner over the gate and starts dropping away.
+      if (gateCfg.beepMode === "peak" && !st.peakBeepFired) {
+        const riseAboveEnter = Math.max(0, st.peakRssi - enterDbm);
+        const peakDropDb = Math.min(2.2, Math.max(1.2, riseAboveEnter * 0.28));
+        const droppedFromPeak = st.peakRssi - s;
+        const hasMinHold = tsUs - st.enterTsUs >= 40_000;
+        const confirmedFall = st.fallingStreak >= 2 || tsUs - st.peakTsUs >= 35_000;
+        if (hasMinHold && droppedFromPeak >= peakDropDb && confirmedFall) {
+          st.peakBeepFired = true;
+          st.lastAudioWallMs = nowMs;
+          playShortCrossingBeep(cfg.scopedStore, gateCfg.gateId, vol);
+        }
+      }
+
+      const exitedBelow = s <= effExit;
+      const exitedValley =
+        !exitedBelow &&
+        s <= enterDbm - 3 &&
+        st.peakRssi - s >= 10 &&
+        tsUs >= st.peakTsUs + 500_000;
+      if (exitedBelow || exitedValley) {
+        const holdUs = tsUs - st.enterTsUs;
+        st.inGate = false;
+        st.lastExitUs = tsUs;
+        st.awaitingRearm = !exitedBelow;
+        if (gateCfg.beepMode === "exit") {
+          st.lastAudioWallMs = nowMs;
+          playShortCrossingBeep(cfg.scopedStore, gateCfg.gateId, vol);
+        } else if (gateCfg.beepMode === "peak" && !st.peakBeepFired && holdUs >= 40_000) {
+          st.peakBeepFired = true;
+          st.lastAudioWallMs = nowMs;
+          playShortCrossingBeep(cfg.scopedStore, gateCfg.gateId, vol);
+        }
+      } else if (tsUs - st.enterTsUs > 8_000_000) {
+        if (st.peakRssi >= enterDbm + 3 && s <= enterDbm - 2 && st.peakRssi - s >= 6) {
+          st.inGate = false;
+          st.lastExitUs = tsUs;
+          st.awaitingRearm = true;
+          if (gateCfg.beepMode === "exit") {
+            st.lastAudioWallMs = nowMs;
+            playShortCrossingBeep(cfg.scopedStore, gateCfg.gateId, vol);
+          }
+        } else {
+          st.inGate = false;
+        }
+      }
+    }
+  }
+
+  /**
+   * Fallback crossing beep for pass-only external hardware (e.g. LapRF 8-Way or RotorHazard when
+   * live RSSI streaming is off). Skips if real-time telemetry already sounded.
    */
   private onCrossingBeep(ev: GateCrossingEvent): void {
     const scopedStore = this.getActiveCrossingScopeStore();
     const eff = pilotGateRulesAt(scopedStore, ev.gateId, ev.slotIndex);
-    if (!eff.beepOnCross) return;
+    if (!eff.beepOnCross || eff.beepMode === "off") return;
+    const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const st = this.telemetryBeepStates.get(`${ev.gateId}:${ev.slotIndex}`);
+    if (st && (st.inGate || nowMs - st.lastAudioWallMs < 3000)) {
+      return;
+    }
     const liveHit = this.getLiveRunningRaceHeatContext();
     if (liveHit) {
       const inHeat = liveHit.heat.seats.some(
@@ -765,7 +1051,7 @@ export class Announcer {
       if (!inHeat) return;
     }
     const vol = this.prefs.volume > 0 ? this.prefs.volume : 0.9;
-    playSyntheticCrossingBeep(scopedStore, ev.gateId, vol);
+    playShortCrossingBeep(scopedStore, ev.gateId, vol);
   }
 
   /**

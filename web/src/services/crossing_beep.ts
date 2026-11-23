@@ -1,7 +1,9 @@
 import { AppStore } from "../state/store";
+import { CrossingBeepMode } from "../types/models";
 
-const KEEP_AWAKE_GAIN = 0.0001;
-const SECTOR_FREQS_HZ = [1174.66, 1396.91, 1567.98, 1760.0, 1975.53, 2349.32];
+const KEEP_WAKE_GAIN = 0.0001;
+const GATE_TONE_FREQS_HZ = [1318.51, 1479.98, 1661.22, 1760.0, 1975.53, 2217.46];
+const BEEP_DURATION_SEC = 0.065;
 
 let sharedCtx: AudioContext | null = null;
 let unlockBound = false;
@@ -19,12 +21,12 @@ export function warmCrossingBeepAudio(): AudioContext | null {
   const Ctx = getAudioContextConstructor();
   if (!Ctx) return null;
   try {
-    if (!sharedCtx) {
+    if (!sharedCtx || !(sharedCtx instanceof Ctx)) {
       const ctx = new Ctx({ latencyHint: "interactive" });
       const keepOsc = ctx.createOscillator();
       const keepGain = ctx.createGain();
       keepOsc.frequency.value = 440;
-      keepGain.gain.value = KEEP_AWAKE_GAIN;
+      keepGain.gain.value = KEEP_WAKE_GAIN;
       keepOsc.connect(keepGain).connect(ctx.destination);
       keepOsc.start();
       sharedCtx = ctx;
@@ -52,46 +54,28 @@ export function ensureCrossingBeepGestureUnlock(): void {
   window.addEventListener("keydown", unlock, true);
 }
 
-/**
- * Plays an immediate, zero-queue synthetic crossing beep on the hardware WebAudio mixer thread.
- * Mixes cleanly over any active TTS speech without waiting for or interrupting voice callouts.
- */
-export function playSyntheticCrossingBeep(store: AppStore, gateId: number, volume = 0.9): void {
+function resolveGateFreqHz(store: AppStore, gateId: number): number {
+  const node = store.node(gateId);
+  const rawOrder = Math.max(0, (node?.trackOrder ?? gateId) - 1);
+  return GATE_TONE_FREQS_HZ[rawOrder % GATE_TONE_FREQS_HZ.length];
+}
+
+/** Plays an instant, crisp single crossing beep on the hardware WebAudio mixer thread. */
+export function playShortCrossingBeep(store: AppStore, gateId: number, volume = 0.9): void {
   const ctx = warmCrossingBeepAudio();
   if (!ctx) return;
   try {
-    const node = store.node(gateId);
-    const isStartFinish = node?.role === "START_FINISH";
-    const order = Math.max(0, node?.trackOrder ?? Math.max(0, gateId - 1));
     const now = ctx.currentTime;
     const peakGain = Math.max(0.08, Math.min(1, volume)) * 0.34;
+    const freqHz = resolveGateFreqHz(store, gateId);
+    const attackEnd = now + 0.005;
+    const sustainEnd = now + BEEP_DURATION_SEC - 0.018;
 
-    if (isStartFinish) {
-      // Crisp 2-step rising micro-chirp (C6 -> E6, 72 ms total) for Start/Finish
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(0.0001, now);
-      g.gain.linearRampToValueAtTime(peakGain, now + 0.004);
-      g.gain.setValueAtTime(peakGain * 0.9, now + 0.034);
-      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.074);
-      g.connect(ctx.destination);
-
-      const osc = ctx.createOscillator();
-      osc.type = "triangle";
-      osc.frequency.setValueAtTime(1046.5, now);
-      osc.frequency.setValueAtTime(1318.51, now + 0.035);
-      osc.connect(g);
-      osc.start(now);
-      osc.stop(now + 0.08);
-      return;
-    }
-
-    // Distinct single-note high-clarity sector ping by gate order around the course
-    const freqHz = SECTOR_FREQS_HZ[order % SECTOR_FREQS_HZ.length];
-    const dur = 0.068;
     const g = ctx.createGain();
-    g.gain.setValueAtTime(0.0001, now);
-    g.gain.linearRampToValueAtTime(peakGain, now + 0.004);
-    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    g.gain.setValueAtTime(KEEP_WAKE_GAIN, now);
+    g.gain.linearRampToValueAtTime(peakGain, attackEnd);
+    g.gain.setValueAtTime(peakGain, sustainEnd);
+    g.gain.exponentialRampToValueAtTime(KEEP_WAKE_GAIN, sustainEnd + 0.018);
     g.connect(ctx.destination);
 
     const osc = ctx.createOscillator();
@@ -99,8 +83,29 @@ export function playSyntheticCrossingBeep(store: AppStore, gateId: number, volum
     osc.frequency.setValueAtTime(freqHz, now);
     osc.connect(g);
     osc.start(now);
-    osc.stop(now + dur + 0.01);
+    osc.stop(sustainEnd + 0.02);
   } catch {
     // Ignore AudioContext scheduling errors in headless test environments
   }
+}
+
+/** Plays a preview crossing beep when selecting `"enter"`, `"peak"`, or `"exit"` in Track or Signals. */
+export function playPreviewCrossingBeep(
+  store: AppStore,
+  gateId: number,
+  mode: CrossingBeepMode,
+  volume = 0.9
+): void {
+  if (mode === "off") return;
+  playShortCrossingBeep(store, gateId, volume);
+}
+
+/** Backward-compatible alias for playing a single crossing beep. */
+export function playSyntheticCrossingBeep(
+  store: AppStore,
+  gateId: number,
+  volume = 0.9,
+  mode: CrossingBeepMode = "enter"
+): void {
+  playPreviewCrossingBeep(store, gateId, mode, volume);
 }

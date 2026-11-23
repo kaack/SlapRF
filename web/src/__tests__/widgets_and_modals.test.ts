@@ -420,10 +420,14 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       expect(root.textContent).not.toContain("this session");
       expect(root.textContent).not.toContain("Overridden at");
 
-      // Concise 1-line Beep on crossing description for All timers
+      // Concise 1-line Beep on crossing description + Off/Enter/Peak/Exit switcher for All timers
       expect(root.textContent).toContain(
-        "Plays an instant high-priority synthetic tone when a crossing is detected for all timers."
+        "Plays a single beep on gate enter, at the signal peak, or on gate exit for all timers."
       );
+      expect(root.querySelector("[data-beep-mode='off']")).not.toBeNull();
+      expect(root.querySelector("[data-beep-mode='enter']")).not.toBeNull();
+      expect(root.querySelector("[data-beep-mode='peak']")).not.toBeNull();
+      expect(root.querySelector("[data-beep-mode='exit']")).not.toBeNull();
 
       // Editing global minLapSec triggers api.updateRules
       const minLapInput = root.querySelector<HTMLInputElement>("input[name='minLapSec']")!;
@@ -437,11 +441,15 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       store.applyRules({ ...store.rules, minLapSec: 6.5 });
       expect(root.querySelector("[data-scope='all'] .channel-custom-icon")).not.toBeNull();
 
-      // Switch scope to Gate 2 ("Split Tunnel") -> concise 1-line Beep on crossing description for individual timer
+      // Switch scope to Gate 1 ("Start/Finish") -> allows Off/Enter/Peak/Exit beep switcher
+      root.querySelector<HTMLButtonElement>("[data-scope='1']")!.click();
+      expect(root.querySelector("[data-beep-mode='peak']")).not.toBeNull();
+
+      // Switch scope to Gate 2 ("Split Tunnel") -> concise 1-line Beep on crossing description + Off/Enter/Peak/Exit switcher
       root.querySelector<HTMLButtonElement>("[data-scope='2']")!.click();
       expect(root.querySelector("[data-count='SPIKE']")).toBeNull();
       expect(root.textContent).toContain(
-        "Plays an instant high-priority synthetic tone when a crossing is detected at this timer."
+        "Plays a single beep on gate enter, at the signal peak, or on gate exit at this timer."
       );
 
       // Toggle override on minCrossingSec for Gate 2 -> calls setGateRules(2, { minCrossingSec: 0.12 })
@@ -514,7 +522,7 @@ describe("widgets/Toast & TimingRulesEditor", () => {
     }
   });
 
-  it("opens Signals fine-tuning drawer per timer with 3-tier scope toggle and numeric detection rules (without beepOnCross)", async () => {
+  it("opens Signals fine-tuning drawer per timer with 3-tier scope toggle, minLapSec, maxLapSec, minCrossingSec, and synced timer-level beepOnCross", async () => {
     const store = makeStore({
       gates: [
         makeGate(1, { name: "H1", role: "START_FINISH", ruleOverrides: { minLapSec: 8 } }),
@@ -653,25 +661,43 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       expect(gateCall).toBeDefined();
       expect(gateCall!.args).toEqual([1, { minLapSec: 8, minCrossingSec: 0.18 }]);
 
-      // Signals Fine-tune omits Beep on crossing (which lives exclusively in Track -> Detection rules)
-      expect(drawerEl.querySelector('[data-tune-card="beepOnCross"]')).toBeNull();
-      expect(drawerEl.querySelector('[data-tune-act="toggle-beep"]')).toBeNull();
+      // Start / Finish timer H1 ALSO allows Off / Enter / Peak / Exit crossing beep switcher synced with Track
+      const h1PeakBtn = drawerEl.querySelector<HTMLButtonElement>('[data-tune-beep-mode="peak"]')!;
+      expect(h1PeakBtn).not.toBeNull();
+      h1PeakBtn.click();
+      await flushMicrotasks();
+      const h1BeepCall = calls.filter((c) => c.method === "setGateRules").pop();
+      expect(h1BeepCall).toBeDefined();
+      expect(h1BeepCall!.args).toEqual([1, { minLapSec: 8, beepMode: "peak", beepOnCross: true }]);
+
+      // Select sector timer 2 ("T3") -> shows Off / Enter / Peak / Exit crossing beep switcher synced with Track
+      root.querySelector<HTMLButtonElement>('[data-gate-chip="2"]')!.click();
+      const exitBeepBtn = drawerEl.querySelector<HTMLButtonElement>('[data-tune-beep-mode="exit"]')!;
+      expect(exitBeepBtn).not.toBeNull();
+      exitBeepBtn.click();
+      await flushMicrotasks();
+      const beepGateCall = calls.filter((c) => c.method === "setGateRules").pop();
+      expect(beepGateCall).toBeDefined();
+      expect(beepGateCall!.args).toEqual([2, { beepMode: "exit", beepOnCross: true }]);
     } finally {
       chart.destroy();
     }
 
-    // Verify Race mode renders the same clean drawer without beepOnCross
+    // Verify Race mode renders the same clean drawer with Off / Enter / Peak / Exit beepMode on sector timers
     const raceRoot = mountHtml(`<div style="width: 640px; height: 420px;"></div>`);
     const raceChart = new PilotRssiChart(raceRoot.firstElementChild as HTMLElement, store, api, {
       contextMode: "race",
     });
     try {
-      raceRoot.querySelector<HTMLButtonElement>('[data-gate-chip="2"]')!.click();
+      raceRoot.querySelector<HTMLButtonElement>('[data-gate-chip="2"][data-focus="2"]')?.click();
       raceRoot.querySelector<HTMLButtonElement>('.scope-calib-tune-btn[data-tune-gate="2"]')!.click();
       const raceDrawer = raceRoot.querySelector<HTMLElement>('[data-slot="tune-drawer"]')!;
       expect(raceDrawer.hidden).toBe(false);
       expect(raceDrawer.querySelector('[data-tune-input="minCrossingSec"]')).not.toBeNull();
-      expect(raceDrawer.querySelector('[data-tune-act="toggle-beep"]')).toBeNull();
+      expect(raceDrawer.querySelector('[data-tune-beep-mode="off"]')).not.toBeNull();
+      expect(raceDrawer.querySelector('[data-tune-beep-mode="enter"]')).not.toBeNull();
+      expect(raceDrawer.querySelector('[data-tune-beep-mode="peak"]')).not.toBeNull();
+      expect(raceDrawer.querySelector('[data-tune-beep-mode="exit"]')).not.toBeNull();
     } finally {
       raceChart.destroy();
     }

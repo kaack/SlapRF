@@ -1260,12 +1260,16 @@ export interface StatusResponse {
   practiceState?: PracticeManagerState;
 }
 
+/** Crossing tone trigger mode: off, beep on enter threshold, beep at signal peak over the gate, or beep on exit threshold. */
+export type CrossingBeepMode = "off" | "enter" | "peak" | "exit";
+
 /** Guardrails applied to every RF detection before it counts (see internal/domain/rules.go). */
 export interface TimingRules {
   minLapSec: number;
   maxLapSec: number;
   minCrossingSec: number;
   beepOnCross?: boolean;
+  beepMode?: CrossingBeepMode;
 }
 
 /** Numeric detection/timing rules overridable per gate or per (gate, pilot). */
@@ -1275,6 +1279,7 @@ export type NumericGateRuleKey = "minLapSec" | "maxLapSec" | "minCrossingSec";
 export type GateRuleKey = NumericGateRuleKey;
 export type GateRuleOverrides = Partial<Record<NumericGateRuleKey, number>> & {
   beepOnCross?: boolean;
+  beepMode?: CrossingBeepMode;
 };
 
 export type FilterReason = "SPIKE" | "MIN_LAP" | "LAP_TOO_LONG";

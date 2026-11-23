@@ -310,39 +310,81 @@ export function pilotGateOverridesAt(node: TrackNode | undefined, slotIndex: num
   );
 }
 
+/** Canonicalizes a crossing beep mode from `beepMode` + legacy `"short"`/`"long"`/`beepOnCross`. */
+export function resolveCrossingBeepMode(
+  beepMode?: string | null,
+  legacyBeepOnCross?: boolean
+): "off" | "enter" | "peak" | "exit" {
+  if (legacyBeepOnCross === false && !beepMode) return "off";
+  if (beepMode === "off" || beepMode === "enter" || beepMode === "peak" || beepMode === "exit") {
+    if (legacyBeepOnCross === false && beepMode !== "off") return "off";
+    return beepMode;
+  }
+  if (beepMode === "short") return legacyBeepOnCross === false ? "off" : "enter";
+  if (beepMode === "long") return legacyBeepOnCross === false ? "off" : "peak";
+  return legacyBeepOnCross ? "enter" : "off";
+}
+
+/** Resolves any explicit gate-level beep mode override (`undefined` if inheriting from `All timers`). */
+export function gateOverrideBeepMode(
+  ovr: GateRuleOverrides | undefined
+): "off" | "enter" | "peak" | "exit" | undefined {
+  if (!ovr) return undefined;
+  const raw = ovr.beepMode as string | undefined;
+  if (raw === "off" || raw === "enter" || raw === "peak" || raw === "exit") {
+    return raw;
+  }
+  if (raw === "short") return "enter";
+  if (raw === "long") return "peak";
+  if (ovr.beepOnCross !== undefined) {
+    return ovr.beepOnCross ? "enter" : "off";
+  }
+  return undefined;
+}
+
 /** Resolves Tier 2 rules at `gateId`: Global rules + Gate-wide overrides (all pilots at this timer). */
 export function gateRulesAt(store: AppStore, gateId: number): TimingRules {
   const base = store.rules;
-  const o = store.node(gateId)?.ruleOverrides ?? {};
+  const node = store.node(gateId);
+  const o = node?.ruleOverrides ?? {};
   const minLapSec = o.minLapSec ?? base.minLapSec;
   const rawMax = o.maxLapSec ?? base.maxLapSec;
+  const baseMode = resolveCrossingBeepMode(base.beepMode, base.beepOnCross);
+  const ovrMode = gateOverrideBeepMode(o);
+  const effMode = ovrMode !== undefined ? ovrMode : baseMode;
   return {
     minLapSec,
     maxLapSec: Math.max(rawMax, minLapSec + 5),
     minCrossingSec: o.minCrossingSec ?? base.minCrossingSec,
-    beepOnCross: o.beepOnCross !== undefined ? o.beepOnCross : Boolean(base.beepOnCross),
+    beepOnCross: effMode !== "off",
+    beepMode: effMode,
   };
 }
 
-/** Resolves Tier 3 rules for `(gateId, slotIndex)`: Global -> Gate-wide -> Pilot-at-Gate overrides (beepOnCross inherits strictly from Track: All timers -> Gate-wide). */
+/** Resolves Tier 3 rules for `(gateId, slotIndex)`: Global -> Gate-wide -> Pilot-at-Gate overrides (beepMode inherits strictly from Track: All timers -> Gate-wide). */
 export function pilotGateRulesAt(store: AppStore, gateId: number, slotIndex: number): TimingRules {
   const gateEff = gateRulesAt(store, gateId);
   const po = pilotGateOverridesAt(store.node(gateId), slotIndex);
   const minLapSec = po.minLapSec ?? gateEff.minLapSec;
   const rawMax = po.maxLapSec ?? gateEff.maxLapSec;
+  const effMode = resolveCrossingBeepMode(gateEff.beepMode, gateEff.beepOnCross);
   return {
     minLapSec,
     maxLapSec: Math.max(rawMax, minLapSec + 5),
     minCrossingSec: po.minCrossingSec ?? gateEff.minCrossingSec,
-    beepOnCross: Boolean(gateEff.beepOnCross),
+    beepOnCross: effMode !== "off",
+    beepMode: effMode,
   };
 }
 
-/** Reports whether any global or gate-wide rule currently has `beepOnCross` enabled. */
+/** Reports whether any timer currently has a non-`off` crossing beep mode configured. */
 export function hasAnyBeepOnCrossConfigured(store: AppStore): boolean {
-  if (store.rules.beepOnCross) return true;
+  const globalMode = resolveCrossingBeepMode(store.rules.beepMode, store.rules.beepOnCross);
+  if (store.nodes.length === 0) return globalMode !== "off";
   for (const n of store.nodes) {
-    if (n.ruleOverrides?.beepOnCross === true) return true;
+    const ovrMode = gateOverrideBeepMode(n.ruleOverrides);
+    const eff = ovrMode !== undefined ? ovrMode : globalMode;
+    if (eff !== "off") return true;
   }
   return false;
 }

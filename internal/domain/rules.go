@@ -5,6 +5,34 @@ import (
 	"math"
 )
 
+// CrossingBeepMode selects when crossing audio feedback fires during a gate pass.
+type CrossingBeepMode string
+
+const (
+	BeepModeOff   CrossingBeepMode = "off"
+	BeepModeEnter CrossingBeepMode = "enter"
+	BeepModePeak  CrossingBeepMode = "peak"
+	BeepModeExit  CrossingBeepMode = "exit"
+)
+
+// NormalizeBeepMode canonicalizes a CrossingBeepMode (migrating legacy "short"->"enter" and "long"->"peak"),
+// falling back to legacyOn ("enter" vs "off") when mode is empty or unrecognized.
+func NormalizeBeepMode(mode CrossingBeepMode, legacyOn bool) CrossingBeepMode {
+	switch mode {
+	case BeepModeOff, BeepModeEnter, BeepModePeak, BeepModeExit:
+		return mode
+	case "short":
+		return BeepModeEnter
+	case "long":
+		return BeepModePeak
+	default:
+		if legacyOn {
+			return BeepModeEnter
+		}
+		return BeepModeOff
+	}
+}
+
 // TimingRules are the guardrails applied to every RF detection before it becomes a gate
 // crossing. Each timer evaluates crossings independently using minimum lap time, maximum lap
 // time, minimum crossing time (RF spike hold/area filter), and optional crossing beep feedback.
@@ -18,19 +46,21 @@ type TimingRules struct {
 	// MinCrossingSec: minimum gate beam hold duration (and proportional dB*s curve area)
 	// required for an RF excursion to count as a genuine drone pass rather than a sharp spike.
 	MinCrossingSec float64 `json:"minCrossingSec"`
-	// BeepOnCross: play an immediate synthetic WebAudio tone when a crossing is accepted
-	// (useful for sector-gate debugging and eyes-free confirmation in Practice and Races).
+	// BeepOnCross: true whenever BeepMode is "enter", "peak", or "exit" (kept synchronized for backward compatibility).
 	BeepOnCross bool `json:"beepOnCross"`
+	// BeepMode: crossing tone trigger point ("off", "enter", "peak", or "exit").
+	BeepMode CrossingBeepMode `json:"beepMode"`
 }
 
-// UnmarshalJSON decodes TimingRules while migrating legacy `minPassHoldSec` values when present.
+// UnmarshalJSON decodes TimingRules while migrating legacy `minPassHoldSec` and boolean-only `beepOnCross` values.
 func (r *TimingRules) UnmarshalJSON(data []byte) error {
 	type rawTimingRules struct {
-		MinLapSec      float64  `json:"minLapSec"`
-		MaxLapSec      float64  `json:"maxLapSec"`
-		MinCrossingSec *float64 `json:"minCrossingSec"`
-		LegacyHoldSec  *float64 `json:"minPassHoldSec"`
-		BeepOnCross    bool     `json:"beepOnCross"`
+		MinLapSec      float64           `json:"minLapSec"`
+		MaxLapSec      float64           `json:"maxLapSec"`
+		MinCrossingSec *float64          `json:"minCrossingSec"`
+		LegacyHoldSec  *float64          `json:"minPassHoldSec"`
+		BeepOnCross    *bool             `json:"beepOnCross"`
+		BeepMode       *CrossingBeepMode `json:"beepMode"`
 	}
 	var raw rawTimingRules
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -43,7 +73,16 @@ func (r *TimingRules) UnmarshalJSON(data []byte) error {
 	} else if raw.LegacyHoldSec != nil {
 		r.MinCrossingSec = *raw.LegacyHoldSec
 	}
-	r.BeepOnCross = raw.BeepOnCross
+	if raw.BeepOnCross != nil && !*raw.BeepOnCross {
+		r.BeepMode = BeepModeOff
+		r.BeepOnCross = false
+	} else if raw.BeepMode != nil && *raw.BeepMode != "" {
+		r.BeepMode = NormalizeBeepMode(*raw.BeepMode, raw.BeepOnCross != nil && *raw.BeepOnCross)
+		r.BeepOnCross = r.BeepMode != BeepModeOff
+	} else {
+		r.BeepMode = NormalizeBeepMode("", raw.BeepOnCross != nil && *raw.BeepOnCross)
+		r.BeepOnCross = r.BeepMode != BeepModeOff
+	}
 	return nil
 }
 
@@ -53,6 +92,8 @@ func DefaultTimingRules() TimingRules {
 		MinLapSec:      5,
 		MaxLapSec:      120,
 		MinCrossingSec: 0.12,
+		BeepOnCross:    false,
+		BeepMode:       BeepModeOff,
 	}
 }
 
@@ -64,6 +105,24 @@ func (r TimingRules) Normalized() TimingRules {
 		r.MinCrossingSec = 0.12
 	}
 	r.MinCrossingSec = clampRule(r.MinCrossingSec, 0.04, 1.5)
+	switch r.BeepMode {
+	case BeepModeEnter, BeepModePeak, BeepModeExit:
+		r.BeepOnCross = true
+	case "short":
+		r.BeepMode = BeepModeEnter
+		r.BeepOnCross = true
+	case "long":
+		r.BeepMode = BeepModePeak
+		r.BeepOnCross = true
+	default:
+		if r.BeepOnCross {
+			r.BeepMode = BeepModeEnter
+			r.BeepOnCross = true
+		} else {
+			r.BeepMode = BeepModeOff
+			r.BeepOnCross = false
+		}
+	}
 	return r
 }
 
@@ -72,20 +131,22 @@ func clampRule(v, lo, hi float64) float64 { return math.Max(lo, math.Min(hi, v))
 // GateRuleOverrides lets one gate (or one pilot at one gate) use different values from the
 // parent tier. nil fields inherit from the parent tier.
 type GateRuleOverrides struct {
-	MinLapSec      *float64 `json:"minLapSec,omitempty"`
-	MaxLapSec      *float64 `json:"maxLapSec,omitempty"`
-	MinCrossingSec *float64 `json:"minCrossingSec,omitempty"`
-	BeepOnCross    *bool    `json:"beepOnCross,omitempty"`
+	MinLapSec      *float64          `json:"minLapSec,omitempty"`
+	MaxLapSec      *float64          `json:"maxLapSec,omitempty"`
+	MinCrossingSec *float64          `json:"minCrossingSec,omitempty"`
+	BeepOnCross    *bool             `json:"beepOnCross,omitempty"`
+	BeepMode       *CrossingBeepMode `json:"beepMode,omitempty"`
 }
 
-// UnmarshalJSON decodes GateRuleOverrides while migrating legacy `minPassHoldSec` overrides.
+// UnmarshalJSON decodes GateRuleOverrides while migrating legacy `minPassHoldSec` and boolean-only `beepOnCross` overrides.
 func (o *GateRuleOverrides) UnmarshalJSON(data []byte) error {
 	type rawOverrides struct {
-		MinLapSec      *float64 `json:"minLapSec,omitempty"`
-		MaxLapSec      *float64 `json:"maxLapSec,omitempty"`
-		MinCrossingSec *float64 `json:"minCrossingSec,omitempty"`
-		LegacyHoldSec  *float64 `json:"minPassHoldSec,omitempty"`
-		BeepOnCross    *bool    `json:"beepOnCross,omitempty"`
+		MinLapSec      *float64          `json:"minLapSec,omitempty"`
+		MaxLapSec      *float64          `json:"maxLapSec,omitempty"`
+		MinCrossingSec *float64          `json:"minCrossingSec,omitempty"`
+		LegacyHoldSec  *float64          `json:"minPassHoldSec,omitempty"`
+		BeepOnCross    *bool             `json:"beepOnCross,omitempty"`
+		BeepMode       *CrossingBeepMode `json:"beepMode,omitempty"`
 	}
 	var raw rawOverrides
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -95,11 +156,25 @@ func (o *GateRuleOverrides) UnmarshalJSON(data []byte) error {
 	if minCross == nil {
 		minCross = raw.LegacyHoldSec
 	}
+	var modePtr *CrossingBeepMode
+	var beepPtr *bool
+	if raw.BeepMode != nil {
+		m := NormalizeBeepMode(*raw.BeepMode, raw.BeepOnCross != nil && *raw.BeepOnCross)
+		on := m != BeepModeOff
+		modePtr = &m
+		beepPtr = &on
+	} else if raw.BeepOnCross != nil {
+		m := NormalizeBeepMode("", *raw.BeepOnCross)
+		on := *raw.BeepOnCross
+		modePtr = &m
+		beepPtr = &on
+	}
 	*o = GateRuleOverrides{
 		MinLapSec:      raw.MinLapSec,
 		MaxLapSec:      raw.MaxLapSec,
 		MinCrossingSec: minCross,
-		BeepOnCross:    raw.BeepOnCross,
+		BeepOnCross:    beepPtr,
+		BeepMode:       modePtr,
 	}
 	return nil
 }
@@ -109,7 +184,8 @@ func (o GateRuleOverrides) IsEmpty() bool {
 	return o.MinLapSec == nil &&
 		o.MaxLapSec == nil &&
 		o.MinCrossingSec == nil &&
-		o.BeepOnCross == nil
+		o.BeepOnCross == nil &&
+		o.BeepMode == nil
 }
 
 // Normalized clamps each set override into the same range as the global rule.
@@ -122,15 +198,24 @@ func (o GateRuleOverrides) Normalized() GateRuleOverrides {
 		return &v
 	}
 	var beepPtr *bool
-	if o.BeepOnCross != nil {
-		b := *o.BeepOnCross
-		beepPtr = &b
+	var modePtr *CrossingBeepMode
+	if o.BeepMode != nil {
+		m := NormalizeBeepMode(*o.BeepMode, o.BeepOnCross != nil && *o.BeepOnCross)
+		on := m != BeepModeOff
+		modePtr = &m
+		beepPtr = &on
+	} else if o.BeepOnCross != nil {
+		m := NormalizeBeepMode("", *o.BeepOnCross)
+		on := *o.BeepOnCross
+		modePtr = &m
+		beepPtr = &on
 	}
 	out := GateRuleOverrides{
 		MinLapSec:      clampPtr(o.MinLapSec, 1, 120),
 		MaxLapSec:      clampPtr(o.MaxLapSec, 6, 900),
 		MinCrossingSec: clampPtr(o.MinCrossingSec, 0.04, 1.5),
 		BeepOnCross:    beepPtr,
+		BeepMode:       modePtr,
 	}
 	if out.MinLapSec != nil && out.MaxLapSec != nil && *out.MaxLapSec < *out.MinLapSec+5 {
 		v := clampRule(*out.MinLapSec+5, 6, 900)
@@ -142,9 +227,7 @@ func (o GateRuleOverrides) Normalized() GateRuleOverrides {
 // ForGate returns the rules a gate actually applies: the global rules with that gate's
 // overrides on top.
 func (r TimingRules) ForGate(o GateRuleOverrides) TimingRules {
-	if r.MinCrossingSec <= 0 {
-		r.MinCrossingSec = 0.12
-	}
+	r = r.Normalized()
 	if o.MinLapSec != nil {
 		r.MinLapSec = *o.MinLapSec
 	}
@@ -157,8 +240,19 @@ func (r TimingRules) ForGate(o GateRuleOverrides) TimingRules {
 	if o.MinCrossingSec != nil {
 		r.MinCrossingSec = *o.MinCrossingSec
 	}
-	if o.BeepOnCross != nil {
-		r.BeepOnCross = *o.BeepOnCross
+	if o.BeepMode != nil {
+		r.BeepMode = NormalizeBeepMode(*o.BeepMode, o.BeepOnCross != nil && *o.BeepOnCross)
+		r.BeepOnCross = r.BeepMode != BeepModeOff
+	} else if o.BeepOnCross != nil {
+		if *o.BeepOnCross {
+			if r.BeepMode == BeepModeOff {
+				r.BeepMode = BeepModeEnter
+			}
+			r.BeepOnCross = true
+		} else {
+			r.BeepMode = BeepModeOff
+			r.BeepOnCross = false
+		}
 	}
 	return r
 }
@@ -192,7 +286,8 @@ func (o GateRuleOverrides) PrunedAgainst(parent TimingRules) GateRuleOverrides {
 	if out.MinCrossingSec != nil && math.Abs(*out.MinCrossingSec-parent.MinCrossingSec) < 1e-6 {
 		out.MinCrossingSec = nil
 	}
-	if out.BeepOnCross != nil && *out.BeepOnCross == parent.BeepOnCross {
+	if out.BeepMode != nil && *out.BeepMode == parent.BeepMode {
+		out.BeepMode = nil
 		out.BeepOnCross = nil
 	}
 	return out

@@ -6434,6 +6434,11 @@ components:
         beepOnCross:
           type: boolean
           example: false
+        beepMode:
+          type: string
+          enum: [off, enter, peak, exit]
+          description: Crossing tone trigger point (`off`, `enter`, `peak`, or `exit`).
+          example: off
 
     GateRuleOverrides:
       type: object
@@ -6450,6 +6455,10 @@ components:
         beepOnCross:
           type: boolean
           example: true
+        beepMode:
+          type: string
+          enum: [off, enter, peak, exit]
+          example: peak
 
     GateCrossingEvent:
       type: object

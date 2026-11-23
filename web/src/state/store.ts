@@ -81,6 +81,7 @@ const DEFAULT_RULES: TimingRules = {
   maxLapSec: 120,
   minCrossingSec: 0.12,
   beepOnCross: false,
+  beepMode: "off",
 };
 
 function normalizeTimingRules(raw?: Partial<TimingRules> & { minPassHoldSec?: number } | null): TimingRules {
@@ -93,11 +94,25 @@ function normalizeTimingRules(raw?: Partial<TimingRules> & { minPassHoldSec?: nu
       : typeof raw.minPassHoldSec === "number" && raw.minPassHoldSec > 0
         ? raw.minPassHoldSec
         : DEFAULT_RULES.minCrossingSec;
+  let beepMode: "off" | "enter" | "peak" | "exit" = "off";
+  const rawMode = raw.beepMode as string | undefined;
+  if (raw.beepOnCross === false) {
+    beepMode = "off";
+  } else if (rawMode === "off" || rawMode === "enter" || rawMode === "peak" || rawMode === "exit") {
+    beepMode = rawMode;
+  } else if (rawMode === "short") {
+    beepMode = "enter";
+  } else if (rawMode === "long") {
+    beepMode = "peak";
+  } else if (raw.beepOnCross) {
+    beepMode = "enter";
+  }
   return {
     minLapSec,
     maxLapSec,
     minCrossingSec: rawCrossing,
-    beepOnCross: Boolean(raw.beepOnCross),
+    beepOnCross: beepMode !== "off",
+    beepMode,
   };
 }
 
@@ -372,6 +387,7 @@ export class AppStore {
   private readonly crossingListeners = new Set<CrossingListener>();
   private readonly startGateListeners = new Set<CrossingListener>();
   private readonly raceAnnouncementListeners = new Set<RaceAnnouncementListener>();
+  private readonly telemetryListeners = new Set<(frame: TimerTelemetryFrame) => void>();
 
   constructor() {
     this.loadUiPrefs();
@@ -472,6 +488,12 @@ export class AppStore {
   public onRaceAnnouncement(fn: RaceAnnouncementListener): () => void {
     this.raceAnnouncementListeners.add(fn);
     return () => this.raceAnnouncementListeners.delete(fn);
+  }
+
+  /** Fires synchronously on each incoming telemetry frame (used for zero-latency gate enter/exit audio). */
+  public onTelemetryFrame(fn: (frame: TimerTelemetryFrame) => void): () => void {
+    this.telemetryListeners.add(fn);
+    return () => this.telemetryListeners.delete(fn);
   }
 
   public subscribe(topics: Topic[], fn: Listener): () => void {
@@ -1172,6 +1194,9 @@ export class AppStore {
       },
       onRaceAnnouncement: {
         value: base.onRaceAnnouncement.bind(base),
+      },
+      onTelemetryFrame: {
+        value: base.onTelemetryFrame.bind(base),
       },
       selectPilot: {
         value: overrides.selectPilot ? overrides.selectPilot : base.selectPilot.bind(base),
@@ -2041,6 +2066,9 @@ export class AppStore {
     }
     if (onlineChanged) {
       this._stateRev = (this._stateRev + 1) | 0;
+    }
+    if (this.telemetryListeners.size > 0) {
+      this.telemetryListeners.forEach((fn) => fn(frame));
     }
   }
 

@@ -9,6 +9,7 @@ import {
   expect,
   it,
   makeCrossing,
+  makeGate,
   makeHeat,
   makeLap,
   makePilot,
@@ -76,6 +77,7 @@ function installFakeSpeechAndAudio(): FakeAudioRig {
           setValueAtTime: () => {},
           linearRampToValueAtTime: () => {},
           exponentialRampToValueAtTime: () => {},
+          cancelScheduledValues: () => {},
         },
         connect: (next: unknown) => next,
       };
@@ -894,4 +896,127 @@ describe("services/announcer — Phonetic Names, Lap Formatting, Queue Dedup & W
       ann3.stop();
     }
   });
+
+  it("supports Off, Enter, Peak, and Exit crossing beep modes across all timers without double-beeping", () => {
+    const rig = installFakeSpeechAndAudio();
+    const store = makeStore({
+      pilots: [
+        makePilot(1, {
+          callsign: "FAERRY",
+          enabled: true,
+          channel: 1,
+          enterThreshold: -58,
+          exitThreshold: -68,
+        }),
+      ],
+      gates: [
+        makeGate(1, {
+          role: "START_FINISH",
+          trackOrder: 1,
+          assignedTimerId: 1,
+          ruleOverrides: { beepMode: "off", beepOnCross: false },
+        }),
+        makeGate(2, { role: "SECTOR_GATE", trackOrder: 2, assignedTimerId: 2 }),
+      ],
+      rules: {
+        minLapSec: 5,
+        maxLapSec: 120,
+        minCrossingSec: 0.12,
+        beepOnCross: true,
+        beepMode: "peak",
+      },
+    });
+    const ann = new Announcer(store);
+    try {
+      const startIdx = rig.oscillatorsStarted.length;
+      const nonKeepAwake = () => rig.oscillatorsStarted.slice(startIdx).filter((hz) => hz !== 440);
+
+      // 1. Gate 1 overridden to "off" stays silent across a full pass
+      store.ingestTelemetry({ timerId: 1, seqNum: 1, timestampUs: 1_000_000, rssi: [-85] });
+      store.ingestTelemetry({ timerId: 1, seqNum: 2, timestampUs: 1_050_000, rssi: [-38] });
+      store.ingestTelemetry({ timerId: 1, seqNum: 3, timestampUs: 1_200_000, rssi: [-72] });
+      expect(nonKeepAwake()).toEqual([]);
+
+      // 2. "peak" mode on Gate 2: silent on enter & climb, fires right as the signal crests (-32 dBm -> -34.6 dBm) BEFORE reaching exit (-68 dBm)!
+      store.ingestTelemetry({ timerId: 2, seqNum: 1, timestampUs: 2_000_000, rssi: [-85] });
+      store.ingestTelemetry({ timerId: 2, seqNum: 2, timestampUs: 2_040_000, rssi: [-54] }); // enter: silent
+      store.ingestTelemetry({ timerId: 2, seqNum: 3, timestampUs: 2_080_000, rssi: [-41] }); // climbing: silent
+      store.ingestTelemetry({ timerId: 2, seqNum: 4, timestampUs: 2_120_000, rssi: [-32] }); // apex over gate: silent
+      store.ingestTelemetry({ timerId: 2, seqNum: 5, timestampUs: 2_140_000, rssi: [-33.1] }); // 1st falling sample: silent
+      expect(nonKeepAwake()).toEqual([]);
+
+      // 2nd falling sample (-34.6 dBm, 2.6 dB drop from -32 dBm peak, still 33.4 dB above -68 dBm exit!): fires peak beep immediately!
+      store.ingestTelemetry({ timerId: 2, seqNum: 6, timestampUs: 2_160_000, rssi: [-34.6] });
+      expect(nonKeepAwake()).toEqual([1479.98]);
+
+      // Continuing to fly away and dropping below exit (-68 dBm) does NOT fire a second beep
+      store.ingestTelemetry({ timerId: 2, seqNum: 7, timestampUs: 2_250_000, rssi: [-50] });
+      store.ingestTelemetry({ timerId: 2, seqNum: 8, timestampUs: 2_380_000, rssi: [-71] });
+      store.ingestCrossing(makeCrossing(2, 1, 2, 2_120_000, { isStartFinish: false }));
+      expect(nonKeepAwake()).toEqual([1479.98]);
+
+      // 3. "enter" mode: fires immediately on entry (-52 >= -58), silent at peak and exit
+      store.hydrate({
+        ...storeSnapshotMinimal(store),
+        gates: [
+          makeGate(1, { role: "START_FINISH", trackOrder: 1, assignedTimerId: 1 }),
+          makeGate(2, { role: "SECTOR_GATE", trackOrder: 2, assignedTimerId: 2 }),
+        ],
+        rules: {
+          minLapSec: 5,
+          maxLapSec: 120,
+          minCrossingSec: 0.12,
+          beepOnCross: true,
+          beepMode: "enter",
+        },
+      });
+      store.ingestTelemetry({ timerId: 1, seqNum: 10, timestampUs: 4_000_000, rssi: [-52] });
+      expect(nonKeepAwake().length).toBe(2);
+      store.ingestTelemetry({ timerId: 1, seqNum: 11, timestampUs: 4_080_000, rssi: [-35] });
+      store.ingestTelemetry({ timerId: 1, seqNum: 12, timestampUs: 4_200_000, rssi: [-72] });
+      expect(nonKeepAwake().length).toBe(2);
+
+      // 4. "exit" mode: silent on entry and peak, fires immediately on exit (-70 <= -68)
+      store.hydrate({
+        ...storeSnapshotMinimal(store),
+        rules: {
+          minLapSec: 5,
+          maxLapSec: 120,
+          minCrossingSec: 0.12,
+          beepOnCross: true,
+          beepMode: "exit",
+        },
+      });
+      store.ingestTelemetry({ timerId: 2, seqNum: 20, timestampUs: 5_000_000, rssi: [-52] });
+      store.ingestTelemetry({ timerId: 2, seqNum: 21, timestampUs: 5_080_000, rssi: [-35] });
+      store.ingestTelemetry({ timerId: 2, seqNum: 22, timestampUs: 5_120_000, rssi: [-38] });
+      expect(nonKeepAwake().length).toBe(2);
+
+      store.ingestTelemetry({ timerId: 2, seqNum: 23, timestampUs: 5_240_000, rssi: [-70] });
+      expect(nonKeepAwake().length).toBe(3);
+    } finally {
+      ann.stop();
+    }
+  });
 });
+
+function storeSnapshotMinimal(store: ReturnType<typeof makeStore>) {
+  return {
+    serverTimestampUs: store.serverTimestampUs,
+    timingHardwareMode: store.timingHardwareMode,
+    pilots: store.pilots,
+    gates: store.nodes,
+    timers: store.timers,
+    laps: store.laps,
+    crossings: store.crossings,
+    filtered: store.filtered,
+    summaries: store.summaries,
+    rules: store.rules,
+    simulatorRunning: store.simulatorRunning,
+    raceArmed: store.raceArmed,
+    laprfEmulatorStatus: store.laprfEmulator,
+    raceState: store.raceState,
+    eventState: store.eventState,
+    practiceState: store.practiceState,
+  };
+}
