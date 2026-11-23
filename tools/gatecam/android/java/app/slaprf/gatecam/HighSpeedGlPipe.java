@@ -125,8 +125,9 @@ final class HighSpeedGlPipe implements SurfaceTexture.OnFrameAvailableListener {
             "    }\n" +
             "}\n";
 
-    private final int capW;
-    private final int capH;
+    private volatile int capW;
+    private volatile int capH;
+    private volatile boolean highSpeedRate = false;
     private final int outW;
     private final int outH;
     private final int fboW;
@@ -218,6 +219,16 @@ final class HighSpeedGlPipe implements SurfaceTexture.OnFrameAvailableListener {
 
     Surface getCameraInputSurface() {
         return camInputSurface;
+    }
+
+    void setCaptureConfig(final int newCapW, final int newCapH, final boolean isHighSpeed) {
+        this.capW = newCapW;
+        this.capH = newCapH;
+        this.highSpeedRate = isHighSpeed;
+        final SurfaceTexture st = camSurfaceTexture;
+        if (st != null) {
+            st.setDefaultBufferSize(newCapW, newCapH);
+        }
     }
 
     void release() {
@@ -360,7 +371,7 @@ final class HighSpeedGlPipe implements SurfaceTexture.OnFrameAvailableListener {
 
         if (previewSt != null) {
             try {
-                previewSt.setDefaultBufferSize(outW, outH);
+                previewSt.setDefaultBufferSize(1280, 720);
                 boundPreviewSurface = new Surface(previewSt);
                 int[] surfAttribs = new int[]{EGL14.EGL_NONE};
                 windowSurface = EGL14.eglCreateWindowSurface(eglDisplay, eglConfig, boundPreviewSurface, surfAttribs, 0);
@@ -438,9 +449,10 @@ final class HighSpeedGlPipe implements SurfaceTexture.OnFrameAvailableListener {
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
             pboFrameCount++;
 
-            if (windowSurface != EGL14.EGL_NO_SURFACE && (tsNs - lastPreviewDrawNs) >= 18_000_000L) {
+            long minPreviewGapNs = highSpeedRate ? 15_500_000L : 0L;
+            if (windowSurface != EGL14.EGL_NO_SURFACE && (tsNs - lastPreviewDrawNs) >= minPreviewGapNs) {
                 lastPreviewDrawNs = tsNs;
-                GLES20.glViewport(0, 0, outW, outH);
+                GLES20.glViewport(0, 0, 1280, 720);
                 GLES20.glUseProgram(prevProgId);
                 GLES20.glUniformMatrix4fv(prevUTexMatrixLoc, 1, false, stMatrix, 0);
                 GLES20.glUniform1f(prevURotModeLoc, rotMode);

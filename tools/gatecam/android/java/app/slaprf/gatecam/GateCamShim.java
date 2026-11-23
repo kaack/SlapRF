@@ -87,10 +87,11 @@ public final class GateCamShim {
     private static volatile boolean wantCameraOpen = false;
     private static volatile CameraDevice cameraDevice;
     private static volatile CameraCaptureSession captureSession;
-    private static ImageReader yuvReader;
-    private static Surface previewSurface;
     private static HighSpeedGlPipe glPipe;
     private static volatile boolean activeHighSpeedSession = false;
+    private static boolean sessionClosing = false;
+    private static boolean sessionCreating = false;
+    private static boolean pendingSessionSwitch = false;
 
     private static String cameraId = "";
     private static int sensorOrientation = 90;
@@ -257,31 +258,11 @@ public final class GateCamShim {
 
     private static void applyPreviewTransform(final TextureView tv, final int viewW, final int viewH) {
         if (tv == null || viewW <= 0 || viewH <= 0) return;
-        final boolean isHs = activeHighSpeedSession;
         tv.post(new Runnable() {
             @Override
             public void run() {
-                Matrix m = new Matrix();
-                if (isHs) {
-                    // HighSpeedGlPipe renders upright 16:9 directly into TextureView's Surface
-                    tv.setTransform(m);
-                    return;
-                }
-                int rot = getDisplayRotation();
-                float cx = viewW * 0.5f;
-                float cy = viewH * 0.5f;
-                if (Surface.ROTATION_90 == rot || Surface.ROTATION_270 == rot) {
-                    m.postScale((float) viewH / (float) viewW, (float) viewW / (float) viewH, cx, cy);
-                    m.postRotate(90 * (rot - 2), cx, cy);
-                } else {
-                    float desiredCropH = Math.max(1f, (float) capH * ((float) viewH / (float) viewW));
-                    float scaleY = (float) capW / desiredCropH;
-                    m.postScale(1.0f, scaleY, cx, cy);
-                    if (Surface.ROTATION_180 == rot) {
-                        m.postRotate(180, cx, cy);
-                    }
-                }
-                tv.setTransform(m);
+                // HighSpeedGlPipe renders upright 16:9 directly into TextureView across all 60/120/240 fps modes
+                tv.setTransform(new Matrix());
             }
         });
     }
@@ -425,7 +406,7 @@ public final class GateCamShim {
                             }
                             cameraDevice = camera;
                             lastError = "";
-                            createCapturePipelineOnControlThread();
+                            openGlAndSessionOnControlThread();
                         }
                     });
                 }
@@ -477,25 +458,26 @@ public final class GateCamShim {
         }
     }
 
-    private static void teardownPipelineOnControlThread() {
+    private static void closeCameraOnControlThread() {
+        sessionClosing = false;
+        sessionCreating = false;
+        pendingSessionSwitch = false;
         CameraCaptureSession cs = captureSession;
         captureSession = null;
         if (cs != null) {
             try { cs.close(); } catch (Throwable ignored) {}
         }
-        if (yuvReader != null) {
-            try { yuvReader.close(); } catch (Throwable ignored) {}
-            yuvReader = null;
-        }
-        if (previewSurface != null) {
-            try { previewSurface.release(); } catch (Throwable ignored) {}
-            previewSurface = null;
+        CameraDevice cd = cameraDevice;
+        cameraDevice = null;
+        if (cd != null) {
+            try { cd.close(); } catch (Throwable ignored) {}
         }
         if (glPipe != null) {
             try { glPipe.release(); } catch (Throwable ignored) {}
             glPipe = null;
         }
         activeHighSpeedSession = false;
+        boundSurfaceTexture = null;
         synchronized (ringLock) {
             ringHead = 0;
             ringCount = 0;
@@ -503,131 +485,155 @@ public final class GateCamShim {
         }
     }
 
-    private static void closeCameraOnControlThread() {
-        teardownPipelineOnControlThread();
-        CameraDevice cd = cameraDevice;
-        cameraDevice = null;
-        if (cd != null) {
-            try { cd.close(); } catch (Throwable ignored) {}
+    private static void openGlAndSessionOnControlThread() {
+        TextureView tv = previewTexture;
+        if (cameraDevice == null || tv == null || !tv.isAvailable()) return;
+        SurfaceTexture st = tv.getSurfaceTexture();
+        if (st == null) return;
+
+        if (glPipe == null || boundSurfaceTexture != st) {
+            if (glPipe != null) {
+                try { glPipe.release(); } catch (Throwable ignored) {}
+                glPipe = null;
+            }
+            boundSurfaceTexture = st;
+            applyPreviewTransform(tv, previewWidth, previewHeight);
+            boolean wantHs = (targetFps >= 120 && supports120Fps && !availableHsFpsRanges.isEmpty());
+            int initW = wantHs ? hsCapW : capW;
+            int initH = wantHs ? hsCapH : capH;
+            HighSpeedGlPipe pipe = new HighSpeedGlPipe(initW, initH, RING_W, RING_H, new HighSpeedGlPipe.FrameSink() {
+                @Override
+                public int getRotationDegrees() {
+                    int r = computeSensorToDisplayDegrees();
+                    lastRotDeg = r;
+                    return r;
+                }
+
+                @Override
+                public void onHighSpeedFrameReady(ByteBuffer mappedNv21Pbo, long sensorTimestampNs) {
+                    ingestGlFrame(mappedNv21Pbo, sensorTimestampNs);
+                }
+            });
+            if (!pipe.start(st) || pipe.getCameraInputSurface() == null) {
+                pipe.release();
+                lastError = "GL camera pipeline initialization failed";
+                return;
+            }
+            glPipe = pipe;
         }
-        boundSurfaceTexture = null;
+        startCaptureSessionOnControlThread();
     }
 
-    private static void createCapturePipelineOnControlThread() {
-        TextureView tv = previewTexture;
+    private static void requestSessionSwitchOnControlThread() {
+        if (cameraDevice == null || glPipe == null) return;
+        if (captureSession != null) {
+            CameraCaptureSession old = captureSession;
+            captureSession = null;
+            sessionClosing = true;
+            pendingSessionSwitch = true;
+            try {
+                old.close();
+            } catch (Throwable ignored) {
+                sessionClosing = false;
+                pendingSessionSwitch = false;
+                startCaptureSessionOnControlThread();
+            }
+            return;
+        }
+        if (sessionClosing || sessionCreating) {
+            pendingSessionSwitch = true;
+            return;
+        }
+        startCaptureSessionOnControlThread();
+    }
+
+    private static void startCaptureSessionOnControlThread() {
         final CameraDevice cd = cameraDevice;
-        if (cd == null || tv == null || !tv.isAvailable()) return;
-        teardownPipelineOnControlThread();
-        try {
-            SurfaceTexture st = tv.getSurfaceTexture();
-            if (st == null) return;
-            boundSurfaceTexture = st;
-            boolean wantHighSpeed = (targetFps >= 120 && supports120Fps && !availableHsFpsRanges.isEmpty());
+        final HighSpeedGlPipe pipe = glPipe;
+        if (cd == null || pipe == null || pipe.getCameraInputSurface() == null || sessionClosing || sessionCreating) {
+            return;
+        }
+        synchronized (ringLock) {
+            ringHead = 0;
+            ringCount = 0;
+            prevFrameTsNs = 0;
+        }
+        final boolean wantHs = (targetFps >= 120 && supports120Fps && !availableHsFpsRanges.isEmpty());
+        activeHighSpeedSession = wantHs;
+        pipe.setCaptureConfig(wantHs ? hsCapW : capW, wantHs ? hsCapH : capH, wantHs);
 
-            if (wantHighSpeed) {
-                activeHighSpeedSession = true;
-                applyPreviewTransform(tv, previewWidth, previewHeight);
-                final HighSpeedGlPipe pipe = new HighSpeedGlPipe(hsCapW, hsCapH, RING_W, RING_H, new HighSpeedGlPipe.FrameSink() {
+        List<Surface> targets = Collections.singletonList(pipe.getCameraInputSurface());
+        sessionCreating = true;
+        CameraCaptureSession.StateCallback stateCb = new CameraCaptureSession.StateCallback() {
+            @Override
+            public void onConfigured(final CameraCaptureSession session) {
+                camHandler.post(new Runnable() {
                     @Override
-                    public int getRotationDegrees() {
-                        int r = computeSensorToDisplayDegrees();
-                        lastRotDeg = r;
-                        return r;
-                    }
-
-                    @Override
-                    public void onHighSpeedFrameReady(ByteBuffer mappedNv21Pbo, long sensorTimestampNs) {
-                        ingestHighSpeedGlFrame(mappedNv21Pbo, sensorTimestampNs);
+                    public void run() {
+                        sessionCreating = false;
+                        if (cameraDevice != cd || glPipe != pipe) {
+                            try { session.close(); } catch (Throwable ignored) {}
+                            return;
+                        }
+                        boolean curWantHs = (targetFps >= 120 && supports120Fps && !availableHsFpsRanges.isEmpty());
+                        if (pendingSessionSwitch || curWantHs != wantHs) {
+                            pendingSessionSwitch = true;
+                            sessionClosing = true;
+                            try {
+                                session.close();
+                            } catch (Throwable ignored) {
+                                sessionClosing = false;
+                                pendingSessionSwitch = false;
+                                startCaptureSessionOnControlThread();
+                            }
+                            return;
+                        }
+                        captureSession = session;
+                        lastError = "";
+                        applyRepeatingRequestOnControlThread();
                     }
                 });
-                if (!pipe.start(st) || pipe.getCameraInputSurface() == null) {
-                    pipe.release();
-                    activeHighSpeedSession = false;
-                    lastError = "HighSpeedGlPipe init failed; using 60 fps";
-                } else {
-                    glPipe = pipe;
-                    List<Surface> hsTargets = Collections.singletonList(pipe.getCameraInputSurface());
-                    cd.createConstrainedHighSpeedCaptureSession(hsTargets, new CameraCaptureSession.StateCallback() {
-                        @Override
-                        public void onConfigured(final CameraCaptureSession session) {
-                            camHandler.post(new Runnable() {
-                                @Override
-                                public void run() {
-                                    if (cameraDevice != cd || glPipe != pipe) {
-                                        try { session.close(); } catch (Throwable ignored) {}
-                                        return;
-                                    }
-                                    captureSession = session;
-                                    lastError = "";
-                                    applyRepeatingRequestOnControlThread();
-                                }
-                            });
-                        }
-
-                        @Override
-                        public void onConfigureFailed(CameraCaptureSession session) {
-                            camHandler.post(new Runnable() {
-                                @Override
-                                public void run() {
-                                    activeHighSpeedSession = false;
-                                    captureSession = null;
-                                    lastError = "High-speed session configure failed";
-                                }
-                            });
-                        }
-                    }, cbHandler);
-                    return;
-                }
             }
 
-            // Standard 60 fps pipeline (supports 0.5x Ultra-Wide + manual Tv Shutter-Priority Auto-ISO)
-            activeHighSpeedSession = false;
-            st.setDefaultBufferSize(capW, capH);
-            applyPreviewTransform(tv, previewWidth, previewHeight);
-            previewSurface = new Surface(st);
-
-            yuvReader = ImageReader.newInstance(capW, capH, ImageFormat.YUV_420_888, 6);
-            yuvReader.setOnImageAvailableListener(new ImageReader.OnImageAvailableListener() {
-                @Override
-                public void onImageAvailable(ImageReader reader) {
-                    Image img = null;
-                    try {
-                        img = reader.acquireLatestImage();
-                        if (img != null) {
-                            ingestYuvFrame(img);
+            @Override
+            public void onConfigureFailed(CameraCaptureSession session) {
+                camHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        sessionCreating = false;
+                        captureSession = null;
+                        lastError = wantHs ? "High-speed session configure failed" : "Capture session configure failed";
+                        if (pendingSessionSwitch && cameraDevice == cd && glPipe == pipe) {
+                            pendingSessionSwitch = false;
+                            startCaptureSessionOnControlThread();
                         }
-                    } catch (Throwable ignored) {
-                    } finally {
-                        if (img != null) img.close();
                     }
-                }
-            }, cbHandler);
+                });
+            }
 
-            final ImageReader expectedReader = yuvReader;
-            List<Surface> targets = Arrays.asList(previewSurface, yuvReader.getSurface());
-            cd.createCaptureSession(targets, new CameraCaptureSession.StateCallback() {
-                @Override
-                public void onConfigured(final CameraCaptureSession session) {
-                    camHandler.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (cameraDevice != cd || yuvReader != expectedReader) {
-                                try { session.close(); } catch (Throwable ignored) {}
-                                return;
-                            }
-                            captureSession = session;
-                            lastError = "";
-                            applyRepeatingRequestOnControlThread();
+            @Override
+            public void onClosed(CameraCaptureSession session) {
+                camHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        sessionClosing = false;
+                        if (pendingSessionSwitch && cameraDevice == cd && glPipe == pipe) {
+                            pendingSessionSwitch = false;
+                            startCaptureSessionOnControlThread();
                         }
-                    });
-                }
+                    }
+                });
+            }
+        };
 
-                @Override
-                public void onConfigureFailed(CameraCaptureSession session) {
-                    lastError = "CameraCaptureSession configuration failed";
-                }
-            }, cbHandler);
+        try {
+            if (wantHs) {
+                cd.createConstrainedHighSpeedCaptureSession(targets, stateCb, cbHandler);
+            } else {
+                cd.createCaptureSession(targets, stateCb, cbHandler);
+            }
         } catch (Throwable t) {
+            sessionCreating = false;
             activeHighSpeedSession = false;
             captureSession = null;
             lastError = String.valueOf(t.getMessage());
@@ -743,10 +749,9 @@ public final class GateCamShim {
                 return;
             }
 
-            if (previewSurface == null || yuvReader == null) return;
+            if (glPipe == null || glPipe.getCameraInputSurface() == null) return;
             CaptureRequest.Builder b = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
-            b.addTarget(previewSurface);
-            b.addTarget(yuvReader.getSurface());
+            b.addTarget(glPipe.getCameraInputSurface());
 
             Range<Integer> fpsRange = pickBestFpsRange(targetFps);
             b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange);
@@ -850,7 +855,7 @@ public final class GateCamShim {
         }
     }
 
-    private static void ingestHighSpeedGlFrame(ByteBuffer mappedNv21Pbo, long tsNs) {
+    private static void ingestGlFrame(ByteBuffer mappedNv21Pbo, long tsNs) {
         if (tsNs <= 0 || mappedNv21Pbo == null) return;
         if (prevFrameTsNs > 0 && tsNs > prevFrameTsNs) {
             double instFps = 1e9 / (double) (tsNs - prevFrameTsNs);
@@ -878,6 +883,41 @@ public final class GateCamShim {
             ringSkewNs[slot] = meta[1];
             ringHead = (slot + 1) % RING_CAP;
             if (ringCount < RING_CAP) ringCount++;
+        }
+
+        // Closed-loop Shutter-Priority (Tv) Auto-ISO adjustment every 8 frames in 60 fps manual shutter mode
+        if (!activeHighSpeedSession && shutterUs > 0 && (++aeTick & 7) == 0) {
+            int lumaLen = RING_W * RING_H;
+            int step = Math.max(1, lumaLen / 256);
+            long sumY = 0;
+            int cnt = 0;
+            for (int idx = step / 2; idx < lumaLen; idx += step) {
+                sumY += (dst[idx] & 0xFF);
+                cnt++;
+            }
+            if (cnt > 0) {
+                double meanY = (double) sumY / (double) cnt;
+                if (meanY < 92.0 || meanY > 138.0) {
+                    double ratio = 112.0 / Math.max(10.0, meanY);
+                    double damped = Math.max(0.55, Math.min(2.1, Math.pow(ratio, 0.65)));
+                    final double nextTotalIso = currentTotalIso * damped;
+                    camHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (!activeHighSpeedSession && shutterUs > 0) {
+                                int prevIso = manualIso;
+                                int prevBoost = manualBoost;
+                                updateManualIsoFromTotal(nextTotalIso);
+                                lastSceneEvNsIso = (double) shutterUs * 1000.0 * currentTotalIso;
+                                if (Math.abs(manualIso - prevIso) >= Math.max(10, prevIso / 12)
+                                        || Math.abs(manualBoost - prevBoost) >= 6) {
+                                    applyRepeatingRequestOnControlThread();
+                                }
+                            }
+                        }
+                    });
+                }
+            }
         }
     }
 
@@ -1153,8 +1193,8 @@ public final class GateCamShim {
                 public void run() {
                     if (cameraDevice == null) return;
                     boolean wantHs = (targetFps >= 120 && supports120Fps && !availableHsFpsRanges.isEmpty());
-                    if (wantHs != activeHighSpeedSession) {
-                        createCapturePipelineOnControlThread();
+                    if (wantHs != activeHighSpeedSession || (captureSession == null && !sessionCreating && !sessionClosing)) {
+                        requestSessionSwitchOnControlThread();
                     } else {
                         applyRepeatingRequestOnControlThread();
                     }
@@ -1213,10 +1253,9 @@ public final class GateCamShim {
                             hsSession.captureBurst(hsSession.createHighSpeedRequestList(trig.build()), captureCallback, cbHandler);
                         } catch (Throwable ignored) {
                         }
-                    } else if (previewSurface != null && yuvReader != null) {
+                    } else if (glPipe != null && glPipe.getCameraInputSurface() != null) {
                         CaptureRequest.Builder trig = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
-                        trig.addTarget(previewSurface);
-                        trig.addTarget(yuvReader.getSurface());
+                        trig.addTarget(glPipe.getCameraInputSurface());
                         if (Build.VERSION.SDK_INT >= 30) {
                             trig.set(CaptureRequest.CONTROL_ZOOM_RATIO, Math.max(minZoomRatio, Math.min(maxZoomRatio, zoomRatio)));
                         }

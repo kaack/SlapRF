@@ -1195,7 +1195,10 @@ appRoot.addEventListener("click", async (e) => {
   }
   const zoomAttr = el.getAttribute("data-zoom");
   if (zoomAttr) {
-    await updateCamera({ ...state.camera, zoomRatio: parseFloat(zoomAttr) || 1.0 });
+    const nextZoom = parseFloat(zoomAttr) || 1.0;
+    // Ultra-Wide (< 1.0x) requires standard 60 fps session on Android Camera2
+    const nextFps = nextZoom < 0.9 && state.camera.targetFps > 60 ? 60 : state.camera.targetFps;
+    await updateCamera({ ...state.camera, zoomRatio: nextZoom, targetFps: nextFps });
     return;
   }
   const stepAttr = el.getAttribute("data-insp-step");
