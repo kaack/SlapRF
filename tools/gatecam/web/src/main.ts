@@ -159,6 +159,7 @@ declare global {
 
 const isNativeUnderlay = typeof window.GateCamAndroid !== "undefined";
 if (isNativeUnderlay) {
+  document.documentElement.classList.add("is-native-underlay");
   document.body.classList.add("is-native-underlay");
 }
 
@@ -247,6 +248,7 @@ async function loadPassDetail(passId: number): Promise<void> {
 
 function updateNativeUnderlayVisibility(): void {
   const isLive = route === "live" && !setupOpen;
+  document.documentElement.classList.toggle("route-live", route === "live");
   document.body.classList.toggle("route-live", route === "live");
   if (window.GateCamAndroid) {
     window.GateCamAndroid.setPreviewVisible(isLive);

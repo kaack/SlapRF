@@ -35,8 +35,8 @@ html, body {
 }
 
 /* Transparent cutout when running over Android's native Camera2 TextureView */
-body.is-native-underlay.route-live,
-body.is-native-underlay.route-live html {
+html.is-native-underlay.route-live,
+html.is-native-underlay.route-live body {
   background: transparent !important;
 }
 
