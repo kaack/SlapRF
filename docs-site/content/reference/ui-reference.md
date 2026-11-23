@@ -16,7 +16,7 @@ Reference guide to the screens, live signal scope controls, and crossing detecti
 | Flasher | Built-in wizard (on Android and desktop) for flashing Hub and Spoke firmware, inspecting board configuration, or factory-erasing boards over USB-C. |
 | Debug | Live 5.8 GHz spectrum and waterfall analyzer, raw USB/Bluetooth timer console, and RF health checks. |
 | Simulator | Multi-pilot 5.8 GHz physics track simulator for testing track layouts, threshold behavior, and race brackets without hardware. |
-| Settings | Datasource (Demo vs. SlapRF Server and Simulator toggle), MultiGP API key, Announcer voice & horn levels, LapRF 8-Way emulator, Authentication, and `.json` database backup/restore. |
+| Settings | Datasource (Demo vs. SlapRF Server and Simulator toggle), MultiGP API key, Announcer voice & horn levels, LapRF 8-Way emulator, Authentication, `.json` database backup/restore, and `slaprf.log` diagnostic log level (`ERROR` to `TRACE`), download, and clear controls. |
 
 On mobile, swipe left or right across the screen to move between **Races**, **Practice**, **Pilots**, **Network**, and secondary screens, or tap **More** on the right side of the bottom bar.
 
