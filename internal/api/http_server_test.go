@@ -110,3 +110,75 @@ func TestDeleteTimerRejectsActiveAndRestoresOnReconnect(t *testing.T) {
 		t.Fatalf("expected timer 2 to reappear in detected timers once Hub reconnects")
 	}
 }
+
+func TestPatchPracticeSessionCrossingEndpoint(t *testing.T) {
+	engine := tracker.NewEngine()
+	sim := ingest.NewTrackSimulator(engine)
+	laprfSrv := laprf.NewServer(engine)
+	srv := NewServer(engine, sim, laprfSrv)
+	handler := srv.Handler()
+
+	reqSeed := httptest.NewRequest(http.MethodPost, "/v1/storage:restoreDemo", bytes.NewReader([]byte(`{}`)))
+	recSeed := httptest.NewRecorder()
+	handler.ServeHTTP(recSeed, reqSeed)
+	if recSeed.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK from /v1/storage:restoreDemo, got %d: %s", recSeed.Code, recSeed.Body.String())
+	}
+
+	ps := engine.PracticeSnapshot()
+	if len(ps.Sessions) == 0 {
+		t.Fatalf("expected seeded practice sessions")
+	}
+	sess := ps.Sessions[len(ps.Sessions)-1]
+	if len(sess.Crossings) == 0 {
+		t.Fatalf("expected seeded crossings in practice session %q", sess.SessionID)
+	}
+	target := sess.Crossings[len(sess.Crossings)/2]
+	nextTs := target.TimestampUs + 120_000
+
+	body, _ := json.Marshal(map[string]any{
+		"timestampUs": nextTs,
+		"peakRssiDbm": -54.5,
+	})
+	req := httptest.NewRequest(
+		http.MethodPatch,
+		"/v1/practice/sessions/"+sess.SessionID+"/crossings/"+jsonNumber(target.EventID),
+		bytes.NewReader(body),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK from PATCH crossing, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var out FullStateResponse
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode FullStateResponse: %v", err)
+	}
+	var updatedSess *struct {
+		Crossings []struct {
+			EventID     uint64  `json:"eventId"`
+			TimestampUs uint64  `json:"timestampUs"`
+			PeakRSSIDbm float32 `json:"peakRssiDbm"`
+		} `json:"crossings"`
+	}
+	rawSess, _ := json.Marshal(out.PracticeState.Sessions[len(out.PracticeState.Sessions)-1])
+	_ = json.Unmarshal(rawSess, &updatedSess)
+	var matched bool
+	for _, c := range updatedSess.Crossings {
+		if c.EventID == target.EventID {
+			matched = true
+			if c.TimestampUs != nextTs || c.PeakRSSIDbm != -54.5 {
+				t.Fatalf("expected crossing %d updated to ts=%d peak=-54.5, got %+v", target.EventID, nextTs, c)
+			}
+		}
+	}
+	if !matched {
+		t.Fatalf("crossing %d missing after PATCH", target.EventID)
+	}
+}
+
+func jsonNumber(v uint64) string {
+	b, _ := json.Marshal(v)
+	return string(b)
+}

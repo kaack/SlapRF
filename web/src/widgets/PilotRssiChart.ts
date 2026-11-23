@@ -196,6 +196,8 @@ const PAD = { l: 46, r: 16 + TAG_GUTTER, t: 12, b: 26 };
 /** A pass the pilot made through a gate: timed, or set aside by the timing rules. */
 interface PassMarker {
   ts: number;
+  origTs?: number;
+  eventId?: number;
   gateId: number;
   counted: boolean;
   title: string;
@@ -212,6 +214,20 @@ interface TagBox {
   y: number;
   w: number;
   lineY: number;
+}
+
+/** Where a timed crossing handle & vertical line were drawn when paused on a single timer. */
+interface CrossingBox {
+  eventId: number;
+  gateId: number;
+  slotIndex: number;
+  origTsUs: number;
+  tsUs: number;
+  title: string;
+  lineX: number;
+  pillX: number;
+  pillY: number;
+  pillW: number;
 }
 
 type RssiDragState =
@@ -276,6 +292,21 @@ export class PilotRssiChart extends Component {
   private yZoomBox: { y0: number; y1: number } | null = null;
   /** Threshold being dragged, with its live value. */
   private tagDrag: { gateId: number; kind: "enter" | "exit"; dbm: number } | null = null;
+  /** Crossing line being dragged left/right while paused on a focused timer. */
+  private crossingDrag: {
+    eventId: number;
+    gateId: number;
+    slotIndex: number;
+    title: string;
+    origTsUs: number;
+    tsUs: number;
+    minTsUs: number;
+    maxTsUs: number;
+    grabOffsetPx: number;
+  } | null = null;
+  /** Optimistic crossing timestamps while a PATCH is in flight, so the line never snaps back. */
+  private readonly pendingCrossings = new Map<number, number>();
+  private crossingBoxes: CrossingBox[] = [];
   /** Values shown while a save is in flight, so the line doesn't jump back. */
   private readonly pending = new Map<number, { enter: number; exit: number }>();
   private readonly calibratingGates = new Set<number>();
@@ -358,6 +389,11 @@ export class PilotRssiChart extends Component {
 
   private get isMultiPilotMode(): boolean {
     return Boolean(this.multiPilotSlots && this.multiPilotSlots.length > 0);
+  }
+
+  /** True when a single timer is focused and the signal stream is paused, enabling crossing-line dragging. */
+  private get canEditCrossings(): boolean {
+    return this.focus !== null && this.endUs !== null && !this.isMultiPilotMode;
   }
 
   private get activePilotSlot(): number {
@@ -896,10 +932,12 @@ export class PilotRssiChart extends Component {
         }
         if (touchPts.size >= 2) {
           this.tagDrag = null;
+          this.crossingDrag = null;
           this.drag = null;
           this.yZoomBox = null;
           this.hoverX = null;
           this.hoverY = null;
+          host.classList.remove("is-over-crossing");
           const [[id1, pt1], [id2, pt2]] = Array.from(touchPts.entries());
           const midX = (pt1.x + pt2.x) * 0.5;
           const midY = (pt1.y + pt2.y) * 0.5;
@@ -928,18 +966,51 @@ export class PilotRssiChart extends Component {
 
       this.hoverX = x;
       this.hoverY = y;
+      const isTouch = e.pointerType === "touch";
 
-      const grabbed = this.tagAt(x, y);
-      if (grabbed !== null) {
+      const grabbedBox = this.tagBoxAt(x, y);
+      if (grabbedBox !== null) {
         const curDbm =
-          grabbed.kind === "enter"
-            ? this.thresholdOf(grabbed.gateId).dbm
-            : this.exitThresholdOf(grabbed.gateId).dbm;
-        this.tagDrag = { gateId: grabbed.gateId, kind: grabbed.kind, dbm: curDbm };
+          grabbedBox.kind === "enter"
+            ? this.thresholdOf(grabbedBox.gateId).dbm
+            : this.exitThresholdOf(grabbedBox.gateId).dbm;
+        this.tagDrag = { gateId: grabbedBox.gateId, kind: grabbedBox.kind, dbm: curDbm };
         return;
       }
 
-      const isTouch = e.pointerType === "touch";
+      const grabbedCrossing = this.crossingAt(x, y, isTouch);
+      if (grabbedCrossing !== null) {
+        const bounds = this.crossingBoundsFor(
+          grabbedCrossing.box.eventId,
+          grabbedCrossing.box.slotIndex,
+          grabbedCrossing.box.gateId,
+          grabbedCrossing.box.origTsUs
+        );
+        this.crossingDrag = {
+          eventId: grabbedCrossing.box.eventId,
+          gateId: grabbedCrossing.box.gateId,
+          slotIndex: grabbedCrossing.box.slotIndex,
+          title: grabbedCrossing.box.title,
+          origTsUs: grabbedCrossing.box.origTsUs,
+          tsUs: grabbedCrossing.box.tsUs,
+          minTsUs: bounds.minTsUs,
+          maxTsUs: bounds.maxTsUs,
+          grabOffsetPx: grabbedCrossing.inPill ? x - grabbedCrossing.box.lineX : 0,
+        };
+        host.classList.add("is-dragging", "is-over-crossing");
+        return;
+      }
+
+      const grabbedLine = this.tagLineAt(x, y);
+      if (grabbedLine !== null) {
+        const curDbm =
+          grabbedLine.kind === "enter"
+            ? this.thresholdOf(grabbedLine.gateId).dbm
+            : this.exitThresholdOf(grabbedLine.gateId).dbm;
+        this.tagDrag = { gateId: grabbedLine.gateId, kind: grabbedLine.kind, dbm: curDbm };
+        return;
+      }
+
       const yAxisW = isTouch ? (this.isMobileLayout ? 36 : 54) : this.padL;
       const xAxisH = isTouch ? 34 : PAD.b;
 
@@ -1083,6 +1154,15 @@ export class PilotRssiChart extends Component {
       this.hoverX = x;
       this.hoverY = y;
 
+      if (this.crossingDrag) {
+        const rawTs = Math.round(this.timeAt(x - this.crossingDrag.grabOffsetPx));
+        this.crossingDrag.tsUs = Math.max(
+          this.crossingDrag.minTsUs,
+          Math.min(this.crossingDrag.maxTsUs, rawTs)
+        );
+        return;
+      }
+
       if (this.tagDrag) {
         const rawDbm = Math.round(this.dbmAt(y));
         if (this.isLapRF) {
@@ -1106,11 +1186,19 @@ export class PilotRssiChart extends Component {
       }
 
       if (!this.drag) {
-        const overTag = this.tagAt(x, y) !== null;
-        const overYAxis = !overTag && x < this.padL && y >= this.padT && y <= r.height - PAD.b;
+        const overTagBox = this.tagBoxAt(x, y) !== null;
+        const overCrossing = !overTagBox && this.crossingAt(x, y, e.pointerType === "touch") !== null;
+        const overTag = overTagBox || (!overCrossing && this.tagLineAt(x, y) !== null);
+        const overYAxis = !overTag && !overCrossing && x < this.padL && y >= this.padT && y <= r.height - PAD.b;
         const overXAxis =
-          !overTag && !overYAxis && y >= r.height - PAD.b && x >= this.padL && x <= this.padL + this.plot.w;
+          !overTag &&
+          !overCrossing &&
+          !overYAxis &&
+          y >= r.height - PAD.b &&
+          x >= this.padL &&
+          x <= this.padL + this.plot.w;
         host.classList.toggle("is-over-tag", overTag);
+        host.classList.toggle("is-over-crossing", overCrossing);
         host.classList.toggle("is-over-yaxis", overYAxis);
         host.classList.toggle("is-over-axis", overXAxis);
         return;
@@ -1176,8 +1264,9 @@ export class PilotRssiChart extends Component {
             lastTapTime = 0;
             this.drag = null;
             this.tagDrag = null;
+            this.crossingDrag = null;
             this.yZoomBox = null;
-            host.classList.remove("is-dragging", "is-over-axis", "is-over-yaxis");
+            host.classList.remove("is-dragging", "is-over-axis", "is-over-yaxis", "is-over-crossing");
             this.resetAxesToAuto();
             return;
           }
@@ -1210,6 +1299,13 @@ export class PilotRssiChart extends Component {
         }
       }
 
+      if (this.crossingDrag) {
+        const { eventId, gateId, title, tsUs, origTsUs } = this.crossingDrag;
+        this.crossingDrag = null;
+        if (e.type !== "pointercancel" && Math.abs(tsUs - origTsUs) >= 5_000) {
+          void this.saveManualCrossing(eventId, gateId, title, tsUs, origTsUs);
+        }
+      }
       if (this.tagDrag) {
         const { gateId, kind, dbm } = this.tagDrag;
         this.tagDrag = null;
@@ -1237,15 +1333,15 @@ export class PilotRssiChart extends Component {
         this.saveChartPrefs();
         this.renderControls();
       }
-      host.classList.remove("is-dragging", "is-over-axis", "is-over-yaxis");
+      host.classList.remove("is-dragging", "is-over-axis", "is-over-yaxis", "is-over-crossing");
     };
     this.listen(host, "pointerup", endDrag);
     this.listen(host, "pointercancel", endDrag);
     this.listen(host, "pointerleave", () => {
       this.hoverX = null;
       this.hoverY = null;
-      if (!this.drag) {
-        host.classList.remove("is-over-tag", "is-over-axis", "is-over-yaxis");
+      if (!this.drag && !this.crossingDrag) {
+        host.classList.remove("is-over-tag", "is-over-axis", "is-over-yaxis", "is-over-crossing");
       }
     });
 
@@ -1624,8 +1720,12 @@ export class PilotRssiChart extends Component {
   }
 
   private toggleLive(): void {
-    if (this.endUs === null) this.pauseAt(this.latest);
-    else this.endUs = null;
+    if (this.endUs === null) {
+      this.pauseAt(this.latest);
+    } else {
+      this.endUs = null;
+      this.crossingDrag = null;
+    }
     this.renderControls();
   }
 
@@ -1679,20 +1779,168 @@ export class PilotRssiChart extends Component {
     return exitThresholdAt(this.store, gateId, this.activePilotSlot);
   }
 
-  /** Gate & kind whose threshold tag (or line) is under the pointer, if any. Tags win over lines. */
-  private tagAt(x: number, y: number): { gateId: number; kind: "enter" | "exit" } | null {
+  /** Threshold pill box directly under `(x, y)`, if any. */
+  private tagBoxAt(x: number, y: number): { gateId: number; kind: "enter" | "exit" } | null {
     if (this.store.isHistoricalTrack || this.isMultiPilotMode) return null;
     for (const t of this.tags) {
       if (x >= t.x && x <= t.x + t.w && y >= t.y && y <= t.y + TAG_H) {
         return { gateId: t.gateId, kind: t.kind };
       }
     }
+    return null;
+  }
+
+  /** Horizontal threshold line directly under `(x, y)`, if any. */
+  private tagLineAt(x: number, y: number): { gateId: number; kind: "enter" | "exit" } | null {
+    if (this.store.isHistoricalTrack || this.isMultiPilotMode) return null;
     if (x < this.padL || x > this.padL + this.plot.w) return null;
     let best: TagBox | null = null;
     for (const t of this.tags) {
-      if (Math.abs(y - t.lineY) <= LINE_HIT_PX && (!best || Math.abs(y - t.lineY) < Math.abs(y - best.lineY))) best = t;
+      if (Math.abs(y - t.lineY) <= LINE_HIT_PX && (!best || Math.abs(y - t.lineY) < Math.abs(y - best.lineY))) {
+        best = t;
+      }
     }
     return best ? { gateId: best.gateId, kind: best.kind } : null;
+  }
+
+  /** Gate & kind whose threshold tag (or line) is under the pointer, if any. Tags win over lines. */
+  private tagAt(x: number, y: number): { gateId: number; kind: "enter" | "exit" } | null {
+    return this.tagBoxAt(x, y) ?? this.tagLineAt(x, y);
+  }
+
+  /** Timed crossing pill or vertical line under `(x, y)` when paused on a single focused timer. */
+  private crossingAt(x: number, y: number, isTouch = false): { box: CrossingBox; inPill: boolean } | null {
+    if (!this.canEditCrossings || this.crossingBoxes.length === 0) return null;
+    const padPad = isTouch ? 4 : 0;
+    for (let i = this.crossingBoxes.length - 1; i >= 0; i--) {
+      const b = this.crossingBoxes[i];
+      if (
+        x >= b.pillX - padPad &&
+        x <= b.pillX + b.pillW + padPad &&
+        y >= b.pillY - padPad &&
+        y <= b.pillY + TAG_H + padPad
+      ) {
+        return { box: b, inPill: true };
+      }
+    }
+    if (y < this.padT || y > this.padT + this.plot.h) return null;
+    if (x < this.padL - 4 || x > this.padL + this.plot.w + 4) return null;
+    const hitPx = isTouch ? 16 : MARKER_HIT_PX;
+    let best: CrossingBox | null = null;
+    for (const b of this.crossingBoxes) {
+      const dx = Math.abs(x - b.lineX);
+      if (dx <= hitPx && (!best || dx < Math.abs(x - best.lineX))) {
+        best = b;
+      }
+    }
+    return best ? { box: best, inPill: false } : null;
+  }
+
+  /** Computes the allowed microsecond range `[minTsUs, maxTsUs]` for dragging a crossing line. */
+  private crossingBoundsFor(
+    eventId: number,
+    slotIndex: number,
+    gateId: number,
+    origTsUs: number
+  ): { minTsUs: number; maxTsUs: number } {
+    const sfGateIds = new Set<number>();
+    for (const node of this.store.nodes) {
+      if (node.role === "START_FINISH") sfGateIds.add(node.gateId);
+    }
+    const crossings = this.store.crossings;
+    const movedEv = crossings.find((c) => c.eventId === eventId);
+    const movedIsSF = Boolean(movedEv?.isStartFinish || sfGateIds.has(gateId));
+
+    let minTsUs = Math.max(1, this.earliest);
+    let maxTsUs = this.latest > origTsUs ? this.latest : origTsUs + 60_000_000;
+
+    for (const c of crossings) {
+      if (c.eventId === eventId || c.slotIndex !== slotIndex) continue;
+      const cIsSF = Boolean(c.isStartFinish || sfGateIds.has(c.gateId));
+      if (c.gateId === gateId || (movedIsSF && cIsSF)) {
+        if (c.timestampUs <= origTsUs) {
+          minTsUs = Math.max(minTsUs, c.timestampUs + 50_000);
+        }
+        if (c.timestampUs >= origTsUs) {
+          maxTsUs = Math.min(maxTsUs, Math.max(1, c.timestampUs - 50_000));
+        }
+      }
+    }
+
+    const slotLaps = this.store.laps
+      .filter((l) => l.slotIndex === slotIndex && l.completedAtUs > 0)
+      .sort((a, b) => a.completedAtUs - b.completedAtUs);
+    for (let i = 0; i < slotLaps.length; i++) {
+      const l = slotLaps[i];
+      const origEnd = l.completedAtUs;
+      const origStart =
+        l.lapTimeSec > 0
+          ? Math.max(0, Math.round(origEnd - l.lapTimeSec * 1_000_000))
+          : i > 0
+            ? slotLaps[i - 1].completedAtUs
+            : 0;
+      if (movedIsSF) {
+        if (Math.abs(origEnd - origTsUs) <= 50_000) {
+          minTsUs = Math.max(minTsUs, origStart + 100_000);
+        }
+        if (Math.abs(origStart - origTsUs) <= 50_000) {
+          maxTsUs = Math.min(maxTsUs, Math.max(1, origEnd - 100_000));
+        }
+      } else if (origTsUs + 50_000 >= origStart && origTsUs <= origEnd + 10_000) {
+        minTsUs = Math.max(minTsUs, origStart + 20_000);
+        maxTsUs = Math.min(maxTsUs, Math.max(1, origEnd - 20_000));
+        break;
+      }
+    }
+
+    if (!movedIsSF) {
+      let lastSfBefore = 0;
+      let hasLaterSf = false;
+      for (const c of crossings) {
+        if (c.eventId === eventId || c.slotIndex !== slotIndex) continue;
+        if (c.isStartFinish || sfGateIds.has(c.gateId)) {
+          if (c.timestampUs <= origTsUs && c.timestampUs > lastSfBefore) {
+            lastSfBefore = c.timestampUs;
+          } else if (c.timestampUs > origTsUs) {
+            hasLaterSf = true;
+          }
+        }
+      }
+      if (lastSfBefore > 0 && !hasLaterSf) {
+        minTsUs = Math.max(minTsUs, lastSfBefore + 20_000);
+      }
+    }
+
+    if (minTsUs > maxTsUs) {
+      return { minTsUs: origTsUs, maxTsUs: origTsUs };
+    }
+    return { minTsUs, maxTsUs };
+  }
+
+  private async saveManualCrossing(
+    eventId: number,
+    gateId: number,
+    title: string,
+    tsUs: number,
+    origTsUs: number
+  ): Promise<void> {
+    this.pendingCrossings.set(eventId, tsUs);
+    const pilot = this.store.pilot(this.activePilotSlot);
+    const pos = pilot ? this.store.pilots.indexOf(pilot) : -1;
+    const peakDbm = pos >= 0 ? this.rssiAt(gateId, pos, tsUs) : undefined;
+    const deltaSec = (tsUs - origTsUs) / 1e6;
+    const signed = `${deltaSec >= 0 ? "+" : "−"}${Math.abs(deltaSec).toFixed(2)}s`;
+    try {
+      await this.api.adjustCrossing(eventId, tsUs, peakDbm);
+      this.calibMessage = `Adjusted ${title} (${signed}).`;
+      this.calibMessageShort = `${title} adjusted (${signed})`;
+    } catch {
+      this.calibMessage = `Could not adjust ${title}.`;
+      this.calibMessageShort = `Could not adjust ${title}.`;
+    } finally {
+      this.pendingCrossings.delete(eventId);
+      this.renderCalib();
+    }
   }
 
   private async apply(updates: GateThresholdUpdate[], message: string, shortMessage?: string): Promise<void> {
@@ -2234,15 +2482,26 @@ export class PilotRssiChart extends Component {
     }
 
     const slot = this.activePilotSlot;
-    for (let i = cStart; i < crossings.length; i++) {
+    const hasLiveOverrides = this.crossingDrag !== null || this.pendingCrossings.size > 0;
+    const scanStart = hasLiveOverrides ? 0 : cStart;
+    for (let i = scanStart; i < crossings.length; i++) {
       const c = crossings[i];
-      if (c.timestampUs > to) break;
+      if (!hasLiveOverrides && c.timestampUs > to) break;
       if (gateFilter !== null && c.gateId !== gateFilter) continue;
       if (c.slotIndex !== slot) continue;
+      const effTs =
+        this.crossingDrag && this.crossingDrag.eventId === c.eventId
+          ? this.crossingDrag.tsUs
+          : c.eventId && this.pendingCrossings.has(c.eventId)
+            ? this.pendingCrossings.get(c.eventId)!
+            : c.timestampUs;
+      if (effTs < from || effTs > to) continue;
       const gateLbl = this.labelOfGate(c.gateId);
       const meta = this.crossingLapMeta.get(PilotRssiChart.crossingMetaKey(c));
       out.push({
-        ts: c.timestampUs,
+        ts: effTs,
+        origTs: c.timestampUs,
+        eventId: c.eventId,
         gateId: c.gateId,
         counted: true,
         title: meta?.suffix ? `${gateLbl} · ${meta.suffix}` : gateLbl,
@@ -2461,32 +2720,131 @@ export class PilotRssiChart extends Component {
     } else {
       this.tags = [];
     }
-    if (this.latest === 0) return;
+    if (this.latest === 0) {
+      this.crossingBoxes = [];
+      return;
+    }
 
     // Pass markers: dashed in the gate's (or pilot's) colour when timed, red when set aside.
+    // When paused on a focused timer, timed crossings render interactive pill handles for dragging.
     ctx.font = font(600, 10.5);
     const passes = this.focusedPasses(start, end);
     const rows = passes.length > 0 ? this.labelRows(ctx, start, end) : this.cachedLabelRows;
+    const canEdit = this.canEditCrossings;
+    const prevCrossingHit =
+      canEdit && !this.tagDrag && this.hoverX !== null && this.hoverY !== null
+        ? this.crossingAt(this.hoverX, this.hoverY)
+        : null;
+    const nextCrossingBoxes: CrossingBox[] = [];
     let hovered: PassMarker | null = null;
+
+    if (this.crossingDrag && this.crossingDrag.origTsUs >= start && this.crossingDrag.origTsUs <= end) {
+      const origX = xOf(this.crossingDrag.origTsUs);
+      const origColor = adaptColorForTheme(this.colorOf(this.crossingDrag.gateId));
+      ctx.save();
+      ctx.strokeStyle = withAlpha(origColor, 0.28);
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath();
+      ctx.moveTo(origX, padT);
+      ctx.lineTo(origX, padT + plotH);
+      ctx.stroke();
+      ctx.restore();
+    }
+
     passes.forEach((p) => {
       const x = xOf(p.ts);
       const color = p.counted ? adaptColorForTheme(p.color || this.colorOf(p.gateId)) : theme.bad;
+      const editable = canEdit && p.counted && (p.eventId ?? 0) > 0;
+      const isDraggingThis = editable && this.crossingDrag?.eventId === p.eventId;
+      const isActiveCrossing =
+        editable && (isDraggingThis || prevCrossingHit?.box.eventId === p.eventId);
+
       ctx.save();
-      ctx.strokeStyle = withAlpha(color, p.counted ? 0.7 : 0.9);
-      ctx.lineWidth = p.counted ? 1 : 1.5;
-      ctx.setLineDash(p.counted ? [2, 3] : [5, 3]);
+      ctx.strokeStyle = withAlpha(color, isActiveCrossing ? 0.96 : p.counted ? 0.75 : 0.9);
+      ctx.lineWidth = isActiveCrossing ? 2 : editable ? 1.3 : p.counted ? 1 : 1.5;
+      ctx.setLineDash(isDraggingThis ? [] : editable ? [4, 3] : p.counted ? [2, 3] : [5, 3]);
       ctx.beginPath();
       ctx.moveTo(x, padT);
       ctx.lineTo(x, padT + plotH);
       ctx.stroke();
       ctx.restore();
-      ctx.fillStyle = color;
-      ctx.font = font(600, 10.5);
-      ctx.fillText(this.labelOf(p), x + 5, padT + 11 + (rows.get(PilotRssiChart.keyOf(p)) ?? 0) * 12);
-      if (this.hoverX !== null && Math.abs(this.hoverX - x) <= MARKER_HIT_PX) hovered = p;
-    });
 
-    if (!this.tagDrag && !this.yZoomBox && this.hoverX !== null && this.hoverX >= padL && this.hoverX <= padL + plotW) {
+      const lbl = this.labelOf(p);
+      const row = rows.get(PilotRssiChart.keyOf(p)) ?? 0;
+      if (editable) {
+        ctx.font = font(700, 10.5);
+        const pillW = ctx.measureText(lbl).width + 14;
+        const pillX = Math.max(padL + 2, Math.min(padL + plotW - pillW - 2, x + 4));
+        const pillY = padT + 2 + row * (TAG_H + 3);
+        ctx.beginPath();
+        ctx.roundRect(pillX, pillY, pillW, TAG_H, 5);
+        if (isDraggingThis) {
+          ctx.fillStyle = color;
+          ctx.fill();
+        } else {
+          ctx.fillStyle = theme.surface;
+          ctx.fill();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+        if (isActiveCrossing) {
+          ctx.strokeStyle = theme.text;
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+        ctx.fillStyle = isDraggingThis ? inkOnColor(color) : color;
+        ctx.textAlign = "left";
+        ctx.fillText(lbl, pillX + 7, pillY + 12.5);
+        nextCrossingBoxes.push({
+          eventId: p.eventId!,
+          gateId: p.gateId,
+          slotIndex: p.slotIndex ?? this.activePilotSlot,
+          origTsUs: p.origTs ?? p.ts,
+          tsUs: p.ts,
+          title: p.title,
+          lineX: x,
+          pillX,
+          pillY,
+          pillW,
+        });
+      } else {
+        ctx.fillStyle = color;
+        ctx.font = font(600, 10.5);
+        ctx.fillText(lbl, x + 5, padT + 11 + row * 12);
+      }
+
+      if (isActiveCrossing) {
+        hovered = p;
+      } else if (this.hoverX !== null && Math.abs(this.hoverX - x) <= MARKER_HIT_PX) {
+        hovered = p;
+      }
+    });
+    this.crossingBoxes = nextCrossingBoxes;
+
+    if (this.crossingDrag) {
+      const dragX = Math.max(padL, Math.min(padL + plotW, xOf(this.crossingDrag.tsUs)));
+      const deltaSec = (this.crossingDrag.tsUs - this.crossingDrag.origTsUs) / 1e6;
+      const signed = `${deltaSec >= 0 ? "+" : "−"}${Math.abs(deltaSec).toFixed(2)}s`;
+      const pilotEntry = pilotEntries[0];
+      const liveDbm = pilotEntry
+        ? this.rssiAt(this.crossingDrag.gateId, pilotEntry.slot, this.crossingDrag.tsUs)
+        : undefined;
+      this.drawCursor(ctx, h, plotH, dragX, {
+        ts: this.crossingDrag.tsUs,
+        gateId: this.crossingDrag.gateId,
+        counted: true,
+        title: this.crossingDrag.title,
+        detail: `Move ${signed}${liveDbm !== undefined ? ` · ${liveDbm.toFixed(0)}${this.unitSuffix}` : ""}`,
+      });
+    } else if (
+      !this.tagDrag &&
+      !this.yZoomBox &&
+      this.hoverX !== null &&
+      this.hoverX >= padL &&
+      this.hoverX <= padL + plotW
+    ) {
       this.drawCursor(ctx, h, plotH, this.hoverX, hovered);
     }
   }
@@ -2621,7 +2979,9 @@ export class PilotRssiChart extends Component {
     const firstTs = windowPasses.length > 0 ? windowPasses[0].ts : 0;
     const lastTs = windowPasses.length > 0 ? windowPasses[windowPasses.length - 1].ts : 0;
     const multiSig = this.isMultiPilotMode ? (this.multiPilotSlots ?? []).join(",") : "";
-    const sig = `${windowPasses.length}:${firstTs}:${lastTs}:${this.store.laps.length}:${this.store.stateRev ?? 0}:${Math.round(this.windowUs)}:${Math.round(this.plot.w)}:${this.focus ?? "all"}:${this.activePilotSlot}:${multiSig}`;
+    const editMode = this.canEditCrossings ? 1 : 0;
+    const dragSig = this.crossingDrag ? `${this.crossingDrag.eventId}:${this.crossingDrag.tsUs}` : "";
+    const sig = `${windowPasses.length}:${firstTs}:${lastTs}:${this.store.laps.length}:${this.store.stateRev ?? 0}:${editMode}:${dragSig}:${Math.round(this.windowUs)}:${Math.round(this.plot.w)}:${this.focus ?? "all"}:${this.activePilotSlot}:${multiSig}`;
     if (sig === this.cachedLabelSig) {
       return this.cachedLabelRows;
     }
@@ -2630,6 +2990,7 @@ export class PilotRssiChart extends Component {
     const rowEnd = [-Infinity, -Infinity];
     const pxPerUs = Math.max(1e-9, this.plot.w / this.windowUs);
     const baseTs = firstTs;
+    const padExtra = editMode ? 18 : 0;
     for (let i = 0; i < windowPasses.length; i++) {
       const p = windowPasses[i];
       const lbl = this.labelOf(p);
@@ -2641,7 +3002,7 @@ export class PilotRssiChart extends Component {
       }
       const x = (p.ts - baseTs) * pxPerUs;
       const row = x > rowEnd[0] + 6 ? 0 : x > rowEnd[1] + 6 ? 1 : 0;
-      rowEnd[row] = x + width;
+      rowEnd[row] = x + width + padExtra;
       rows.set(PilotRssiChart.keyOf(p), row);
     }
     this.cachedLabelSig = sig;
@@ -2905,7 +3266,9 @@ export class PilotRssiChart extends Component {
 
     const nextHint = live
       ? "Live · drag chart to pan · Shift+drag box to zoom · drag axes to stretch"
-      : "Paused · drag chart to pan · Shift+drag box to zoom · drag axes to stretch";
+      : this.canEditCrossings
+        ? "Paused · drag crossing lines or thresholds to adjust · drag chart to pan"
+        : "Paused · drag chart to pan · Shift+drag box to zoom · drag axes to stretch";
     const hintEl = this.slot("hint");
     if (hintEl.textContent !== nextHint) hintEl.textContent = nextHint;
   }

@@ -837,6 +837,138 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       chart.destroy();
     }
   });
+
+  it("allows dragging a crossing line left or right when paused on a selected timer to adjust its timestamp", async () => {
+    const store = makeStore({
+      pilots: [makePilot(1, { callsign: "OneEye", enabled: true, channel: 7 })],
+      gates: [
+        makeGate(1, { role: "START_FINISH", trackOrder: 1, assignedTimerId: 1 }),
+        makeGate(2, { role: "SECTOR_GATE", trackOrder: 2, assignedTimerId: 2 }),
+      ],
+      timers: [
+        {
+          timerId: 1,
+          timerLabel: "H1",
+          isHub: true,
+          online: true,
+          lastSeenAt: "2026-04-20T00:00:00Z",
+          batteryMv: 4100,
+          batteryPct: 90,
+          noiseFloorDbm: -92,
+        },
+        {
+          timerId: 2,
+          timerLabel: "T1",
+          isHub: false,
+          online: true,
+          lastSeenAt: "2026-04-20T00:00:00Z",
+          batteryMv: 4100,
+          batteryPct: 90,
+          noiseFloorDbm: -92,
+        },
+      ],
+    });
+    const { api, calls } = makeMockApiClient(store);
+    const root = mountHtml(`<div style="width: 800px; height: 420px;"></div>`);
+    const chart = new PilotRssiChart(root.firstElementChild as HTMLElement, store, api, {
+      contextMode: "practice",
+    });
+
+    try {
+      for (let t = 1_000_000; t <= 15_000_000; t += 100_000) {
+        const dbm = Math.abs(t - 8_500_000) <= 300_000 ? -52 : -82;
+        store.ingestTelemetry({ timerId: 1, seqNum: 1, timestampUs: t, rssi: [-82] });
+        store.ingestTelemetry({ timerId: 2, seqNum: 1, timestampUs: t, rssi: [dbm] });
+      }
+      store.ingestCrossing(makeCrossing(10, 1, 1, 3_000_000, { isStartFinish: true, startedLap: true }));
+      // Premature T1 crossing at 6.5s (real peak is at 8.5s), lap finishes at 12.0s
+      store.ingestCrossing(makeCrossing(11, 2, 1, 6_500_000, { isStartFinish: false, peakRssiDbm: -71 }));
+      store.ingestCrossing(makeCrossing(12, 1, 1, 12_000_000, { isStartFinish: true }));
+      store.ingestLap(
+        {
+          lapId: 1,
+          slotIndex: 1,
+          callsign: "OneEye",
+          lapNumber: 1,
+          lapTimeSec: 9.0,
+          deltaToBest: 0,
+          sectors: [],
+          completedAtUs: 12_000_000,
+          isBestLap: true,
+        },
+        []
+      );
+
+      // Select timer T1 and pause the chart
+      root.querySelector<HTMLButtonElement>('[data-gate-chip="2"]')!.click();
+      root.querySelector<HTMLButtonElement>('[data-act="live"]')!.click();
+      await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
+      await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
+
+      const hostEl = root.querySelector<HTMLElement>('[data-slot="chart"]')!;
+      const rect = hostEl.getBoundingClientRect();
+      // Compute pixel X of 6.5s inside the 15s window ending at 15.0s:
+      // padL = 46, padR = 16 => plotW = rect.width - 62
+      const plotW = rect.width - 46 - 16;
+      const lineX = 46 + ((6_500_000 - 0) / 15_000_000) * plotW;
+      const targetX = 46 + ((8_500_000 - 0) / 15_000_000) * plotW;
+      const midY = rect.height * 0.5;
+
+      // Hover over the crossing line -> cursor class `is-over-crossing` activates
+      hostEl.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          clientX: rect.left + lineX,
+          clientY: rect.top + midY,
+          pointerId: 1,
+          pointerType: "mouse",
+        })
+      );
+      expect(hostEl.classList.contains("is-over-crossing")).toBe(true);
+
+      // Drag crossing 11 from 6.5s rightward onto the 8.5s peak
+      hostEl.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: rect.left + lineX,
+          clientY: rect.top + midY,
+          pointerId: 1,
+          pointerType: "mouse",
+        })
+      );
+      hostEl.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          clientX: rect.left + targetX,
+          clientY: rect.top + midY,
+          pointerId: 1,
+          pointerType: "mouse",
+        })
+      );
+      hostEl.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          button: 0,
+          clientX: rect.left + targetX,
+          clientY: rect.top + midY,
+          pointerId: 1,
+          pointerType: "mouse",
+        })
+      );
+      await flushMicrotasks();
+
+      const adjCall = calls.find((c) => c.method === "adjustCrossing");
+      expect(adjCall).toBeDefined();
+      expect(adjCall!.args[0]).toBe(11);
+      const savedTs = adjCall!.args[1] as number;
+      expect(Math.abs(savedTs - 8_500_000) < 100_000).toBe(true);
+      expect(adjCall!.args[2]).toBe(-52);
+      expect(root.querySelector('[data-slot="calib"]')!.textContent).toContain("Adjusted T1 · Lap 1");
+    } finally {
+      chart.destroy();
+    }
+  });
 });
 
 describe("widgets/BracketDiagram & FormatDiagram", () => {

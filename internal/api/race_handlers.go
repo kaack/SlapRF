@@ -631,6 +631,76 @@ func (s *Server) handleDeletePracticeSessionLap(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
+// handlePatchPracticeSessionCrossing serves `PATCH /v1/practice/sessions/{sessionId}/crossings/{eventId}`.
+func (s *Server) handlePatchPracticeSessionCrossing(w http.ResponseWriter, r *http.Request) {
+	rawID := strings.TrimSpace(r.PathValue("sessionId"))
+	if !rejectColonInPathValue(w, rawID) {
+		return
+	}
+	eventID, ok := parseUint64PathValue(w, r, "eventId")
+	if !ok {
+		return
+	}
+	var body struct {
+		TimestampUs *uint64  `json:"timestampUs"`
+		PeakRSSIDbm *float32 `json:"peakRssiDbm,omitempty"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil || body.TimestampUs == nil || *body.TimestampUs == 0 {
+		writeErrorJSON(w, http.StatusBadRequest, "request body must specify positive integer field 'timestampUs'")
+		return
+	}
+	eng := s.activeEngine()
+	sess, targetID := resolvePracticeSession(eng, rawID)
+	if sess == nil {
+		if rawID == "" || strings.EqualFold(rawID, "current") {
+			if err := eng.AdjustEngineCrossing(eventID, *body.TimestampUs, body.PeakRSSIDbm); err != nil {
+				writeEngineError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+			return
+		}
+		writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("practice session %q not found", rawID))
+		return
+	}
+	if _, err := eng.AdjustPracticeSessionCrossing(targetID, eventID, *body.TimestampUs, body.PeakRSSIDbm); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+// handlePatchRaceSessionCrossing serves `PATCH /v1/race/sessions/{sessionId}/crossings/{eventId}`.
+func (s *Server) handlePatchRaceSessionCrossing(w http.ResponseWriter, r *http.Request) {
+	rawID := strings.TrimSpace(r.PathValue("sessionId"))
+	if !rejectColonInPathValue(w, rawID) {
+		return
+	}
+	eventID, ok := parseUint64PathValue(w, r, "eventId")
+	if !ok {
+		return
+	}
+	var body struct {
+		TimestampUs *uint64  `json:"timestampUs"`
+		PeakRSSIDbm *float32 `json:"peakRssiDbm,omitempty"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil || body.TimestampUs == nil || *body.TimestampUs == 0 {
+		writeErrorJSON(w, http.StatusBadRequest, "request body must specify positive integer field 'timestampUs'")
+		return
+	}
+	eng := s.activeEngine()
+	rs, targetID := findRaceSessionSnapshot(eng, rawID)
+	if rs == nil {
+		writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("race %q not found", rawID))
+		return
+	}
+	if err := eng.AdjustRaceCrossing(targetID, eventID, *body.TimestampUs, body.PeakRSSIDbm); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
 // handleDeletePracticeSessionLaps serves `DELETE /v1/practice/sessions/{sessionId}/laps`
 // (clearing either a single pilot's laps when `?slotIndex=N` is provided, or all session laps).
 func (s *Server) handleDeletePracticeSessionLaps(w http.ResponseWriter, r *http.Request) {

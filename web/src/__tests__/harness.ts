@@ -1205,6 +1205,7 @@ export function makeMockApiClient(store: AppStore): MockApiClientRecord {
     fetchFirmwareImage: record("fetchFirmwareImage"),
     getRealEngineState: record("getRealEngineState", null),
     setGateThresholds: record("setGateThresholds"),
+    adjustCrossing: record("adjustCrossing"),
     setGateRules: record("setGateRules"),
     setPilotGateRules: record("setPilotGateRules"),
     updateRules: record("updateRules"),

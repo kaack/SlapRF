@@ -240,6 +240,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /v1/practice/sessions/{sessionId}/laps/{lapId}", wrap(s.handlePatchPracticeSessionLap))
 	mux.HandleFunc("DELETE /v1/practice/sessions/{sessionId}/laps/{lapId}", wrap(s.handleDeletePracticeSessionLap))
 	mux.HandleFunc("POST /v1/practice/sessions/{sessionId}/laps/{lapId}", wrap(s.handlePracticeSessionLapCustomAction))
+	mux.HandleFunc("PATCH /v1/practice/sessions/{sessionId}/crossings/{eventId}", wrap(s.handlePatchPracticeSessionCrossing))
 	s.registerScopedTrackRoutes(mux, wrap, trackScopePractice)
 
 	// Race Sessions Resource Hierarchy (`/v1/race/sessions` - symmetric with `/v1/practice/sessions`)
@@ -260,6 +261,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/race/sessions/{sessionId}/bracket:edit", wrap(s.handleEditRaceSessionBracket))
 	mux.HandleFunc("POST /v1/race/sessions/{sessionId}/heats/{heatId}", wrap(s.handleRaceSessionHeatCustomAction))
 	mux.HandleFunc("POST /v1/race/sessions/{sessionId}/heats/{heatId}/pilots/{slotIndex}", wrap(s.handleRaceSessionHeatPilotCustomAction))
+	mux.HandleFunc("PATCH /v1/race/sessions/{sessionId}/crossings/{eventId}", wrap(s.handlePatchRaceSessionCrossing))
 	mux.HandleFunc("GET /v1/race/sessions/{sessionId}/standings.csv", s.handleExportRaceSessionStandingsCSV)
 	s.registerScopedTrackRoutes(mux, wrap, trackScopeRace)
 	mux.HandleFunc("GET /v1/race/standings.csv", s.handleExportRaceResultsCSV)

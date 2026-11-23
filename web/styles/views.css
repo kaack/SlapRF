@@ -3099,7 +3099,9 @@ html[data-theme="light"] .bar-time {
   cursor: ns-resize;
 }
 .scope-canvas.is-over-axis,
-.scope-canvas.is-dragging.is-over-axis {
+.scope-canvas.is-dragging.is-over-axis,
+.scope-canvas.is-over-crossing,
+.scope-canvas.is-dragging.is-over-crossing {
   cursor: ew-resize;
 }
 @media (max-width: 820px) {

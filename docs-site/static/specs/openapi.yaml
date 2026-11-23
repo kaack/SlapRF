@@ -1447,6 +1447,110 @@ paths:
               example:
                 error: "practice session or lap not found"
 
+  /v1/practice/sessions/{sessionId}/crossings/{eventId}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: eventId
+        in: path
+        required: true
+        schema:
+          type: integer
+    patch:
+      tags: [Practice Sessions]
+      summary: Adjust a recorded gate crossing timestamp and recalculate affected laps and sector splits
+      operationId: patchPracticeSessionCrossing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [timestampUs]
+              properties:
+                timestampUs:
+                  type: integer
+                  description: Adjusted crossing timestamp in microseconds.
+                  example: 48250000
+                peakRssiDbm:
+                  type: number
+                  description: Optional signal level at the adjusted timestamp.
+                  example: -58.4
+      responses:
+        "200":
+          description: Updated full state with recalculated lap durations, sector splits, and summaries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid timestampUs body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session or crossing event not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/race/sessions/{sessionId}/crossings/{eventId}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: eventId
+        in: path
+        required: true
+        schema:
+          type: integer
+    patch:
+      tags: [Race Sessions]
+      summary: Adjust a race gate crossing timestamp and recalculate affected splits and heat standings
+      operationId: patchRaceSessionCrossing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [timestampUs]
+              properties:
+                timestampUs:
+                  type: integer
+                  description: Adjusted crossing timestamp in microseconds.
+                  example: 48250000
+                peakRssiDbm:
+                  type: number
+                  description: Optional signal level at the adjusted timestamp.
+                  example: -58.4
+      responses:
+        "200":
+          description: Updated full state with recalculated splits and heat standings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid timestampUs body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session or crossing event not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /v1/practice/sessions/{sessionId}/track:
     parameters:
       - name: sessionId

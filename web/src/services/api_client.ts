@@ -1185,20 +1185,45 @@ export class ApiClient {
     return scoped;
   }
 
-  private resolveTrackBaseUrl(explicitScope?: TrackScope | null): string {
+  private resolveSessionBaseUrl(explicitScope?: TrackScope | null): string {
     const scope = explicitScope ?? this._scopeResolver?.() ?? null;
     if (scope && scope.id) {
-      return `/v1/${scope.kind}/sessions/${encodeURIComponent(scope.id)}/track`;
+      return `/v1/${scope.kind}/sessions/${encodeURIComponent(scope.id)}`;
     }
     const selSess = this.store.selectedPracticeSession;
     if (selSess?.sessionId) {
-      return `/v1/practice/sessions/${encodeURIComponent(selSess.sessionId)}/track`;
+      return `/v1/practice/sessions/${encodeURIComponent(selSess.sessionId)}`;
     }
     const rid = this.viewingRaceId || this.store.raceState.raceId || this.store.eventState.activeRaceId;
     if (rid) {
-      return `/v1/race/sessions/${encodeURIComponent(rid)}/track`;
+      return `/v1/race/sessions/${encodeURIComponent(rid)}`;
     }
-    return `/v1/practice/sessions/current/track`;
+    return `/v1/practice/sessions/current`;
+  }
+
+  private resolveTrackBaseUrl(explicitScope?: TrackScope | null): string {
+    return `${this.resolveSessionBaseUrl(explicitScope)}/track`;
+  }
+
+  public async adjustCrossing(
+    eventId: number,
+    timestampUs: number,
+    peakRssiDbm?: number,
+    scope?: TrackScope | null
+  ): Promise<void> {
+    const body: { timestampUs: number; peakRssiDbm?: number } = {
+      timestampUs: Math.round(timestampUs),
+    };
+    if (typeof peakRssiDbm === "number" && Number.isFinite(peakRssiDbm)) {
+      body.peakRssiDbm = Math.round(peakRssiDbm * 100) / 100;
+    }
+    this.store.hydrate(
+      await this.transport.request<FullStateResponse>(
+        "PATCH",
+        `${this.resolveSessionBaseUrl(scope)}/crossings/${encodeURIComponent(String(eventId))}`,
+        body
+      )
+    );
   }
 
   public async updateTrackNode(update: GateUpdate, scope?: TrackScope | null): Promise<void> {
