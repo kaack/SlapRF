@@ -93,11 +93,19 @@ func TestBoltStoreRoundTripAndPersistenceWorker(t *testing.T) {
 		t.Fatalf("restored sim SpeedMultiplier = %d, want 20", sim2.Snapshot().SpeedMultiplier)
 	}
 
-	// Test Wipe
+	// Test Wipe preserves BLE host pairing key while clearing laps
+	const wantHostKey = "0123456789ABCDEF0123456789ABCDEF"
+	if err := store2.PutJSON(KeyBLEHostKey, wantHostKey); err != nil {
+		t.Fatalf("PutJSON KeyBLEHostKey: %v", err)
+	}
 	if err := store2.Wipe(true); err != nil {
 		t.Fatalf("Wipe failed: %v", err)
 	}
 	if store2.Status().RealLapsCount != 0 {
 		t.Fatalf("expected 0 real laps after Wipe")
+	}
+	var gotHostKey string
+	if ok, err := store2.GetJSON(KeyBLEHostKey, &gotHostKey); err != nil || !ok || gotHostKey != wantHostKey {
+		t.Fatalf("expected Wipe to preserve KeyBLEHostKey=%q, got ok=%v key=%q err=%v", wantHostKey, ok, gotHostKey, err)
 	}
 }

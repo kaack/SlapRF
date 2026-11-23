@@ -3,6 +3,8 @@ package slaprf
 import (
 	"crypto/rand"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -62,20 +64,45 @@ func generateHostKey() string {
 	return fmt.Sprintf("%032X", buf[:])
 }
 
-// NewKnownTimerRegistry loads persisted SlapRF timers and the host authentication key from `store`.
+func hostKeySidecarPath(store *storage.BoltStore) string {
+	if store == nil {
+		return ""
+	}
+	p := strings.TrimSpace(store.Path())
+	if p == "" || strings.Contains(filepath.Base(p), "slaprf-portable-") {
+		return ""
+	}
+	return p + ".hostkey"
+}
+
+// NewKnownTimerRegistry loads persisted SlapRF timers and the host authentication key from `store`
+// (with a durable `.hostkey` sidecar fallback next to `slaprf.db` so database resets or backups
+// never invalidate paired Bluetooth Hubs).
 func NewKnownTimerRegistry(store *storage.BoltStore) *KnownTimerRegistry {
 	var hostKey string
+	sidecar := hostKeySidecarPath(store)
 	if store != nil {
 		var rawKey string
 		if ok, err := store.GetJSON(kvHostAuthKey, &rawKey); err == nil && ok {
 			hostKey = strings.ToUpper(strings.TrimSpace(rawKey))
 		}
 	}
+	if !isValidHostKey(hostKey) && sidecar != "" {
+		if b, err := os.ReadFile(sidecar); err == nil {
+			cand := strings.ToUpper(strings.TrimSpace(string(b)))
+			if isValidHostKey(cand) {
+				hostKey = cand
+			}
+		}
+	}
 	if !isValidHostKey(hostKey) {
 		hostKey = generateHostKey()
-		if store != nil {
-			_ = store.PutJSON(kvHostAuthKey, hostKey)
-		}
+	}
+	if store != nil {
+		_ = store.PutJSON(kvHostAuthKey, hostKey)
+	}
+	if sidecar != "" {
+		_ = os.WriteFile(sidecar, []byte(hostKey+"\n"), 0o600)
 	}
 
 	r := &KnownTimerRegistry{
@@ -262,6 +289,7 @@ func (r *KnownTimerRegistry) Upsert(entry KnownHardwareTimer) {
 
 	if r.store != nil {
 		_ = r.store.PutJSON(kvKnownTimersKey, list)
+		_ = r.store.PutJSON(kvHostAuthKey, r.hostKey)
 	}
 }
 
@@ -288,6 +316,7 @@ func (r *KnownTimerRegistry) ClearBLEPairing(fp string) {
 
 	if r.store != nil {
 		_ = r.store.PutJSON(kvKnownTimersKey, list)
+		_ = r.store.PutJSON(kvHostAuthKey, r.hostKey)
 	}
 	for _, fn := range cbs {
 		fn()
@@ -312,6 +341,7 @@ func (r *KnownTimerRegistry) Forget(fp string) {
 
 	if r.store != nil {
 		_ = r.store.PutJSON(kvKnownTimersKey, list)
+		_ = r.store.PutJSON(kvHostAuthKey, r.hostKey)
 	}
 	for _, fn := range forgetCbs {
 		fn(clean)

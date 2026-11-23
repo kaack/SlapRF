@@ -55,8 +55,9 @@ const (
 	KeyRealConfig    = "real.config"
 	KeySimConfig     = "sim.config"
 	KeySimOptions    = "sim.options"
-	KeyUSBTargets    = "hw.usb_targets"
-	KeyKnownTimers   = "hw.known_timers"
+	KeyUSBTargets       = "hw.usb_targets"
+	KeyBLEHostKey       = "hw.ble_host_key"
+	KeyKnownTimers      = "hw.known_timers"
 	KeyLapRFTargets     = "hw.laprf_targets"
 	KeyRHTargets        = "hw.rh_targets"
 	KeyLapRFEmulatorCfg = "hw.laprf_emulator_config"
@@ -699,7 +700,8 @@ func syncActivePracticeSessionEvents(state *tracker.PersistedEngineState) {
 	}
 }
 
-// Wipe clears all engine & hardware state buckets (preserving `app.meta` creation timestamp and `sim.running`).
+// Wipe clears all engine & hardware state buckets while preserving `app.meta` creation timestamp,
+// `sim.running`, and `hw.ble_host_key` (so wiping session/lap data never orphans paired BLE Hubs).
 func (s *BoltStore) Wipe(keepSimRunning bool) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -709,11 +711,15 @@ func (s *BoltStore) Wipe(keepSimRunning bool) error {
 	nowMs := time.Now().UnixMilli()
 	return s.db.Update(func(tx *bolt.Tx) error {
 		var createdAt int64
+		var preservedHostKey []byte
 		if kv := tx.Bucket(bucketKV); kv != nil {
 			var meta MetaRecord
 			if raw := kv.Get([]byte(KeyMeta)); len(raw) > 0 {
 				_ = json.Unmarshal(raw, &meta)
 				createdAt = meta.CreatedAtMs
+			}
+			if rawKey := kv.Get([]byte(KeyBLEHostKey)); len(rawKey) > 0 {
+				preservedHostKey = append([]byte(nil), rawKey...)
 			}
 		}
 		for _, bName := range allBuckets {
@@ -738,6 +744,11 @@ func (s *BoltStore) Wipe(keepSimRunning bool) error {
 		rawMeta, _ := json.Marshal(meta)
 		if err := kv.Put([]byte(KeyMeta), rawMeta); err != nil {
 			return err
+		}
+		if len(preservedHostKey) > 0 {
+			if err := kv.Put([]byte(KeyBLEHostKey), preservedHostKey); err != nil {
+				return err
+			}
 		}
 		rawRun, _ := json.Marshal(keepSimRunning)
 		return kv.Put([]byte(KeySimRunning), rawRun)
