@@ -1,0 +1,1 @@
+# Placeholder so //go:embed all:site in cmd/gatecam-android compiles on a clean checkout before cmd/build-gatecam runs.

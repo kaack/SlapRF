@@ -38,6 +38,8 @@ firmware/*/build-*/
 !/cmd/slaprf/site/.keep
 /cmd/slaprf-android/site/*
 !/cmd/slaprf-android/site/.keep
+/cmd/gatecam-android/site/*
+!/cmd/gatecam-android/site/.keep
 slaprf.exe
 slaprf.db*
 slaprf.log*

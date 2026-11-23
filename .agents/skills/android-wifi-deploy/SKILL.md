@@ -152,3 +152,18 @@ Before guessing from static code or asking the user to unplug physical timers fr
 ### BLE Pairing Key Persistence & Restart Nuances
 - **Host Pairing Identity (`hw.ble_host_key`)**: Stored in `BoltStore` (`preserved` across `BoltStore.Wipe()`), mirrored to `files/slaprf.db.hostkey`, and auto-recovered from historical `bbolt` leaf pages (`KnownTimerRegistry.HistoricalHostAuthKeys`) if a `ble:<FP>` Hub ever replies `auth_mismatch`. Never wipe `hw.ble_host_key` during session/lap resets.
 - **4 s BLE Supervision Timeout After Process Kill (`GATT status 147`)**: Killing `app.slaprf` (`am force-stop` or `adb install -r`) drops the Android process before sending a BLE disconnect, so the Hub keeps the old link open for ~4 s before advertising again. `Manager.SetActiveWithRestore` automatically enters `attemptAutoReconnect` on startup failure; if scripting immediate `POST /v1/slaprf/bluetooth/connections` right after `adb install -r`, wait ~4 s if the first attempt returns `GATT status 147`.
+
+---
+
+## 6. SlapRF GateCam Optical Verification Companion App (`app.slaprf.gatecam`)
+
+`cmd/build-gatecam` builds a standalone dev-only optical timing verification APK (`dist/slaprf-gatecam.apk`, `package="app.slaprf.gatecam"`) that runs alongside `app.slaprf` (`:18090` ForegroundService), aligns a Gate Plane Line over `Camera2` (`60/120 fps`), and runs OpenCV 4.12 lookback motion analysis on `127.0.0.1:18095` (also exposed on Wi-Fi `:18095` for remote laptop inspection):
+
+```bash
+go run ./cmd/build-gatecam -arch arm64 -out dist/slaprf-gatecam.apk
+adb -s <DEVICE> install -r dist/slaprf-gatecam.apk
+adb -s <DEVICE> shell pm grant app.slaprf.gatecam android.permission.CAMERA
+adb -s <DEVICE> shell am start -n app.slaprf.gatecam/.GateCamHost
+adb -s <DEVICE> forward tcp:18095 tcp:18095
+curl -fsS http://127.0.0.1:18095/v1/gatecam/state
+```
