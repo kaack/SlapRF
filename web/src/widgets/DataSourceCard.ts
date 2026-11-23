@@ -891,7 +891,6 @@ export class PersistenceSettings extends Component {
   private readonly announcer?: Announcer;
   private storage: StorageStatus | null = cachedStorageStatus;
   private backendStorage: BackendStorageStatus | null = cachedBackendStorageStatus;
-  private backendLog: BackendLogStatus | null = cachedBackendLogStatus;
   private storageFetchedAt = 0;
 
   constructor(el: HTMLElement, api: ApiClient, announcer?: Announcer) {
@@ -934,18 +933,6 @@ export class PersistenceSettings extends Component {
           this.backendStorage = (await resp.json()) as BackendStorageStatus;
           cachedBackendStorageStatus = this.backendStorage;
           this.renderStatus();
-        })
-        .catch(() => undefined);
-      void fetch(resolveBackendUrl("/v1/logs/config"), {
-        method: "GET",
-        headers: { Accept: "application/json" },
-        cache: "no-store",
-      })
-        .then(async (resp) => {
-          if (!resp.ok) return;
-          this.backendLog = (await resp.json()) as BackendLogStatus;
-          cachedBackendLogStatus = this.backendLog;
-          this.renderLogStatus();
         })
         .catch(() => undefined);
       return;
@@ -1001,29 +988,6 @@ export class PersistenceSettings extends Component {
       (st.lastError ? `<div class="storage-status-error">${esc(st.lastError)}</div>` : "");
   }
 
-  private renderLogStatus(): void {
-    const host = this.el.querySelector<HTMLElement>("[data-log-status]");
-    const sel = this.el.querySelector<HTMLSelectElement>("[data-log-level-select]");
-    const lg = this.backendLog;
-    if (sel && lg?.level) {
-      const norm = lg.level.toLowerCase();
-      if (sel.value !== norm) {
-        sel.value = norm;
-      }
-    }
-    if (!host) return;
-    if (!lg) {
-      host.innerHTML = `Log: <strong>slaprf.log</strong> · loading…`;
-      return;
-    }
-    const parts = [
-      `Level: <strong>${esc((lg.level || "info").toUpperCase())}</strong>`,
-      lg.logPath ? `file: <span class="mono">${esc(lg.logPath)}</span>` : "in-memory",
-      `size: ${formatBytes(lg.sizeBytes || 0)}`,
-    ].filter(Boolean);
-    host.innerHTML = parts.join(" · ");
-  }
-
   private handleChange = (e: Event): void => {
     const target = e.target as HTMLElement;
     if (target.matches("[data-import-input]")) {
@@ -1033,11 +997,6 @@ export class PersistenceSettings extends Component {
       if (file) {
         void this.handleImportFile(file);
       }
-      return;
-    }
-    if (target.matches("[data-log-level-select]")) {
-      const sel = target as HTMLSelectElement;
-      void this.handleLogLevelChange(sel.value);
     }
   };
 
@@ -1048,14 +1007,6 @@ export class PersistenceSettings extends Component {
 
     if (action === "export-data") {
       void this.handleExport();
-      return;
-    }
-    if (action === "download-log") {
-      void this.handleDownloadLog();
-      return;
-    }
-    if (action === "clear-log") {
-      void this.handleClearLog();
       return;
     }
     if (action === "import-data") {
@@ -1124,79 +1075,8 @@ export class PersistenceSettings extends Component {
     this.refreshStorage(true);
   }
 
-  private async handleLogLevelChange(level: string): Promise<void> {
-    try {
-      const resp = await fetch(resolveBackendUrl("/v1/logs/config"), {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ level }),
-      });
-      if (!resp.ok) return;
-      this.backendLog = (await resp.json()) as BackendLogStatus;
-      cachedBackendLogStatus = this.backendLog;
-      this.renderLogStatus();
-    } catch {
-      // Ignore transient network errors
-    }
-  }
-
-  private async handleDownloadLog(): Promise<void> {
-    try {
-      const resp = await fetch(resolveBackendUrl("/v1/logs?format=text"), {
-        method: "GET",
-        cache: "no-store",
-      });
-      if (!resp.ok) return;
-      const text = await resp.text();
-      const stamp = new Date().toISOString().slice(0, 10);
-      downloadTextFile(`slaprf-${stamp}.log`, "text/plain", text);
-    } catch {
-      // Ignore transient network errors
-    }
-  }
-
-  private async handleClearLog(): Promise<void> {
-    try {
-      const resp = await fetch(resolveBackendUrl("/v1/logs:clear"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: "{}",
-      });
-      if (!resp.ok) return;
-      this.backendLog = (await resp.json()) as BackendLogStatus;
-      cachedBackendLogStatus = this.backendLog;
-      this.renderLogStatus();
-    } catch {
-      // Ignore transient network errors
-    }
-  }
-
   private render(): void {
     const isServer = capabilitiesSnapshot().portable;
-    const curLvl = (this.backendLog?.level || "info").toLowerCase();
-    const logCardHtml = isServer
-      ? `
-      <div class="card">
-        <div class="option-row">
-          <div>
-            <div class="option-title">Diagnostic logs</div>
-            <div class="option-sub">Server and hardware link events are written side-by-side to <span class="mono">slaprf.log</span> (and Android <span class="mono">logcat</span>). Raise the level to <span class="mono">DEBUG</span> or <span class="mono">TRACE</span> when troubleshooting timers.</div>
-            <div class="option-sub storage-status" data-log-status></div>
-          </div>
-          <div class="option-actions" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-            <select class="input input-sm" data-log-level-select aria-label="Diagnostic log level" style="width:auto;min-width:128px">
-              <option value="error"${curLvl === "error" ? " selected" : ""}>ERROR</option>
-              <option value="warn"${curLvl === "warn" ? " selected" : ""}>WARN</option>
-              <option value="info"${curLvl === "info" ? " selected" : ""}>INFO (default)</option>
-              <option value="debug"${curLvl === "debug" ? " selected" : ""}>DEBUG</option>
-              <option value="trace"${curLvl === "trace" ? " selected" : ""}>TRACE</option>
-            </select>
-            <button type="button" class="btn btn-sm" data-action="download-log">Download</button>
-            <button type="button" class="btn btn-sm btn-ghost" data-action="clear-log">Clear</button>
-          </div>
-        </div>
-      </div>`
-      : "";
     this.el.innerHTML = `
       <div class="card">
         <div class="option-row">
@@ -1251,8 +1131,173 @@ export class PersistenceSettings extends Component {
             <button type="button" class="btn btn-sm" data-action="restore-demo-data">Restore</button>
           </div>
         </div>
-      </div>${logCardHtml}`;
+      </div>`;
     this.renderStatus();
+  }
+}
+
+/** Diagnostics section: runtime log level (`ERROR`..`TRACE`), download, and clear controls for `slaprf.log`. */
+export class DiagnosticsSettingsCard extends Component {
+  private backendLog: BackendLogStatus | null = cachedBackendLogStatus;
+  private logFetchedAt = 0;
+
+  constructor(el: HTMLElement) {
+    super(el);
+    el.addEventListener("change", this.handleChange);
+    el.addEventListener("click", this.handleClick);
+    this.onDispose(() => {
+      el.removeEventListener("change", this.handleChange);
+      el.removeEventListener("click", this.handleClick);
+    });
+    this.onDispose(
+      subscribeCapabilities(() => {
+        this.render();
+        this.refreshLogs(true);
+      })
+    );
+    const tick = window.setInterval(() => this.refreshLogs(true), 8_000);
+    this.onDispose(() => window.clearInterval(tick));
+    this.render();
+    this.refreshLogs(true);
+  }
+
+  private refreshLogs(force: boolean): void {
+    this.renderLogStatus();
+    if (!capabilitiesSnapshot().portable) return;
+    if (!force && performance.now() - this.logFetchedAt < 4000) return;
+    this.logFetchedAt = performance.now();
+
+    void fetch(resolveBackendUrl("/v1/logs/config"), {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    })
+      .then(async (resp) => {
+        if (!resp.ok) return;
+        this.backendLog = (await resp.json()) as BackendLogStatus;
+        cachedBackendLogStatus = this.backendLog;
+        this.renderLogStatus();
+      })
+      .catch(() => undefined);
+  }
+
+  private renderLogStatus(): void {
+    const host = this.el.querySelector<HTMLElement>("[data-log-status]");
+    const sel = this.el.querySelector<HTMLSelectElement>("[data-log-level-select]");
+    const lg = this.backendLog;
+    if (sel && lg?.level) {
+      const norm = lg.level.toLowerCase();
+      if (sel.value !== norm) {
+        sel.value = norm;
+        sel.setAttribute("value", norm);
+      }
+    }
+    if (!host) return;
+    if (!lg) {
+      host.innerHTML = `Level: <strong>INFO</strong> · file: <strong>slaprf.log</strong> · loading…`;
+      return;
+    }
+    const parts = [
+      `Level: <strong>${esc((lg.level || "info").toUpperCase())}</strong>`,
+      lg.logPath ? `file: <span class="mono">${esc(lg.logPath)}</span>` : "in-memory",
+      `size: ${formatBytes(lg.sizeBytes || 0)}`,
+    ].filter(Boolean);
+    host.innerHTML = parts.join(" · ");
+  }
+
+  private handleChange = (e: Event): void => {
+    const target = e.target as HTMLElement;
+    if (target.matches("[data-log-level-select]")) {
+      const sel = target as HTMLSelectElement;
+      void this.handleLogLevelChange(sel.value);
+    }
+  };
+
+  private handleClick = (e: Event): void => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
+    if (!btn) return;
+    const action = btn.dataset.action;
+    if (action === "download-log") {
+      void this.handleDownloadLog();
+      return;
+    }
+    if (action === "clear-log") {
+      void this.handleClearLog();
+    }
+  };
+
+  private async handleLogLevelChange(level: string): Promise<void> {
+    try {
+      const resp = await fetch(resolveBackendUrl("/v1/logs/config"), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ level }),
+      });
+      if (!resp.ok) return;
+      this.backendLog = (await resp.json()) as BackendLogStatus;
+      cachedBackendLogStatus = this.backendLog;
+      this.renderLogStatus();
+    } catch {
+      // Ignore transient network errors
+    }
+  }
+
+  private async handleDownloadLog(): Promise<void> {
+    try {
+      const resp = await fetch(resolveBackendUrl("/v1/logs?format=text"), {
+        method: "GET",
+        cache: "no-store",
+      });
+      if (!resp.ok) return;
+      const text = await resp.text();
+      const stamp = new Date().toISOString().slice(0, 10);
+      downloadTextFile(`slaprf-${stamp}.log`, "text/plain", text);
+    } catch {
+      // Ignore transient network errors
+    }
+  }
+
+  private async handleClearLog(): Promise<void> {
+    try {
+      const resp = await fetch(resolveBackendUrl("/v1/logs:clear"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: "{}",
+      });
+      if (!resp.ok) return;
+      this.backendLog = (await resp.json()) as BackendLogStatus;
+      cachedBackendLogStatus = this.backendLog;
+      this.renderLogStatus();
+    } catch {
+      // Ignore transient network errors
+    }
+  }
+
+  private render(): void {
+    if (!capabilitiesSnapshot().portable) {
+      this.el.innerHTML = "";
+      return;
+    }
+    const curLvl = (this.backendLog?.level || "info").toLowerCase();
+    this.el.innerHTML = `
+      <div class="card">
+        <div class="option-row">
+          <div class="diag-log-info">
+            <div class="option-sub storage-status" data-log-status style="margin-top:0"></div>
+          </div>
+          <div class="option-actions diag-log-actions">
+            <select class="input input-sm diag-log-select" data-log-level-select aria-label="Diagnostic log level">
+              <option value="error"${curLvl === "error" ? " selected" : ""}>ERROR</option>
+              <option value="warn"${curLvl === "warn" ? " selected" : ""}>WARN</option>
+              <option value="info"${curLvl === "info" ? " selected" : ""}>INFO (default)</option>
+              <option value="debug"${curLvl === "debug" ? " selected" : ""}>DEBUG</option>
+              <option value="trace"${curLvl === "trace" ? " selected" : ""}>TRACE</option>
+            </select>
+            <button type="button" class="btn btn-sm" data-action="download-log">Download</button>
+            <button type="button" class="btn btn-sm" data-action="clear-log">Clear</button>
+          </div>
+        </div>
+      </div>`;
     this.renderLogStatus();
   }
 }

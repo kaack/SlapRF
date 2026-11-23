@@ -84,6 +84,6 @@ If high-speed passes through a gate do not register:
 
 On desktop (`SlapRF Portable`) and Android, SlapRF writes server, storage, and hardware link events to a rolling `slaprf.log` file alongside the app (and to Android `logcat` under tag `SlapRFGo`):
 
-1. Open **Settings** and scroll to **Diagnostic logs** under **Data & Backup**.
+1. Open **Settings** and scroll to the **Diagnostics** section at the bottom of the page.
 2. Change the log level from `INFO (default)` to `DEBUG` or `TRACE` before reproducing an issue.
 3. Click **Download** to save `slaprf-YYYY-MM-DD.log` for inspection or bug reports, then switch the level back to `INFO (default)`.

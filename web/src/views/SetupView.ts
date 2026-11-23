@@ -12,6 +12,7 @@ import { AnnouncerSettings } from "../widgets/AnnouncerSettings";
 import {
   AuthenticationSettingsCard,
   DataSourceCard,
+  DiagnosticsSettingsCard,
   MultiGPSettingsCard,
   PersistenceSettings,
 } from "../widgets/DataSourceCard";
@@ -74,6 +75,14 @@ export class SetupView extends Component {
           </div>
           <div class="settings-cards" data-slot="persistence"></div>
         </section>
+
+        <section class="settings-section" data-section-anchor="diagnostics" data-slot="diagnostics-section">
+          <div class="settings-intro">
+            <h2>Diagnostics</h2>
+            <p>Server and hardware link events are written side-by-side to <span class="mono">slaprf.log</span> (and Android <span class="mono">logcat</span>). Raise the level to <span class="mono">DEBUG</span> or <span class="mono">TRACE</span> when troubleshooting timers.</p>
+          </div>
+          <div class="settings-cards" data-slot="diagnostics"></div>
+        </section>
       </div>`;
 
     this.adopt(new DataSourceCard(this.slot("source"), store, api));
@@ -82,6 +91,7 @@ export class SetupView extends Component {
     this.adopt(new LapRFEmulatorCard(this.slot("laprf-emulator"), store));
     this.adopt(new AuthenticationSettingsCard(this.slot("authentication")));
     this.adopt(new PersistenceSettings(this.slot("persistence"), api, announcer));
+    this.adopt(new DiagnosticsSettingsCard(this.slot("diagnostics")));
 
     this.onDispose(store.subscribe(["status", "config"], () => this.syncVisibility()));
     this.onDispose(subscribeCapabilities(() => this.syncVisibility()));
@@ -101,6 +111,10 @@ export class SetupView extends Component {
     const emuSec = this.el.querySelector<HTMLElement>('[data-slot="emulator-section"]');
     if (emuSec) {
       emuSec.style.display = caps.portable && !isLapRF ? "" : "none";
+    }
+    const diagSec = this.el.querySelector<HTMLElement>('[data-slot="diagnostics-section"]');
+    if (diagSec) {
+      diagSec.style.display = caps.portable ? "" : "none";
     }
 
     this.el.querySelectorAll<HTMLElement>(".settings-section").forEach((sec) => {
