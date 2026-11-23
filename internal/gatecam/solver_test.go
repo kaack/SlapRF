@@ -214,3 +214,13 @@ func TestServerLiveSlapRFIntegrationPinAndExportZIP(t *testing.T) {
 		t.Fatalf("unexpected ZIP contents: names=%v jpgCount=%d", names, jpgCount)
 	}
 }
+
+func TestBundleWebSPA(t *testing.T) {
+	js, err := gatecam.BundleWebSPA(filepath.Join("..", "..", "tools", "gatecam", "web"), true)
+	if err != nil {
+		t.Fatalf("BundleWebSPA failed: %v", err)
+	}
+	if len(js) < 1024 {
+		t.Fatalf("expected non-trivial JS bundle, got %d bytes", len(js))
+	}
+}
