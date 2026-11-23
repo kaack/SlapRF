@@ -1308,6 +1308,42 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
                 error: "practice session not found"
+    delete:
+      tags: [Practice Sessions]
+      summary: Delete recorded laps in a practice session (for one pilot or all pilots)
+      operationId: deletePracticeSessionLaps
+      parameters:
+        - name: slotIndex
+          in: query
+          required: false
+          description: Optional 1-based pilot slot index (`1`..`128`). When provided, deletes only that pilot's recorded laps, crossings, and in-progress lap; when omitted, clears all laps in the session.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 128
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid slotIndex query parameter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid slotIndex \"0\" (must be 1..128)"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session not found"
 
   /v1/practice/sessions/{sessionId}/laps/{lapId}:
     parameters:
@@ -1359,6 +1395,25 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
                 error: "practice session or lap not found"
+    delete:
+      tags: [Practice Sessions]
+      summary: Permanently delete a single recorded practice lap
+      operationId: deletePracticeSessionLap
+      responses:
+        "200":
+          description: Updated full state with remaining pilot laps renumbered sequentially
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session or lap record not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session or lap not found"
 
   "/v1/practice/sessions/{sessionId}/laps/{lapId}:toggle":
     parameters:
@@ -1391,6 +1446,110 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
                 error: "practice session or lap not found"
+
+  /v1/practice/sessions/{sessionId}/crossings/{eventId}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: eventId
+        in: path
+        required: true
+        schema:
+          type: integer
+    patch:
+      tags: [Practice Sessions]
+      summary: Adjust a recorded gate crossing timestamp and recalculate affected laps and sector splits
+      operationId: patchPracticeSessionCrossing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [timestampUs]
+              properties:
+                timestampUs:
+                  type: integer
+                  description: Adjusted crossing timestamp in microseconds.
+                  example: 48250000
+                peakRssiDbm:
+                  type: number
+                  description: Optional signal level at the adjusted timestamp.
+                  example: -58.4
+      responses:
+        "200":
+          description: Updated full state with recalculated lap durations, sector splits, and summaries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid timestampUs body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session or crossing event not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/race/sessions/{sessionId}/crossings/{eventId}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: eventId
+        in: path
+        required: true
+        schema:
+          type: integer
+    patch:
+      tags: [Race Sessions]
+      summary: Adjust a race gate crossing timestamp and recalculate affected splits and heat standings
+      operationId: patchRaceSessionCrossing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [timestampUs]
+              properties:
+                timestampUs:
+                  type: integer
+                  description: Adjusted crossing timestamp in microseconds.
+                  example: 48250000
+                peakRssiDbm:
+                  type: number
+                  description: Optional signal level at the adjusted timestamp.
+                  example: -58.4
+      responses:
+        "200":
+          description: Updated full state with recalculated splits and heat standings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid timestampUs body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session or crossing event not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /v1/practice/sessions/{sessionId}/track:
     parameters:
@@ -6379,6 +6538,11 @@ components:
         beepOnCross:
           type: boolean
           example: false
+        beepMode:
+          type: string
+          enum: [off, enter, peak, exit]
+          description: Crossing tone trigger point (`off`, `enter`, `peak`, or `exit`).
+          example: off
 
     GateRuleOverrides:
       type: object
@@ -6395,6 +6559,10 @@ components:
         beepOnCross:
           type: boolean
           example: true
+        beepMode:
+          type: string
+          enum: [off, enter, peak, exit]
+          example: peak
 
     GateCrossingEvent:
       type: object
@@ -6436,6 +6604,25 @@ components:
         estimatedSpeedMph:
           type: number
           example: 41.2
+        holdMs:
+          type: number
+          description: Total gate pass hold time from enter to exit in milliseconds.
+          example: 540.0
+        aboveEnterMs:
+          type: number
+          description: Duration the signal remained at or above enterThreshold in milliseconds.
+          example: 420.0
+        aboveEnterAreaDbSec:
+          type: number
+          description: Integrated area under the pass curve above enterThreshold in dB*s.
+          example: 6.4
+        passAreaDbSec:
+          type: number
+          description: Integrated area under the pass curve above exitThreshold in dB*s.
+          example: 11.8
+        isStepBurst:
+          type: boolean
+          description: True when the waveform exhibited a step-like Wi-Fi or packet burst signature.
         passingNumber:
           type: integer
           example: 12
