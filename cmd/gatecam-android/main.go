@@ -268,12 +268,10 @@ func Java_app_slaprf_gatecam_GateCamHost_nativeStartServer(env *C.JNIEnv, clazz 
 	loopbackSrv = hSrv
 	loopbackURL = "http://" + ln.Addr().String()
 
-	if gcSrv.ExposeLAN() {
-		if urls, lErr := startLanLocked(handler); lErr == nil {
-			gcSrv.SetLanURLs(urls)
-		}
-	}
-	appLogger.Infof("[GateCam] Bound loopback %s (lanPort=%d)", loopbackURL, lanPort)
+	// Remote LAN access is kept disabled by default while focusing on the on-phone app.
+	stopLanLocked()
+	gcSrv.SetLanURLs(nil)
+	appLogger.Infof("[GateCam] Bound loopback %s", loopbackURL)
 	return jStr(env, loopbackURL)
 }
 

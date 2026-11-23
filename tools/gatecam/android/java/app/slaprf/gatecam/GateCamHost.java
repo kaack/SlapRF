@@ -55,6 +55,7 @@ public final class GateCamHost extends Activity {
     static native void nativeStopServer();
 
     private FrameLayout rootLayout;
+    private FrameLayout previewBox;
     private TextureView previewView;
     private WebView webView;
     private String serverUrl = "";
@@ -97,12 +98,18 @@ public final class GateCamHost extends Activity {
             });
         }
 
+        previewBox = new FrameLayout(this);
+        previewBox.setClipChildren(true);
+        previewBox.setClipToPadding(true);
         previewView = new TextureView(this);
+        previewBox.addView(previewView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
         FrameLayout.LayoutParams pvLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 Gravity.TOP | Gravity.START);
-        rootLayout.addView(previewView, pvLp);
+        rootLayout.addView(previewBox, pvLp);
 
         previewView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
             @Override
@@ -232,8 +239,8 @@ public final class GateCamHost extends Activity {
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    if (previewView != null) {
-                        previewView.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
+                    if (previewBox != null) {
+                        previewBox.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
                     }
                 }
             });
@@ -244,7 +251,7 @@ public final class GateCamHost extends Activity {
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    if (previewView == null || widthCss <= 1 || heightCss <= 1) return;
+                    if (previewBox == null || previewView == null || widthCss <= 1 || heightCss <= 1) return;
                     double scale = dpr > 0 ? dpr : getResources().getDisplayMetrics().density;
                     int x = (int) Math.round(leftCss * scale);
                     int y = (int) Math.round(topCss * scale);
@@ -253,7 +260,7 @@ public final class GateCamHost extends Activity {
                     FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(w, h, Gravity.TOP | Gravity.START);
                     lp.leftMargin = x;
                     lp.topMargin = y;
-                    previewView.setLayoutParams(lp);
+                    previewBox.setLayoutParams(lp);
                     GateCamShim.onPreviewSurfaceSizeChanged(previewView, w, h);
                 }
             });

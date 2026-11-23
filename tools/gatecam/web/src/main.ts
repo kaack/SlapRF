@@ -11,6 +11,8 @@ interface GateLine {
 interface CameraConfig {
   targetFps: number;
   shutterUs: number;
+  zoomRatio?: number;
+  focusMode?: string;
   focusLocked: boolean;
   motionModel: string;
   sensitivity: number;
@@ -34,6 +36,12 @@ interface CameraStatus {
   actualFps: number;
   supportedFps: number[];
   shutterUs: number;
+  exposureUs?: number;
+  iso?: number;
+  zoomRatio?: number;
+  minZoomRatio?: number;
+  focusMode?: string;
+  focusDistDiopters?: number;
   focusLocked: boolean;
   ringCapacity: number;
   ringFilled: number;
@@ -175,6 +183,8 @@ let slowPlayTimer: number | null = null;
 let setupOpen = false;
 let dragHandle: "p1" | "p2" | null = null;
 let previewPollTimer: number | null = null;
+let tapFocusSpot: { x: number; y: number } | null = null;
+let tapFocusTimer: number | null = null;
 
 const appRoot = document.getElementById("app")!;
 
@@ -325,12 +335,29 @@ function stepInspectorFrame(delta: number): void {
 }
 
 function currentFrameDims(): { w: number; h: number } {
-  const w = state?.camInfo?.frameWidth || 360;
-  const h = state?.camInfo?.frameHeight || 640;
+  const w = state?.camInfo?.frameWidth || 640;
+  const h = state?.camInfo?.frameHeight || 360;
   return { w, h };
 }
 
-function gateGeometrySVG(g: GateLine, interactive: boolean, W = 360, H = 640): string {
+function fmtCamTelemetry(ci: CameraStatus): string {
+  const parts: string[] = [];
+  if (ci.exposureUs && ci.exposureUs > 0) {
+    if (ci.exposureUs <= 8000) {
+      parts.push(`1/${Math.max(100, Math.round(1_000_000 / ci.exposureUs))}s`);
+    } else {
+      parts.push(`${(ci.exposureUs / 1000).toFixed(1)}ms`);
+    }
+  }
+  if (ci.iso && ci.iso > 0) {
+    parts.push(`ISO ${ci.iso}`);
+  }
+  parts.push(`${ci.actualFps.toFixed(0)}fps`);
+  parts.push(`${(ci.ringSpanMs / 1000).toFixed(1)}s`);
+  return parts.join(" · ");
+}
+
+function gateGeometrySVG(g: GateLine, interactive: boolean, W = 640, H = 360): string {
   const x1 = g.p1x * W;
   const y1 = g.p1y * H;
   const x2 = g.p2x * W;
@@ -388,7 +415,13 @@ function gateGeometrySVG(g: GateLine, interactive: boolean, W = 360, H = 640): s
         <circle cx="${x2.toFixed(1)}" cy="${y2.toFixed(1)}" r="22" fill="rgba(34,211,238,0.14)" stroke="#22d3ee" stroke-width="2" />
         <circle cx="${x2.toFixed(1)}" cy="${y2.toFixed(1)}" r="4" fill="#22d3ee" />
         <text x="${(x2 + 14).toFixed(1)}" y="${(y2 + 4).toFixed(1)}" fill="#22d3ee" font-size="11" font-family="monospace" font-weight="bold">P2</text>
-      </g>`
+      </g>
+      ${
+        tapFocusSpot
+          ? `<rect x="${(tapFocusSpot.x * W - 20).toFixed(1)}" y="${(tapFocusSpot.y * H - 20).toFixed(1)}" width="40" height="40" rx="4"
+                   fill="none" stroke="#10b981" stroke-width="2" />`
+          : ""
+      }`
         : ""
     }
   `;
@@ -440,6 +473,11 @@ function renderLiveView(): string {
     rssiItems.length > 0
       ? rssiItems.map((r) => `${esc(r.callsign)} <b>${r.rssiDbm.toFixed(0)} dBm</b>`).join(" · ")
       : `Waiting for 50 Hz RSSI...`;
+  const minZoom = ci.minZoomRatio ?? 1.0;
+  const curZoom = ci.zoomRatio ?? cam.zoomRatio ?? 1.0;
+  const hasUltraWide = minZoom > 0.3 && minZoom < 0.9;
+  const isUltra = hasUltraWide && curZoom < 0.85;
+  const curFocusMode = ci.focusMode || cam.focusMode || "gate";
 
   return `
     <div class="live-grid">
@@ -454,25 +492,39 @@ function renderLiveView(): string {
         </div>
         <div class="hud-rssi-bar">
           <span class="hud-rssi-text" data-hud-rssi>${rssiHtml}</span>
-          <span class="hud-ring-text" data-hud-ring>Ring: ${(ci.ringSpanMs / 1000).toFixed(1)}s · ${ci.actualFps.toFixed(0)} fps ●</span>
+          <span class="hud-ring-text" data-hud-ring>${fmtCamTelemetry(ci)} ●</span>
         </div>
         <div class="cam-controls">
-          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
+            ${
+              hasUltraWide
+                ? `<div class="seg-group" title="Camera Lens Field of View">
+                     <button class="${isUltra ? "active" : ""}" data-zoom="${minZoom.toFixed(2)}">0.5x</button>
+                     <button class="${!isUltra ? "active" : ""}" data-zoom="1.0">1x</button>
+                   </div>`
+                : ""
+            }
             <div class="seg-group">
-              <button class="${cam.targetFps === 60 ? "active" : ""}" data-fps="60">60 fps</button>
+              <button class="${cam.targetFps === 60 ? "active" : ""}" data-fps="60">60</button>
               <button class="${cam.targetFps === 120 ? "active" : ""}" data-fps="120">120 fps</button>
             </div>
-            <select data-shutter title="Camera2 Exposure Time">
+            <select data-shutter title="Shutter-Priority Exposure (Auto-ISO)">
               <option value="0" ${cam.shutterUs === 0 ? "selected" : ""}>Shutter: Auto</option>
-              <option value="1000" ${cam.shutterUs === 1000 ? "selected" : ""}>Shutter: 1/1000s</option>
-              <option value="500" ${cam.shutterUs === 500 ? "selected" : ""}>Shutter: 1/2000s</option>
-              <option value="250" ${cam.shutterUs === 250 ? "selected" : ""}>Shutter: 1/4000s</option>
+              <option value="4000" ${cam.shutterUs === 4000 ? "selected" : ""}>1/250s</option>
+              <option value="2000" ${cam.shutterUs === 2000 ? "selected" : ""}>1/500s</option>
+              <option value="1000" ${cam.shutterUs === 1000 ? "selected" : ""}>1/1000s</option>
+              <option value="500" ${cam.shutterUs === 500 ? "selected" : ""}>1/2000s</option>
+              <option value="250" ${cam.shutterUs === 250 ? "selected" : ""}>1/4000s</option>
             </select>
-            <button class="${cam.focusLocked ? "primary" : ""}" data-act="lock-af">🎯 ${cam.focusLocked ? "AF Locked" : "Lock AF"}</button>
-          </div>
-          <div style="display:flex;gap:6px;align-items:center;">
-            <button data-act="flip-dir">⇄ Flip Dir</button>
-            <button class="${g.locked ? "amber" : ""}" data-act="toggle-lock">${g.locked ? "🔒 Line Locked" : "🔓 Lock Line"}</button>
+            <select data-focus-mode title="Fixed/Locked Focus (Prevents Focus Hunting)">
+              <option value="gate" ${curFocusMode === "gate" ? "selected" : ""}>Focus: Gate (3m)</option>
+              <option value="near" ${curFocusMode === "near" ? "selected" : ""}>Focus: Near (1m)</option>
+              <option value="inf" ${curFocusMode === "inf" ? "selected" : ""}>Focus: Far (∞)</option>
+              <option value="tap" ${curFocusMode === "tap" ? "selected" : ""}>Focus: Tap Lock</option>
+            </select>
+            <button class="${curFocusMode === "tap" ? "primary" : ""}" data-act="lock-af" title="Focus once on the Gate Line (or tap anywhere on camera) and lock">🎯 Focus</button>
+            <button data-act="flip-dir">⇄ Dir</button>
+            <button class="${g.locked ? "amber" : ""}" data-act="toggle-lock">${g.locked ? "🔒 Locked" : "🔓 Line"}</button>
           </div>
         </div>
       </div>
@@ -604,8 +656,8 @@ function renderInspectorTimelineSVG(p: PassRecord, curIdx: number): string {
 }
 
 function renderInspectorFrameOverlaySVG(p: PassRecord, f: FrameObservation | undefined): string {
-  const W = f?.frameWidth || state?.camInfo?.frameWidth || 360;
-  const H = f?.frameHeight || state?.camInfo?.frameHeight || 640;
+  const W = f?.frameWidth || state?.camInfo?.frameWidth || 640;
+  const H = f?.frameHeight || state?.camInfo?.frameHeight || 360;
   let svg = showGateOverlay ? gateGeometrySVG(p.gateSnapshot, false, W, H) : "";
   if (showBlobOverlay && f && f.hasBlob) {
     const cx = f.blobCx * W;
@@ -965,12 +1017,7 @@ function renderSetupModal(): string {
 
         <label style="display:flex;align-items:center;gap:8px;font-size:12px;">
           <input type="checkbox" id="cfg-rsshutter" ${c.rollingShutterComp ? "checked" : ""} />
-          Compensate CMOS rolling-shutter readout skew at blob vertical position
-        </label>
-
-        <label style="display:flex;align-items:center;gap:8px;font-size:12px;">
-          <input type="checkbox" id="cfg-lan" ${l.exposeLan ? "checked" : ""} />
-          Expose GateCam UI on Wi-Fi LAN (:18095) for zero-bump laptop inspection
+          Compensate CMOS rolling-shutter readout skew
         </label>
 
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px;">
@@ -1008,12 +1055,31 @@ function bindLivePointerHandlers(): void {
       void updateGate({ ...state.gate, dirSign: state.gate.dirSign < 0 ? 1 : -1 });
       return;
     }
-    if (state.gate.locked) return;
     const hEl = target?.closest("[data-handle]");
     const handle = hEl?.getAttribute("data-handle") as "p1" | "p2" | null;
-    if (!handle) return;
-    dragHandle = handle;
-    svg.setPointerCapture(e.pointerId);
+    if (handle) {
+      if (state.gate.locked) return;
+      dragHandle = handle;
+      svg.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    // Tapping anywhere else on the camera preview triggers one-shot tap-to-focus & locks AF there!
+    const r = svg.getBoundingClientRect();
+    const nx = Math.max(0.02, Math.min(0.98, (e.clientX - r.left) / Math.max(1, r.width)));
+    const ny = Math.max(0.02, Math.min(0.98, (e.clientY - r.top) / Math.max(1, r.height)));
+    tapFocusSpot = { x: nx, y: ny };
+    if (tapFocusTimer !== null) clearTimeout(tapFocusTimer);
+    render();
+    tapFocusTimer = window.setTimeout(() => {
+      tapFocusSpot = null;
+      tapFocusTimer = null;
+      if (route === "live" && !dragHandle) render();
+    }, 850);
+    void apiJSON<AppState>("POST", "/v1/gatecam/camera:focus", { x: nx, y: ny }).then((next) => {
+      state = next;
+      if (!dragHandle) render();
+    });
   };
 
   svg.onpointermove = (e: PointerEvent) => {
@@ -1092,7 +1158,7 @@ async function updateCamera(next: CameraConfig): Promise<void> {
 
 appRoot.addEventListener("click", async (e) => {
   const el = (e.target as HTMLElement | null)?.closest<HTMLElement>(
-    "[data-nav],[data-open-pass],[data-fps],[data-act],[data-insp-step],[data-insp-jump],[data-insp-toggle],[data-preset-url],[data-close-backdrop]"
+    "[data-nav],[data-open-pass],[data-fps],[data-zoom],[data-act],[data-insp-step],[data-insp-jump],[data-insp-toggle],[data-preset-url],[data-close-backdrop]"
   );
   if (!el || !state) return;
 
@@ -1116,6 +1182,11 @@ appRoot.addEventListener("click", async (e) => {
   const fpsAttr = el.getAttribute("data-fps");
   if (fpsAttr) {
     await updateCamera({ ...state.camera, targetFps: parseInt(fpsAttr, 10) });
+    return;
+  }
+  const zoomAttr = el.getAttribute("data-zoom");
+  if (zoomAttr) {
+    await updateCamera({ ...state.camera, zoomRatio: parseFloat(zoomAttr) || 1.0 });
     return;
   }
   const stepAttr = el.getAttribute("data-insp-step");
@@ -1226,7 +1297,6 @@ appRoot.addEventListener("click", async (e) => {
       const modelVal = (document.getElementById("cfg-model") as HTMLSelectElement).value;
       const sensVal = parseFloat((document.getElementById("cfg-sens") as HTMLInputElement).value) || 16;
       const rsVal = (document.getElementById("cfg-rsshutter") as HTMLInputElement).checked;
-      const lanVal = (document.getElementById("cfg-lan") as HTMLInputElement).checked;
 
       await apiJSON("PUT", "/v1/gatecam/camera", {
         ...state.camera,
@@ -1240,7 +1310,7 @@ appRoot.addEventListener("click", async (e) => {
         basicAuth: authVal,
         gateFilter: gateVal,
         pilotFilter: pilotVal,
-        exposeLan: lanVal,
+        exposeLan: false,
       });
       setupOpen = false;
       updateNativeUnderlayVisibility();
@@ -1256,6 +1326,11 @@ appRoot.addEventListener("change", async (e) => {
   if (t.hasAttribute("data-shutter")) {
     const us = parseInt((t as HTMLSelectElement).value, 10) || 0;
     await updateCamera({ ...state.camera, shutterUs: us });
+    return;
+  }
+  if (t.hasAttribute("data-focus-mode")) {
+    const fm = (t as HTMLSelectElement).value || "gate";
+    await updateCamera({ ...state.camera, focusMode: fm, focusLocked: true });
   }
 });
 
@@ -1298,7 +1373,7 @@ function connectLiveWS(): void {
         }
         const ringEl = document.querySelector("[data-hud-ring]");
         if (ringEl) {
-          ringEl.textContent = `Ring: ${(state.camInfo.ringSpanMs / 1000).toFixed(1)}s · ${state.camInfo.actualFps.toFixed(0)} fps ●`;
+          ringEl.textContent = `${fmtCamTelemetry(state.camInfo)} ●`;
         }
       } else if ((msg.type === "pass_added" || msg.type === "pass_updated") && state) {
         void refreshStateSilently().then(() => {

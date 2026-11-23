@@ -17,13 +17,15 @@ type GateLine struct {
 
 // CameraConfig controls Camera2 capture parameters and OpenCV motion model settings.
 type CameraConfig struct {
-	TargetFPS          int     `json:"targetFps"`          // 60 or 120
-	ShutterUs          int     `json:"shutterUs"`          // 0 = Auto, 1000 = 1/1000s, 500 = 1/2000s, 250 = 1/4000s
-	FocusLocked        bool    `json:"focusLocked"`        // True when AF + AWB are locked on the gate
-	MotionModel        string  `json:"motionModel"`        // "mog2" | "knn" | "onnx"
-	Sensitivity        float64 `json:"sensitivity"`        // MOG2 varThreshold (default 16)
-	LookbackHalfMs     int     `json:"lookbackHalfMs"`     // 300, 450, or 600 ms
-	RollingShutterComp bool    `json:"rollingShutterComp"` // Compensate row readout skew at blob cy
+	TargetFPS          int     `json:"targetFps"`                   // 60 or 120
+	ShutterUs          int     `json:"shutterUs"`                   // 0=Auto, 4000=1/250s, 2000=1/500s, 1000=1/1000s, 500=1/2000s, 250=1/4000s
+	ZoomRatio          float64 `json:"zoomRatio,omitempty"`         // 1.0 = Wide, <1.0 (e.g. 0.56) = Ultra-Wide
+	FocusMode          string  `json:"focusMode,omitempty"`         // "gate" (3m fixed), "near" (1m fixed), "inf" (0.0 fixed), "tap" (locked one-shot)
+	FocusLocked        bool    `json:"focusLocked"`                 // True when AF is locked (always true except briefly during one-shot tap)
+	MotionModel        string  `json:"motionModel"`                 // "mog2" | "knn"
+	Sensitivity        float64 `json:"sensitivity"`                 // MOG2 varThreshold (default 16)
+	LookbackHalfMs     int     `json:"lookbackHalfMs"`              // 300, 450, or 600 ms
+	RollingShutterComp bool    `json:"rollingShutterComp"`          // Compensate row readout skew at blob position
 }
 
 // LinkConfig configures how GateCam connects to the SlapRF timing engine.
@@ -37,20 +39,26 @@ type LinkConfig struct {
 
 // CameraStatus reports live Camera2 + ring-buffer health from the hardware (or dev simulator) shim.
 type CameraStatus struct {
-	Active          bool    `json:"active"`
-	Simulated       bool    `json:"simulated,omitempty"`
-	FrameWidth      int     `json:"frameWidth"`
-	FrameHeight     int     `json:"frameHeight"`
-	ActualFPS       float64 `json:"actualFps"`
-	SupportedFPS    []int   `json:"supportedFps"`
-	ShutterUs       int     `json:"shutterUs"`
-	FocusLocked     bool    `json:"focusLocked"`
-	RingCapacity    int     `json:"ringCapacity"`
-	RingFilled      int     `json:"ringFilled"`
-	RingSpanMs      float64 `json:"ringSpanMs"`
-	TimestampSource int     `json:"timestampSource"` // 0 = CLOCK_MONOTONIC, 1 = REALTIME
-	OpenCVVersion   string  `json:"opencvVersion"`
-	LastError       string  `json:"lastError,omitempty"`
+	Active            bool    `json:"active"`
+	Simulated         bool    `json:"simulated,omitempty"`
+	FrameWidth        int     `json:"frameWidth"`
+	FrameHeight       int     `json:"frameHeight"`
+	ActualFPS         float64 `json:"actualFps"`
+	SupportedFPS      []int   `json:"supportedFps"`
+	ShutterUs         int     `json:"shutterUs"`
+	ExposureUs        int     `json:"exposureUs,omitempty"`
+	ISO               int     `json:"iso,omitempty"`
+	ZoomRatio         float64 `json:"zoomRatio,omitempty"`
+	MinZoomRatio      float64 `json:"minZoomRatio,omitempty"`
+	FocusMode         string  `json:"focusMode,omitempty"`
+	FocusDistDiopters float64 `json:"focusDistDiopters,omitempty"`
+	FocusLocked       bool    `json:"focusLocked"`
+	RingCapacity      int     `json:"ringCapacity"`
+	RingFilled        int     `json:"ringFilled"`
+	RingSpanMs        float64 `json:"ringSpanMs"`
+	TimestampSource   int     `json:"timestampSource"` // 0 = CLOCK_MONOTONIC, 1 = REALTIME
+	OpenCVVersion     string  `json:"opencvVersion"`
+	LastError         string  `json:"lastError,omitempty"`
 }
 
 // SyncStatus reports the Cristian min-RTT clock lock between the camera sensor clock and SlapRF's serverTimestampUs.
@@ -112,6 +120,7 @@ type FrameObservation struct {
 	RollingShutterSkewNs int64   `json:"rollingShutterSkewNs"`
 	FrameWidth           int     `json:"frameWidth"`
 	FrameHeight          int     `json:"frameHeight"`
+	SensorRotDeg         int     `json:"sensorRotDeg,omitempty"`
 	HasBlob              bool    `json:"hasBlob"`
 	OnTrack              bool    `json:"onTrack"`
 	BlobCX               float64 `json:"blobCx"`   // Normalized [0..1]

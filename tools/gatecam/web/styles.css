@@ -176,11 +176,11 @@ body.is-native-underlay.route-live .cam-column {
 
 .viewfinder-stage {
   position: relative;
-  height: 100%;
-  width: auto;
+  width: 100%;
+  height: auto;
   max-width: 100%;
   max-height: 100%;
-  aspect-ratio: 9 / 16;
+  aspect-ratio: 16 / 9;
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
@@ -407,11 +407,11 @@ body.is-native-underlay.route-live .viewfinder-stage {
 
 .inspector-stage {
   position: relative;
-  height: 100%;
-  width: auto;
+  width: 100%;
+  height: auto;
   max-width: 100%;
   max-height: 100%;
-  aspect-ratio: 9 / 16;
+  aspect-ratio: 16 / 9;
 }
 
 .timeline-card {
@@ -552,10 +552,18 @@ input[type="text"], input[type="password"], select {
 
 @media (max-aspect-ratio: 1/1), (max-width: 720px) {
   .live-grid {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(300px, 62%) minmax(0, 1fr);
+    display: flex;
+    flex-direction: column;
+  }
+  .cam-column {
+    flex: 0 0 auto;
+  }
+  .viewfinder-wrap {
+    flex: 0 0 auto;
+    padding: 6px 6px 4px;
   }
   .side-panel {
+    flex: 1 1 auto;
     border-left: none;
     border-top: 1px solid var(--border);
     padding-bottom: env(safe-area-inset-bottom, 0px);
@@ -579,6 +587,6 @@ input[type="text"], input[type="password"], select {
     overflow-y: auto;
   }
   .inspector-frame-box {
-    min-height: 310px;
+    min-height: 220px;
   }
 }

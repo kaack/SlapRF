@@ -102,7 +102,7 @@ func NewServer(cfg Config) *Server {
 		cam:       cfg.Camera,
 		gate:      DefaultGateLine(),
 		camCfg:    DefaultCameraConfig(),
-		linkCfg:   LinkConfig{SlapRFURL: defLink, ExposeLAN: true},
+		linkCfg:   LinkConfig{SlapRFURL: defLink, ExposeLAN: false},
 		passByID:  make(map[int]*PassRecord),
 		wsClients: make(map[*wsSubscriber]struct{}),
 		stopCh:    make(chan struct{}),
@@ -181,9 +181,17 @@ func (s *Server) loadSettings() {
 		s.gate = saved.Gate
 	}
 	if saved.Camera.TargetFPS > 0 {
+		if saved.Camera.FocusMode == "" {
+			saved.Camera.FocusMode = "gate"
+			saved.Camera.FocusLocked = true
+		}
+		if saved.Camera.ZoomRatio <= 0 {
+			saved.Camera.ZoomRatio = 1.0
+		}
 		s.camCfg = saved.Camera
 	}
 	if strings.TrimSpace(saved.Link.SlapRFURL) != "" {
+		saved.Link.ExposeLAN = false
 		s.linkCfg = saved.Link
 	}
 }
@@ -446,6 +454,12 @@ func (s *Server) handlePutCamera(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.camCfg = next
 	s.camCfg.FocusLocked = st.FocusLocked
+	if st.FocusMode != "" {
+		s.camCfg.FocusMode = st.FocusMode
+	}
+	if st.ZoomRatio > 0 {
+		s.camCfg.ZoomRatio = st.ZoomRatio
+	}
 	s.saveSettingsLocked()
 	s.mu.Unlock()
 	snap := s.buildStateSnapshot()
@@ -469,8 +483,12 @@ func (s *Server) handlePostFocus(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	st := s.cam.Status()
 	s.mu.Lock()
-	s.camCfg.FocusLocked = s.cam.Status().FocusLocked
+	s.camCfg.FocusLocked = st.FocusLocked
+	if st.FocusMode != "" {
+		s.camCfg.FocusMode = st.FocusMode
+	}
 	s.saveSettingsLocked()
 	s.mu.Unlock()
 	snap := s.buildStateSnapshot()

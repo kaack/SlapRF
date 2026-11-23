@@ -51,19 +51,25 @@ func (s *SimCameraProvider) Status() CameraStatus {
 		fps = 120
 	}
 	return CameraStatus{
-		Active:          true,
-		Simulated:       true,
-		FrameWidth:      640,
-		FrameHeight:     360,
-		ActualFPS:       fps,
-		SupportedFPS:    []int{60, 120},
-		ShutterUs:       cfg.ShutterUs,
-		FocusLocked:     cfg.FocusLocked,
-		RingCapacity:    168,
-		RingFilled:      168,
-		RingSpanMs:      round1(168000.0 / fps),
-		TimestampSource: 0,
-		OpenCVVersion:   "4.12.0 (sim)",
+		Active:            true,
+		Simulated:         true,
+		FrameWidth:        640,
+		FrameHeight:       360,
+		ActualFPS:         fps,
+		SupportedFPS:      []int{60, 120},
+		ShutterUs:         cfg.ShutterUs,
+		ExposureUs:        500,
+		ISO:               400,
+		ZoomRatio:         1.0,
+		MinZoomRatio:      0.56,
+		FocusMode:         cfg.FocusMode,
+		FocusDistDiopters: 0.35,
+		FocusLocked:       true,
+		RingCapacity:      168,
+		RingFilled:        168,
+		RingSpanMs:        round1(168000.0 / fps),
+		TimestampSource:   0,
+		OpenCVVersion:     "4.12.0 (sim)",
 	}
 }
 
@@ -88,6 +94,7 @@ func (s *SimCameraProvider) Configure(cfg CameraConfig) (CameraStatus, error) {
 
 func (s *SimCameraProvider) TriggerFocusLock(_, _ float64) error {
 	s.mu.Lock()
+	s.cfg.FocusMode = "tap"
 	s.cfg.FocusLocked = true
 	s.mu.Unlock()
 	return nil

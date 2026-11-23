@@ -21,6 +21,7 @@ import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.Image;
 import android.media.ImageReader;
+import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.SystemClock;
@@ -61,8 +62,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * circular ring buffer, and retrospective OpenCV 4.12 motion/optical-flow lookback analysis.
  */
 public final class GateCamShim {
-    private static final int RING_W = 360;
-    private static final int RING_H = 640;
+    private static final int RING_W = 640;
+    private static final int RING_H = 360;
     private static final int NV21_BYTES = RING_W * RING_H * 3 / 2;
     private static final int RING_CAP = 168; // ~58 MB static allocation, zero per-frame GC
 
@@ -72,6 +73,8 @@ public final class GateCamShim {
     private static volatile SurfaceTexture boundSurfaceTexture;
     private static volatile int previewWidth = 1280;
     private static volatile int previewHeight = 720;
+    private static volatile int capW = 1280;
+    private static volatile int capH = 960;
 
     private static HandlerThread camThread;
     private static Handler camHandler;
@@ -82,18 +85,34 @@ public final class GateCamShim {
 
     private static String cameraId = "";
     private static int sensorOrientation = 90;
+    private static volatile int lastRotDeg = 90;
     private static volatile int timestampSource = CameraMetadata.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN;
-    private static Rect activeArrayRect = new Rect(0, 0, 1280, 720);
-    private static Range<Integer> isoRange = new Range<>(100, 3200);
+    private static Rect activeArrayRect = new Rect(0, 0, 4032, 3024);
+    private static Range<Integer> isoRange = new Range<>(50, 6400);
+    private static Range<Integer> boostRange = new Range<>(100, 100);
+    private static Range<Long> expRangeNs = new Range<>(50_000L, 33_333_333L);
+    private static float minFocusDist = 10.0f;
+    private static float minZoomRatio = 1.0f;
+    private static float maxZoomRatio = 8.0f;
     private static List<Range<Integer>> availableFpsRanges = new ArrayList<>();
     private static boolean supports120Fps = false;
 
     // Requested camera configuration
     private static volatile int targetFps = 120;
-    private static volatile int shutterUs = 0; // 0=Auto, 1000=1/1000s, 500=1/2000s, 250=1/4000s
-    private static volatile boolean focusLocked = false;
-    private static volatile Float lockedFocusDist = null;
+    private static volatile int shutterUs = 0; // 0=Auto, 4000=1/250s, 2000=1/500s, 1000=1/1000s, 500=1/2000s, 250=1/4000s
+    private static volatile float zoomRatio = 1.0f;
+    private static volatile String focusMode = "gate"; // "gate" (2.8m), "near" (1.0m), "inf" (0.0), "tap"
+    private static volatile Float lockedFocusDist = 0.35f;
+    private static volatile boolean oneShotAfActive = false;
+    private static volatile MeteringRectangle[] activeAfRegions = null;
     private static volatile String lastError = "";
+
+    // Shutter-Priority (Tv) Auto-ISO state when shutterUs > 0
+    private static volatile double lastSceneEvNsIso = 8_000_000.0 * 400.0;
+    private static volatile double currentTotalIso = 400.0;
+    private static volatile int manualIso = 400;
+    private static volatile int manualBoost = 100;
+    private static int aeTick = 0;
 
     // Zero-GC Circular Frame + Metadata Ring Buffer
     private static final Object ringLock = new Object();
@@ -112,8 +131,10 @@ public final class GateCamShim {
     private static final long[] metaExpNs = new long[32];
     private static final long[] metaSkewNs = new long[32];
     private static int metaHead = 0;
-    private static volatile long latestExposureNs = 500_000L;
+    private static volatile long latestExposureNs = 8_000_000L;
     private static volatile long latestSkewNs = 8_000_000L;
+    private static volatile int latestIso = 200;
+    private static volatile float latestFocusDiopters = 0.35f;
 
     // Transient extracted burst JPEG cache retrieved by Go over JNI
     private static final class BurstBuffers {
@@ -210,8 +231,16 @@ public final class GateCamShim {
                 if (Surface.ROTATION_90 == rot || Surface.ROTATION_270 == rot) {
                     m.postScale((float) viewH / (float) viewW, (float) viewW / (float) viewH, cx, cy);
                     m.postRotate(90 * (rot - 2), cx, cy);
-                } else if (Surface.ROTATION_180 == rot) {
-                    m.postRotate(180, cx, cy);
+                } else {
+                    // Phone is held upright in Portrait (ROTATION_0 / ROTATION_180):
+                    // SurfaceTexture presents upright buffer of aspect (uprightW = capH, uprightH = capW).
+                    // Center-crop vertically to match our full-width 16:9 landscape viewfinder with 1:1 square pixels.
+                    float desiredCropH = Math.max(1f, (float) capH * ((float) viewH / (float) viewW));
+                    float scaleY = (float) capW / desiredCropH;
+                    m.postScale(1.0f, scaleY, cx, cy);
+                    if (Surface.ROTATION_180 == rot) {
+                        m.postRotate(180, cx, cy);
+                    }
                 }
                 tv.setTransform(m);
             }
@@ -252,6 +281,19 @@ public final class GateCamShim {
             if (aa != null) activeArrayRect = aa;
             Range<Integer> sensRange = cc.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
             if (sensRange != null) isoRange = sensRange;
+            Range<Integer> bRange = cc.get(CameraCharacteristics.CONTROL_POST_RAW_SENSITIVITY_BOOST_RANGE);
+            if (bRange != null) boostRange = bRange;
+            Range<Long> eRange = cc.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
+            if (eRange != null) expRangeNs = eRange;
+            Float mfd = cc.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE);
+            if (mfd != null && mfd > 0f) minFocusDist = mfd;
+            if (Build.VERSION.SDK_INT >= 30) {
+                Range<Float> zRange = cc.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE);
+                if (zRange != null) {
+                    minZoomRatio = Math.max(0.4f, zRange.getLower());
+                    maxZoomRatio = Math.max(1.0f, zRange.getUpper());
+                }
+            }
 
             Range<Integer>[] ranges = cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
             availableFpsRanges.clear();
@@ -262,9 +304,23 @@ public final class GateCamShim {
                     if (r.getUpper() >= 120) supports120Fps = true;
                 }
             }
+
+            // Prefer 1280x960 (4:3 full horizontal sensor width when phone is held upright in Portrait!)
+            capW = 1280;
+            capH = 720;
             StreamConfigurationMap map = cc.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
             if (map != null) {
-                long minDur = map.getOutputMinFrameDuration(ImageFormat.YUV_420_888, new Size(1280, 720));
+                Size[] sizes = map.getOutputSizes(ImageFormat.YUV_420_888);
+                if (sizes != null) {
+                    for (Size s : sizes) {
+                        if (s.getWidth() == 1280 && s.getHeight() == 960) {
+                            capW = 1280;
+                            capH = 960;
+                            break;
+                        }
+                    }
+                }
+                long minDur = map.getOutputMinFrameDuration(ImageFormat.YUV_420_888, new Size(capW, capH));
                 if (minDur > 0 && minDur <= 9_000_000L) {
                     supports120Fps = true;
                 }
@@ -337,12 +393,13 @@ public final class GateCamShim {
         try {
             SurfaceTexture st = previewTexture.getSurfaceTexture();
             boundSurfaceTexture = st;
-            st.setDefaultBufferSize(1280, 720);
+            st.setDefaultBufferSize(capW, capH);
+            applyPreviewTransform(previewTexture, previewWidth, previewHeight);
             if (previewSurface != null) previewSurface.release();
             previewSurface = new Surface(st);
 
             if (yuvReader != null) yuvReader.close();
-            yuvReader = ImageReader.newInstance(1280, 720, ImageFormat.YUV_420_888, 6);
+            yuvReader = ImageReader.newInstance(capW, capH, ImageFormat.YUV_420_888, 6);
             yuvReader.setOnImageAvailableListener(new ImageReader.OnImageAvailableListener() {
                 @Override
                 public void onImageAvailable(ImageReader reader) {
@@ -396,6 +453,36 @@ public final class GateCamShim {
         return availableFpsRanges.isEmpty() ? new Range<>(30, 60) : availableFpsRanges.get(availableFpsRanges.size() - 1);
     }
 
+    private static float resolveFixedFocusDiopters() {
+        if ("inf".equalsIgnoreCase(focusMode)) {
+            return 0.0f;
+        }
+        if ("near".equalsIgnoreCase(focusMode)) {
+            return Math.min(minFocusDist, 1.0f); // ~1.0 m
+        }
+        if ("tap".equalsIgnoreCase(focusMode) && lockedFocusDist != null) {
+            return Math.max(0.0f, Math.min(minFocusDist, lockedFocusDist));
+        }
+        return Math.min(minFocusDist, 0.35f); // Default "gate": ~2.85 m hyperfocal
+    }
+
+    private static void updateManualIsoFromTotal(double totalIso) {
+        int isoMin = isoRange.getLower();
+        int isoMax = isoRange.getUpper();
+        int bMin = boostRange.getLower();
+        int bMax = boostRange.getUpper();
+        double maxCombined = (double) isoMax * ((double) bMax / 100.0);
+        currentTotalIso = Math.max((double) isoMin, Math.min(maxCombined, totalIso));
+        if (currentTotalIso <= isoMax) {
+            manualIso = Math.max(isoMin, Math.min(isoMax, (int) Math.round(currentTotalIso)));
+            manualBoost = bMin;
+        } else {
+            manualIso = isoMax;
+            int b = (int) Math.round(100.0 * currentTotalIso / (double) isoMax);
+            manualBoost = Math.max(bMin, Math.min(bMax, b));
+        }
+    }
+
     private static synchronized void applyRepeatingRequestLocked() {
         if (cameraDevice == null || captureSession == null || previewSurface == null || yuvReader == null) return;
         try {
@@ -406,28 +493,37 @@ public final class GateCamShim {
             Range<Integer> fpsRange = pickBestFpsRange(targetFps);
             b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange);
 
+            if (Build.VERSION.SDK_INT >= 30) {
+                float z = Math.max(minZoomRatio, Math.min(maxZoomRatio, zoomRatio));
+                b.set(CaptureRequest.CONTROL_ZOOM_RATIO, z);
+            }
+
             if (shutterUs > 0) {
-                // Manual fast shutter for razor-sharp high-speed drone edges + boosted ISO
+                // Shutter-Priority (Tv) mode: fixed shutter exposure + automatic closed-loop ISO
+                long expNs = Math.max(expRangeNs.getLower(), Math.min(expRangeNs.getUpper(), (long) shutterUs * 1000L));
                 b.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF);
-                b.set(CaptureRequest.SENSOR_EXPOSURE_TIME, (long) shutterUs * 1000L);
-                long frameDurNs = 1_000_000_000L / Math.max(30, fpsRange.getUpper());
+                b.set(CaptureRequest.SENSOR_EXPOSURE_TIME, expNs);
+                long frameDurNs = Math.max(expNs, 1_000_000_000L / Math.max(30, fpsRange.getUpper()));
                 b.set(CaptureRequest.SENSOR_FRAME_DURATION, frameDurNs);
-                int targetIso = shutterUs <= 250 ? 1200 : (shutterUs <= 500 ? 700 : 400);
-                targetIso = Math.max(isoRange.getLower(), Math.min(isoRange.getUpper(), targetIso));
-                b.set(CaptureRequest.SENSOR_SENSITIVITY, targetIso);
+                int iso = Math.max(isoRange.getLower(), Math.min(isoRange.getUpper(), manualIso));
+                b.set(CaptureRequest.SENSOR_SENSITIVITY, iso);
+                int boost = Math.max(boostRange.getLower(), Math.min(boostRange.getUpper(), manualBoost));
+                b.set(CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST, boost);
             } else {
                 b.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON);
             }
 
-            if (focusLocked) {
-                b.set(CaptureRequest.CONTROL_AWB_LOCK, true);
-                if (lockedFocusDist != null) {
-                    b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF);
-                    b.set(CaptureRequest.LENS_FOCUS_DISTANCE, lockedFocusDist);
+            if (oneShotAfActive) {
+                b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_AUTO);
+                if (activeAfRegions != null) {
+                    b.set(CaptureRequest.CONTROL_AF_REGIONS, activeAfRegions);
                 }
             } else {
-                b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO);
-                b.set(CaptureRequest.CONTROL_AWB_LOCK, false);
+                // Fixed / Locked focus — never hunt when hands or drones pass in front of the gate!
+                b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF);
+                float dist = resolveFixedFocusDiopters();
+                b.set(CaptureRequest.LENS_FOCUS_DISTANCE, dist);
+                latestFocusDiopters = dist;
             }
 
             captureSession.setRepeatingRequest(b.build(), captureCallback, camHandler);
@@ -442,12 +538,37 @@ public final class GateCamShim {
             Long ts = result.get(CaptureResult.SENSOR_TIMESTAMP);
             Long exp = result.get(CaptureResult.SENSOR_EXPOSURE_TIME);
             Long skew = result.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW);
+            Integer iso = result.get(CaptureResult.SENSOR_SENSITIVITY);
+            Integer boost = result.get(CaptureResult.CONTROL_POST_RAW_SENSITIVITY_BOOST);
             Float fd = result.get(CaptureResult.LENS_FOCUS_DISTANCE);
-            if (fd != null && focusLocked && lockedFocusDist == null) {
-                lockedFocusDist = fd;
-            }
+
             if (exp != null && exp > 0) latestExposureNs = exp;
             if (skew != null && skew > 0) latestSkewNs = skew;
+            if (iso != null && iso > 0) latestIso = iso;
+            if (fd != null) latestFocusDiopters = fd;
+
+            if (shutterUs == 0 && exp != null && exp > 0 && iso != null && iso > 0) {
+                double bMult = (boost != null && boost > 0) ? (boost / 100.0) : 1.0;
+                lastSceneEvNsIso = (double) exp * (double) iso * bMult;
+            }
+
+            if (oneShotAfActive) {
+                Integer afState = result.get(CaptureResult.CONTROL_AF_STATE);
+                if (afState != null && (afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED
+                        || afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED)) {
+                    if (fd != null) {
+                        lockedFocusDist = fd;
+                    }
+                    oneShotAfActive = false;
+                    camHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            applyRepeatingRequestLocked();
+                        }
+                    });
+                }
+            }
+
             if (ts != null) {
                 synchronized (metaLock) {
                     metaTsKey[metaHead] = ts;
@@ -477,7 +598,7 @@ public final class GateCamShim {
         if (img.getFormat() != ImageFormat.YUV_420_888) return;
         int srcW = img.getWidth();
         int srcH = img.getHeight();
-        if (srcW < RING_H || srcH < RING_W) return;
+        if (srcW < RING_W || srcH < RING_H) return;
 
         long tsNs = img.getTimestamp();
         if (prevFrameTsNs > 0 && tsNs > prevFrameTsNs) {
@@ -489,6 +610,7 @@ public final class GateCamShim {
         prevFrameTsNs = tsNs;
 
         int rotDeg = computeSensorToDisplayDegrees();
+        lastRotDeg = rotDeg;
         long[] meta = new long[2];
         lookupCaptureMeta(tsNs, meta);
 
@@ -499,7 +621,7 @@ public final class GateCamShim {
             dst = ringNV21[slot];
         }
 
-        downsamplePortraitYuv420ToNV21(img, dst, rotDeg);
+        downsampleLandscapeWidescreenToNV21(img, dst, rotDeg);
 
         synchronized (ringLock) {
             ringSensorTsNs[slot] = tsNs;
@@ -508,13 +630,47 @@ public final class GateCamShim {
             ringHead = (slot + 1) % RING_CAP;
             if (ringCount < RING_CAP) ringCount++;
         }
+
+        // Closed-loop Shutter-Priority (Tv) Auto-ISO adjustment every 8 frames when shutterUs > 0
+        if (shutterUs > 0 && (++aeTick & 7) == 0) {
+            int lumaLen = RING_W * RING_H;
+            int step = Math.max(1, lumaLen / 256);
+            long sumY = 0;
+            int cnt = 0;
+            for (int idx = step / 2; idx < lumaLen; idx += step) {
+                sumY += (dst[idx] & 0xFF);
+                cnt++;
+            }
+            if (cnt > 0) {
+                double meanY = (double) sumY / (double) cnt;
+                // Keep scene brightness in a comfortable [92 .. 138] target band around 112
+                if (meanY < 92.0 || meanY > 138.0) {
+                    double ratio = 112.0 / Math.max(10.0, meanY);
+                    double damped = Math.max(0.55, Math.min(2.1, Math.pow(ratio, 0.65)));
+                    synchronized (GateCamShim.class) {
+                        if (shutterUs > 0) {
+                            int prevIso = manualIso;
+                            int prevBoost = manualBoost;
+                            updateManualIsoFromTotal(currentTotalIso * damped);
+                            lastSceneEvNsIso = (double) shutterUs * 1000.0 * currentTotalIso;
+                            if (Math.abs(manualIso - prevIso) >= Math.max(10, prevIso / 12)
+                                    || Math.abs(manualBoost - prevBoost) >= 6) {
+                                applyRepeatingRequestLocked();
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /**
-     * Rotates 1280x720 landscape sensor YUV_420_888 by 90 deg CW (or 270 deg CW) and downsamples 2x
-     * into upright 360x640 Portrait NV21 in a single zero-allocation pass.
+     * Converts sensor YUV_420_888 (e.g. 1280x960 4:3) into an upright 640x360 (16:9) Landscape widescreen
+     * NV21 frame in a single zero-allocation pass. When the phone is held upright in Portrait (rotDeg=90/270),
+     * uses 100% of the sensor's horizontal width (`srcH=960`) and center-crops vertically (`540` of `1280` rows),
+     * matching the TextureView preview pixel-for-pixel.
      */
-    private static void downsamplePortraitYuv420ToNV21(Image img, byte[] dst, int rotDeg) {
+    private static void downsampleLandscapeWidescreenToNV21(Image img, byte[] dst, int rotDeg) {
         Image.Plane[] planes = img.getPlanes();
         ByteBuffer yBuf = planes[0].getBuffer();
         ByteBuffer uBuf = planes[1].getBuffer();
@@ -524,36 +680,76 @@ public final class GateCamShim {
         int uvRowStride = planes[1].getRowStride();
         int uvPixStride = planes[1].getPixelStride();
 
-        int srcW = img.getWidth();   // 1280
-        int srcH = img.getHeight();  // 720
-        int stepAlongW = srcW / RING_H; // 1280 / 640 = 2
-        int stepAlongH = srcH / RING_W; // 720 / 360 = 2
-        boolean rot270 = (rotDeg == 270);
+        int srcW = img.getWidth();  // 1280
+        int srcH = img.getHeight(); // 960 (or 720)
 
-        // 1. Luma Y plane (360 wide x 640 tall)
-        int outIdx = 0;
-        for (int dy = 0; dy < RING_H; dy++) {
-            int sx = rot270 ? (srcW - 1 - dy * stepAlongW) : (dy * stepAlongW);
-            int sxOff = sx * yPixStride;
-            for (int dx = 0; dx < RING_W; dx++) {
-                int sy = rot270 ? (dx * stepAlongH) : (srcH - 1 - dx * stepAlongH);
-                dst[outIdx++] = yBuf.get(sy * yRowStride + sxOff);
+        if (rotDeg == 90 || rotDeg == 270) {
+            boolean rot270 = (rotDeg == 270);
+            int cropH = Math.min(srcW, (srcH * RING_H) / RING_W); // 960 * 360 / 640 = 540
+            int uTop = (srcW - cropH) / 2;                        // (1280 - 540) / 2 = 370
+
+            int outIdx = 0;
+            for (int dy = 0; dy < RING_H; dy++) {
+                int uy = uTop + (dy * cropH) / RING_H;
+                int sx = rot270 ? (srcW - 1 - uy) : uy;
+                int sxOff = sx * yPixStride;
+                for (int dx = 0; dx < RING_W; dx++) {
+                    int ux = (dx * srcH) / RING_W;
+                    int sy = rot270 ? ux : (srcH - 1 - ux);
+                    dst[outIdx++] = yBuf.get(sy * yRowStride + sxOff);
+                }
             }
+
+            int uvW = RING_W / 2; // 320
+            int uvH = RING_H / 2; // 180
+            int srcUvW = srcW / 2; // 640
+            int srcUvH = srcH / 2; // 480
+            int cropUvH = Math.min(srcUvW, (srcUvH * uvH) / uvW); // 270
+            int uUvTop = (srcUvW - cropUvH) / 2;                  // 185
+            for (int dy = 0; dy < uvH; dy++) {
+                int uy = uUvTop + (dy * cropUvH) / uvH;
+                int sx = rot270 ? (srcUvW - 1 - uy) : uy;
+                int sxOff = Math.min(srcUvW - 2, Math.max(0, sx)) * uvPixStride;
+                for (int dx = 0; dx < uvW; dx++) {
+                    int ux = (dx * srcUvH) / uvW;
+                    int sy = rot270 ? ux : (srcUvH - 1 - ux);
+                    int off = sy * uvRowStride + sxOff;
+                    dst[outIdx++] = vBuf.get(off);
+                    dst[outIdx++] = uBuf.get(off);
+                }
+            }
+            return;
         }
 
-        // 2. Interleaved VU plane for NV21 (180 wide x 320 tall pairs)
-        int uvH = RING_H / 2; // 320
-        int uvW = RING_W / 2; // 180
-        int srcUvW = srcW / 2; // 640
-        int srcUvH = srcH / 2; // 360
-        int uvStepW = Math.max(1, srcUvW / uvH);
-        int uvStepH = Math.max(1, srcUvH / uvW);
+        // Landscape device hold fallback (rotDeg == 0 or 180)
+        boolean rot180 = (rotDeg == 180);
+        int cropH = Math.min(srcH, (srcW * RING_H) / RING_W);
+        int yTop = (srcH - cropH) / 2;
+        int outIdx = 0;
+        for (int dy = 0; dy < RING_H; dy++) {
+            int sy = yTop + (dy * cropH) / RING_H;
+            if (rot180) sy = srcH - 1 - sy;
+            int rowBase = sy * yRowStride;
+            for (int dx = 0; dx < RING_W; dx++) {
+                int sx = (dx * srcW) / RING_W;
+                if (rot180) sx = srcW - 1 - sx;
+                dst[outIdx++] = yBuf.get(rowBase + sx * yPixStride);
+            }
+        }
+        int uvW = RING_W / 2;
+        int uvH = RING_H / 2;
+        int srcUvW = srcW / 2;
+        int srcUvH = srcH / 2;
+        int cropUvH = Math.min(srcUvH, (srcUvW * uvH) / uvW);
+        int uvTop = (srcUvH - cropUvH) / 2;
         for (int dy = 0; dy < uvH; dy++) {
-            int sx = rot270 ? (srcUvW - 1 - dy * uvStepW) : (dy * uvStepW);
-            int sxOff = sx * uvPixStride;
+            int sy = uvTop + (dy * cropUvH) / uvH;
+            if (rot180) sy = srcUvH - 1 - sy;
+            int rowBase = sy * uvRowStride;
             for (int dx = 0; dx < uvW; dx++) {
-                int sy = rot270 ? (dx * uvStepH) : (srcUvH - 1 - dx * uvStepH);
-                int off = sy * uvRowStride + sxOff;
+                int sx = Math.min(srcUvW - 2, (dx * srcUvW) / uvW);
+                if (rot180) sx = Math.min(srcUvW - 2, srcUvW - 1 - sx);
+                int off = rowBase + sx * uvPixStride;
                 dst[outIdx++] = vBuf.get(off);
                 dst[outIdx++] = uBuf.get(off);
             }
@@ -592,7 +788,13 @@ public final class GateCamShim {
             if (supports120Fps) fpsArr.put(120);
             o.put("supportedFps", fpsArr);
             o.put("shutterUs", shutterUs);
-            o.put("focusLocked", focusLocked);
+            o.put("exposureUs", (int) Math.max(1L, latestExposureNs / 1000L));
+            o.put("iso", latestIso * Math.max(100, manualBoost) / 100);
+            o.put("zoomRatio", Math.round(zoomRatio * 100.0) / 100.0);
+            o.put("minZoomRatio", Math.round(minZoomRatio * 100.0) / 100.0);
+            o.put("focusMode", focusMode);
+            o.put("focusDistDiopters", Math.round(latestFocusDiopters * 100.0) / 100.0);
+            o.put("focusLocked", !oneShotAfActive);
             o.put("ringCapacity", RING_CAP);
             o.put("ringFilled", filled);
             o.put("ringSpanMs", Math.round(spanMs * 10.0) / 10.0);
@@ -614,12 +816,28 @@ public final class GateCamShim {
                 int want = o.optInt("targetFps", 120);
                 targetFps = (want >= 120 && supports120Fps) ? 120 : 60;
             }
-            if (o.has("shutterUs")) {
-                shutterUs = Math.max(0, o.optInt("shutterUs", 0));
+            if (o.has("zoomRatio")) {
+                double z = o.optDouble("zoomRatio", 1.0);
+                if (z > 0.0) {
+                    zoomRatio = Math.max(minZoomRatio, Math.min(4.0f, (float) z));
+                }
             }
-            if (o.has("focusLocked") && !o.optBoolean("focusLocked", false)) {
-                focusLocked = false;
-                lockedFocusDist = null;
+            if (o.has("shutterUs")) {
+                int nextShutter = Math.max(0, o.optInt("shutterUs", 0));
+                if (nextShutter > 0) {
+                    double desiredIso = lastSceneEvNsIso / ((double) nextShutter * 1000.0);
+                    updateManualIsoFromTotal(desiredIso);
+                } else {
+                    manualBoost = 100;
+                }
+                shutterUs = nextShutter;
+            }
+            if (o.has("focusMode")) {
+                String fm = o.optString("focusMode", "").trim();
+                if (!fm.isEmpty()) {
+                    focusMode = fm;
+                    oneShotAfActive = false;
+                }
             }
             applyRepeatingRequestLocked();
         } catch (Throwable t) {
@@ -632,17 +850,13 @@ public final class GateCamShim {
         if (cameraDevice == null || captureSession == null || previewSurface == null || yuvReader == null) {
             return "Camera is not active";
         }
-        if (focusLocked) {
-            // Toggle off if already locked
-            focusLocked = false;
-            lockedFocusDist = null;
-            applyRepeatingRequestLocked();
-            return "";
-        }
         try {
-            // Map upright Portrait (normX, normY) back to 90 deg CW landscape sensor activeArrayRect
-            double sxNorm = Math.max(0.0, Math.min(1.0, normY));
+            // Map upright 16:9 Landscape viewfinder (normX, normY) onto 90 deg CW 4:3 sensor activeArrayRect
+            double cropFrac = Math.min(1.0, ((double) capH * (double) RING_H / (double) RING_W) / (double) Math.max(1, capW));
+            double topFrac = (1.0 - cropFrac) * 0.5;
+            double sxNorm = Math.max(0.0, Math.min(1.0, topFrac + Math.max(0.0, Math.min(1.0, normY)) * cropFrac));
             double syNorm = Math.max(0.0, Math.min(1.0, 1.0 - normX));
+
             int cx = activeArrayRect.left + (int) Math.round(sxNorm * activeArrayRect.width());
             int cy = activeArrayRect.top + (int) Math.round(syNorm * activeArrayRect.height());
             int half = Math.max(60, activeArrayRect.width() / 16);
@@ -653,25 +867,47 @@ public final class GateCamShim {
                     Math.min(activeArrayRect.bottom, cy + half));
             MeteringRectangle mr = new MeteringRectangle(r, MeteringRectangle.METERING_WEIGHT_MAX - 1);
 
+            activeAfRegions = new MeteringRectangle[]{mr};
+            focusMode = "tap";
+            oneShotAfActive = true;
+            applyRepeatingRequestLocked();
+
             CaptureRequest.Builder trig = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
             trig.addTarget(previewSurface);
             trig.addTarget(yuvReader.getSurface());
+            if (Build.VERSION.SDK_INT >= 30) {
+                trig.set(CaptureRequest.CONTROL_ZOOM_RATIO, Math.max(minZoomRatio, Math.min(maxZoomRatio, zoomRatio)));
+            }
+            if (shutterUs > 0) {
+                long expNs = Math.max(expRangeNs.getLower(), Math.min(expRangeNs.getUpper(), (long) shutterUs * 1000L));
+                trig.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF);
+                trig.set(CaptureRequest.SENSOR_EXPOSURE_TIME, expNs);
+                trig.set(CaptureRequest.SENSOR_SENSITIVITY, Math.max(isoRange.getLower(), Math.min(isoRange.getUpper(), manualIso)));
+                trig.set(CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST, Math.max(boostRange.getLower(), Math.min(boostRange.getUpper(), manualBoost)));
+            } else {
+                trig.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON);
+            }
             trig.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_AUTO);
-            trig.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mr});
+            trig.set(CaptureRequest.CONTROL_AF_REGIONS, activeAfRegions);
             trig.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START);
             captureSession.capture(trig.build(), captureCallback, camHandler);
 
-            focusLocked = true;
+            // Safety fallback: lock focus after 700 ms even if HAL skips FOCUSED_LOCKED callback
             camHandler.postDelayed(new Runnable() {
                 @Override
                 public void run() {
                     synchronized (GateCamShim.class) {
-                        applyRepeatingRequestLocked();
+                        if (oneShotAfActive) {
+                            lockedFocusDist = latestFocusDiopters;
+                            oneShotAfActive = false;
+                            applyRepeatingRequestLocked();
+                        }
                     }
                 }
-            }, 450);
+            }, 700);
             return "";
         } catch (Throwable t) {
+            oneShotAfActive = false;
             return String.valueOf(t.getMessage());
         }
     }
@@ -840,6 +1076,7 @@ public final class GateCamShim {
                     fObj.put("rollingShutterSkewNs", slicedSkew.get(i));
                     fObj.put("frameWidth", RING_W);
                     fObj.put("frameHeight", RING_H);
+                    fObj.put("sensorRotDeg", lastRotDeg);
 
                     if (bestLabel > 0) {
                         stats.get(bestLabel, 0, statRow);

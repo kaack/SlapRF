@@ -19,13 +19,15 @@ func DefaultGateLine() GateLine {
 	}
 }
 
-// DefaultCameraConfig returns camera capture defaults (Auto shutter for bright indoor/outdoor startup;
-// fast manual 1/1000..1/4000 s shutter can be selected in the UI for high-speed outdoor flights).
+// DefaultCameraConfig returns camera capture defaults: Auto shutter, 1.0x lens, and fixed Gate focus
+// (~2.8 m hyperfocal) so passing hands/drones never cause focus hunting.
 func DefaultCameraConfig() CameraConfig {
 	return CameraConfig{
 		TargetFPS:          120,
-		ShutterUs:          0, // Auto exposure by default
-		FocusLocked:        false,
+		ShutterUs:          0,
+		ZoomRatio:          1.0,
+		FocusMode:          "gate",
+		FocusLocked:        true,
 		MotionModel:        "mog2",
 		Sensitivity:        16.0,
 		LookbackHalfMs:     450,
@@ -118,9 +120,11 @@ func SolveLookback(rec *PassRecord, frames []FrameObservation, gate GateLine, cl
 		f.Index = i
 		row := 0.5
 		if f.HasBlob {
-			// In portrait (360x640, rotated 90 deg CW from landscape sensor), sensor readout rows run right-to-left (1 - cx)
-			if h > w {
+			// When rotated 90/270 deg from a landscape sensor (Portrait phone hold), sensor readout rows run horizontally
+			if f.SensorRotDeg == 90 || (f.SensorRotDeg == 0 && h > w) {
 				row = 1.0 - f.BlobCX
+			} else if f.SensorRotDeg == 270 {
+				row = f.BlobCX
 			} else {
 				row = f.BlobCY
 			}
