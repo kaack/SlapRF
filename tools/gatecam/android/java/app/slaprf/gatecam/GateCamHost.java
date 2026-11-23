@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Insets;
 import android.graphics.SurfaceTexture;
 import android.net.Uri;
 import android.os.Build;
@@ -16,6 +17,8 @@ import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.webkit.DownloadListener;
 import android.webkit.JavascriptInterface;
@@ -71,6 +74,26 @@ public final class GateCamHost extends Activity {
 
         rootLayout = new FrameLayout(this);
         rootLayout.setBackgroundColor(0xFF0B0C0F);
+        if (Build.VERSION.SDK_INT >= 30 && win != null) {
+            win.setDecorFitsSystemWindows(false);
+            WindowInsetsController ctrl = win.getInsetsController();
+            if (ctrl != null) {
+                int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                        | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                ctrl.setSystemBarsAppearance(0, mask);
+            }
+            rootLayout.setOnApplyWindowInsetsListener((v, insets) -> {
+                Insets sysBars = insets.getInsets(
+                        WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                if (v.getPaddingLeft() != sysBars.left
+                        || v.getPaddingTop() != sysBars.top
+                        || v.getPaddingRight() != sysBars.right
+                        || v.getPaddingBottom() != sysBars.bottom) {
+                    v.setPadding(sysBars.left, sysBars.top, sysBars.right, sysBars.bottom);
+                }
+                return WindowInsets.CONSUMED;
+            });
+        }
 
         previewView = new TextureView(this);
         FrameLayout.LayoutParams pvLp = new FrameLayout.LayoutParams(

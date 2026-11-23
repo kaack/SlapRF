@@ -117,7 +117,12 @@ func SolveLookback(rec *PassRecord, frames []FrameObservation, gate GateLine, cl
 		f.Index = i
 		row := 0.5
 		if f.HasBlob {
-			row = f.BlobCY
+			// In portrait (360x640, rotated 90 deg CW from landscape sensor), sensor readout rows run right-to-left (1 - cx)
+			if h > w {
+				row = 1.0 - f.BlobCX
+			} else {
+				row = f.BlobCY
+			}
 		}
 		tsUs := FrameTimestampUs(*f, row, clockOffsetUs, rollingShutterComp)
 		f.FrameTimestampUs = tsUs

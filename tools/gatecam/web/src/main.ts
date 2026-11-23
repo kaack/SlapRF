@@ -322,9 +322,13 @@ function stepInspectorFrame(delta: number): void {
   renderInspectorDynamicOnly();
 }
 
-function gateGeometrySVG(g: GateLine, interactive: boolean): string {
-  const W = 640;
-  const H = 360;
+function currentFrameDims(): { w: number; h: number } {
+  const w = state?.camInfo?.frameWidth || 360;
+  const h = state?.camInfo?.frameHeight || 640;
+  return { w, h };
+}
+
+function gateGeometrySVG(g: GateLine, interactive: boolean, W = 360, H = 640): string {
   const x1 = g.p1x * W;
   const y1 = g.p1y * H;
   const x2 = g.p2x * W;
@@ -427,25 +431,26 @@ function renderLiveView(): string {
   const g = state.gate;
   const cam = state.camera;
   const ci = state.camInfo;
+  const { w: fw, h: fh } = currentFrameDims();
   const st = state.stats;
   const rssiItems = state.sync.liveRssi ?? [];
   const rssiHtml =
     rssiItems.length > 0
       ? rssiItems.map((r) => `${esc(r.callsign)} <b>${r.rssiDbm.toFixed(0)} dBm</b>`).join(" · ")
-      : `Waiting for 50 Hz RSSI on ${esc(state.sync.slaprfUrl)}...`;
+      : `Waiting for 50 Hz RSSI...`;
 
   return `
     <div class="live-grid">
       <div class="cam-column">
         <div class="viewfinder-wrap">
-          <div class="viewfinder-stage" id="live-stage">
+          <div class="viewfinder-stage" id="live-stage" style="aspect-ratio:${fw} / ${fh}">
             ${!isNativeUnderlay ? `<img class="preview-img" data-remote-preview src="/v1/gatecam/preview.jpg?t=${Date.now()}" alt="Gate preview" />` : ""}
-            <svg class="gate-svg" id="live-gate-svg" viewBox="0 0 640 360" preserveAspectRatio="none">
-              ${gateGeometrySVG(g, true)}
+            <svg class="gate-svg" id="live-gate-svg" viewBox="0 0 ${fw} ${fh}" preserveAspectRatio="none">
+              ${gateGeometrySVG(g, true, fw, fh)}
             </svg>
             <div class="hud-rssi-bar">
               <span data-hud-rssi>${rssiHtml}</span>
-              <span data-hud-ring>Ring: ${(ci.ringSpanMs / 1000).toFixed(1)}s · ${ci.actualFps.toFixed(0)} fps ●</span>
+              <span data-hud-ring>${(ci.ringSpanMs / 1000).toFixed(1)}s · ${ci.actualFps.toFixed(0)}fps ●</span>
             </div>
           </div>
         </div>
@@ -597,9 +602,9 @@ function renderInspectorTimelineSVG(p: PassRecord, curIdx: number): string {
 }
 
 function renderInspectorFrameOverlaySVG(p: PassRecord, f: FrameObservation | undefined): string {
-  const W = 640;
-  const H = 360;
-  let svg = showGateOverlay ? gateGeometrySVG(p.gateSnapshot, false) : "";
+  const W = f?.frameWidth || state?.camInfo?.frameWidth || 360;
+  const H = f?.frameHeight || state?.camInfo?.frameHeight || 640;
+  let svg = showGateOverlay ? gateGeometrySVG(p.gateSnapshot, false, W, H) : "";
   if (showBlobOverlay && f && f.hasBlob) {
     const cx = f.blobCx * W;
     const cy = f.blobCy * H;
@@ -667,9 +672,9 @@ function renderInspectorView(): string {
         </div>
 
         <div class="inspector-frame-box">
-          <div class="inspector-stage">
+          <div class="inspector-stage" style="aspect-ratio:${f?.frameWidth || 360} / ${f?.frameHeight || 640}">
             <img id="insp-img" class="preview-img" src="${frameSrc}" alt="Frame ${inspectFrameIdx}" />
-            <svg id="insp-svg" class="gate-svg" viewBox="0 0 640 360" preserveAspectRatio="none">
+            <svg id="insp-svg" class="gate-svg" viewBox="0 0 ${f?.frameWidth || 360} ${f?.frameHeight || 640}" preserveAspectRatio="none">
               ${renderInspectorFrameOverlaySVG(p, f)}
             </svg>
           </div>
@@ -1021,7 +1026,8 @@ function bindLivePointerHandlers(): void {
       state.gate.p2x = nx;
       state.gate.p2y = ny;
     }
-    svg.innerHTML = gateGeometrySVG(state.gate, true);
+    const { w: fw, h: fh } = currentFrameDims();
+    svg.innerHTML = gateGeometrySVG(state.gate, true, fw, fh);
   };
 
   const finishDrag = () => {

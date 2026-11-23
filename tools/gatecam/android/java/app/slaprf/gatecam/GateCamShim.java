@@ -61,8 +61,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * circular ring buffer, and retrospective OpenCV 4.12 motion/optical-flow lookback analysis.
  */
 public final class GateCamShim {
-    private static final int RING_W = 640;
-    private static final int RING_H = 360;
+    private static final int RING_W = 360;
+    private static final int RING_H = 640;
     private static final int NV21_BYTES = RING_W * RING_H * 3 / 2;
     private static final int RING_CAP = 168; // ~58 MB static allocation, zero per-frame GC
 
@@ -173,15 +173,19 @@ public final class GateCamShim {
                 return wm.getDefaultDisplay().getRotation();
             }
         }
-        return Surface.ROTATION_90;
+        return Surface.ROTATION_0;
     }
 
-    private static boolean isUpsideDownLandscape() {
+    private static int computeSensorToDisplayDegrees() {
         int rot = getDisplayRotation();
-        // Rear camera sensorOrientation is typically 90 (upright in ROTATION_90, upside-down in ROTATION_270)
-        if (sensorOrientation == 90 && rot == Surface.ROTATION_270) return true;
-        if (sensorOrientation == 270 && rot == Surface.ROTATION_90) return true;
-        return false;
+        int deg = 0;
+        switch (rot) {
+            case Surface.ROTATION_0: deg = 0; break;
+            case Surface.ROTATION_90: deg = 90; break;
+            case Surface.ROTATION_180: deg = 180; break;
+            case Surface.ROTATION_270: deg = 270; break;
+        }
+        return (sensorOrientation - deg + 360) % 360;
     }
 
     private static void applyPreviewTransform(final TextureView tv, final int viewW, final int viewH) {
@@ -461,7 +465,7 @@ public final class GateCamShim {
         if (img.getFormat() != ImageFormat.YUV_420_888) return;
         int srcW = img.getWidth();
         int srcH = img.getHeight();
-        if (srcW < RING_W || srcH < RING_H) return;
+        if (srcW < RING_H || srcH < RING_W) return;
 
         long tsNs = img.getTimestamp();
         if (prevFrameTsNs > 0 && tsNs > prevFrameTsNs) {
@@ -472,7 +476,7 @@ public final class GateCamShim {
         }
         prevFrameTsNs = tsNs;
 
-        boolean flip180 = isUpsideDownLandscape();
+        int rotDeg = computeSensorToDisplayDegrees();
         long[] meta = new long[2];
         lookupCaptureMeta(tsNs, meta);
 
@@ -483,7 +487,7 @@ public final class GateCamShim {
             dst = ringNV21[slot];
         }
 
-        downsampleYuv420ToNV21(img, dst, flip180);
+        downsamplePortraitYuv420ToNV21(img, dst, rotDeg);
 
         synchronized (ringLock) {
             ringSensorTsNs[slot] = tsNs;
@@ -494,7 +498,11 @@ public final class GateCamShim {
         }
     }
 
-    private static void downsampleYuv420ToNV21(Image img, byte[] dst, boolean flip180) {
+    /**
+     * Rotates 1280x720 landscape sensor YUV_420_888 by 90 deg CW (or 270 deg CW) and downsamples 2x
+     * into upright 360x640 Portrait NV21 in a single zero-allocation pass.
+     */
+    private static void downsamplePortraitYuv420ToNV21(Image img, byte[] dst, int rotDeg) {
         Image.Plane[] planes = img.getPlanes();
         ByteBuffer yBuf = planes[0].getBuffer();
         ByteBuffer uBuf = planes[1].getBuffer();
@@ -504,37 +512,38 @@ public final class GateCamShim {
         int uvRowStride = planes[1].getRowStride();
         int uvPixStride = planes[1].getPixelStride();
 
-        int srcW = img.getWidth();
-        int srcH = img.getHeight();
-        int stepX = srcW / RING_W;
-        int stepY = srcH / RING_H;
+        int srcW = img.getWidth();   // 1280
+        int srcH = img.getHeight();  // 720
+        int stepAlongW = srcW / RING_H; // 1280 / 640 = 2
+        int stepAlongH = srcH / RING_W; // 720 / 360 = 2
+        boolean rot270 = (rotDeg == 270);
 
-        // 1. Luma Y plane (640 x 360)
+        // 1. Luma Y plane (360 wide x 640 tall)
         int outIdx = 0;
         for (int dy = 0; dy < RING_H; dy++) {
-            int sy = flip180 ? (srcH - 1 - dy * stepY) : (dy * stepY);
-            int rowBase = sy * yRowStride;
+            int sx = rot270 ? (srcW - 1 - dy * stepAlongW) : (dy * stepAlongW);
+            int sxOff = sx * yPixStride;
             for (int dx = 0; dx < RING_W; dx++) {
-                int sx = flip180 ? (srcW - 1 - dx * stepX) : (dx * stepX);
-                dst[outIdx++] = yBuf.get(rowBase + sx * yPixStride);
+                int sy = rot270 ? (dx * stepAlongH) : (srcH - 1 - dx * stepAlongH);
+                dst[outIdx++] = yBuf.get(sy * yRowStride + sxOff);
             }
         }
 
-        // 2. Interleaved VU plane for NV21 (320 x 180 pairs)
-        int uvH = RING_H / 2;
-        int uvW = RING_W / 2;
-        int srcUvH = srcH / 2;
-        int srcUvW = srcW / 2;
-        int uvStepY = Math.max(1, srcUvH / uvH);
-        int uvStepX = Math.max(1, srcUvW / uvW);
+        // 2. Interleaved VU plane for NV21 (180 wide x 320 tall pairs)
+        int uvH = RING_H / 2; // 320
+        int uvW = RING_W / 2; // 180
+        int srcUvW = srcW / 2; // 640
+        int srcUvH = srcH / 2; // 360
+        int uvStepW = Math.max(1, srcUvW / uvH);
+        int uvStepH = Math.max(1, srcUvH / uvW);
         for (int dy = 0; dy < uvH; dy++) {
-            int sy = flip180 ? (srcUvH - 1 - dy * uvStepY) : (dy * uvStepY);
-            int rowBase = sy * uvRowStride;
+            int sx = rot270 ? (srcUvW - 1 - dy * uvStepW) : (dy * uvStepW);
+            int sxOff = sx * uvPixStride;
             for (int dx = 0; dx < uvW; dx++) {
-                int sx = flip180 ? (srcUvW - 1 - dx * uvStepX) : (dx * uvStepX);
-                int off = rowBase + sx * uvPixStride;
-                dst[outIdx++] = vBuf.get(off); // V first in NV21
-                dst[outIdx++] = uBuf.get(off); // U second in NV21
+                int sy = rot270 ? (dx * uvStepH) : (srcUvH - 1 - dx * uvStepH);
+                int off = sy * uvRowStride + sxOff;
+                dst[outIdx++] = vBuf.get(off);
+                dst[outIdx++] = uBuf.get(off);
             }
         }
     }
@@ -619,8 +628,11 @@ public final class GateCamShim {
             return "";
         }
         try {
-            int cx = activeArrayRect.left + (int) Math.round(normX * activeArrayRect.width());
-            int cy = activeArrayRect.top + (int) Math.round(normY * activeArrayRect.height());
+            // Map upright Portrait (normX, normY) back to 90 deg CW landscape sensor activeArrayRect
+            double sxNorm = Math.max(0.0, Math.min(1.0, normY));
+            double syNorm = Math.max(0.0, Math.min(1.0, 1.0 - normX));
+            int cx = activeArrayRect.left + (int) Math.round(sxNorm * activeArrayRect.width());
+            int cy = activeArrayRect.top + (int) Math.round(syNorm * activeArrayRect.height());
             int half = Math.max(60, activeArrayRect.width() / 16);
             Rect r = new Rect(
                     Math.max(activeArrayRect.left, cx - half),
