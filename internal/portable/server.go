@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/coder/websocket"
 
 	"slaprf/internal/api"
+	"slaprf/internal/applog"
 	"slaprf/internal/domain"
 	"slaprf/internal/firmware"
 	"slaprf/internal/ingest"
@@ -87,6 +89,9 @@ type Config struct {
 	MultiGPBaseURL  string // Defaults to DefaultMultiGPBaseURL
 	HTTPClient      *http.Client
 	Log             *log.Logger
+	AppLog          *applog.Logger
+	LogPath         string // Optional rolling log file path; defaults to slaprf.log next to DBPath
+	LogLevel        string // Optional initial log level: trace, debug, info, warn, error
 	USBOpenPort     firmware.SerialOpener
 	USBListPorts    serialport.Lister
 	BLEOpenPort     firmware.SerialOpener
@@ -99,6 +104,8 @@ type Config struct {
 // & RotorHazard hardware links, LapRF 8-Way :5403 TCP emulator, MultiGP proxy, and WebSocket event stream.
 type Server struct {
 	cfg           Config
+	appLog        *applog.Logger
+	ownsAppLog    bool
 	httpClient    *http.Client
 	hostname      string
 	tempDBPath    string
@@ -165,18 +172,53 @@ func NewServer(cfg Config) *Server {
 	}
 
 	store, err := storage.OpenBoltStore(dbPath)
-	if err != nil && cfg.Log != nil {
-		cfg.Log.Printf("[Storage] Warning: failed to open %s: %v", dbPath, err)
+	appLogger := cfg.AppLog
+	ownsAppLog := false
+	initLevel := applog.LevelInfo
+	hasExplicitLevel := false
+	if parsed, ok := applog.ParseLevel(cfg.LogLevel); ok && strings.TrimSpace(cfg.LogLevel) != "" {
+		initLevel = parsed
+		hasExplicitLevel = true
+	} else if envLvl, ok := applog.EnvLevel(); ok {
+		initLevel = envLvl
+		hasExplicitLevel = true
+	} else if store != nil {
+		var savedLvl string
+		if ok, gErr := store.GetJSON(storage.KeyLogLevel, &savedLvl); gErr == nil && ok {
+			if parsed, pOk := applog.ParseLevel(savedLvl); pOk {
+				initLevel = parsed
+				hasExplicitLevel = true
+			}
+		}
+	}
+	if appLogger == nil {
+		ownsAppLog = true
+		appLogger = applog.New(applog.Options{
+			FilePath: applog.ResolveDefaultLogPath(dbPath, cfg.LogPath),
+			Level:    initLevel,
+			HasLevel: true,
+		})
+	} else if hasExplicitLevel {
+		appLogger.SetLevel(initLevel)
+	}
+	if cfg.Log == nil {
+		cfg.Log = appLogger.StdLogger()
+	}
+	if err != nil {
+		appLogger.Warnf("[Storage] Failed to open %s: %v", dbPath, err)
 	}
 
 	simEngine := tracker.NewEngine()
 	realEngine := tracker.NewRealEngine()
 	sim := ingest.NewTrackSimulator(simEngine)
 	realHubRx := ingest.NewHubFrameDecoder(realEngine)
+	realHubRx.SetLogger(appLogger)
 	simHubRx := ingest.NewHubFrameDecoder(simEngine)
 
 	s := &Server{
 		cfg:        cfg,
+		appLog:     appLogger,
+		ownsAppLog: ownsAppLog,
 		httpClient: hc,
 		hostname:   hostName,
 		tempDBPath: tempDB,
@@ -262,6 +304,7 @@ func NewServer(cfg Config) *Server {
 		HubRx:           realHubRx,
 		SkipHubOutbound: true,
 		Store:           store,
+		AppLog:          appLogger,
 		Logf:            s.logf,
 	})
 	s.bleTransport = slaprfble.NewTransport(slaprfble.Config{
@@ -275,6 +318,7 @@ func NewServer(cfg Config) *Server {
 		HubRx:           realHubRx,
 		SkipHubOutbound: true,
 		Store:           store,
+		AppLog:          appLogger,
 		Logf:            s.logf,
 	})
 	realHubRx.SetOutboundSender(func(pkt []byte) {
@@ -383,6 +427,10 @@ func NewServer(cfg Config) *Server {
 	s.rhMgr.RestorePersistedTargets(initialSimMode)
 	s.laprfEmulatorMgr.Reconcile()
 
+	appLogger.Infof("[Server] SlapRF %s (%s/%s) ready: db=%s log=%s level=%s simRunning=%v hwMode=%s timers=%d",
+		cfg.Version, runtime.GOOS, runtime.GOARCH, s.DBPath(), s.LogPath(), appLogger.Level().String(),
+		initialSimMode, realEngine.TimingHardwareMode(), len(realEngine.DetectedTimersSnapshot()))
+
 	// Background 100 ms race/heat clock ticker so countdowns, timed heats, and Open Qualifier clocks
 	// advance continuously on the Go server even when all browser tabs are closed.
 	go func() {
@@ -466,6 +514,19 @@ func (s *Server) DBPath() string {
 	return s.cfg.DBPath
 }
 
+// LogPath returns the active rolling `slaprf.log` file path (or `""` if memory-only).
+func (s *Server) LogPath() string {
+	if s.appLog != nil {
+		return s.appLog.Path()
+	}
+	return ""
+}
+
+// AppLog returns the server's structured diagnostic logger.
+func (s *Server) AppLog() *applog.Logger {
+	return s.appLog
+}
+
 func (s *Server) activeSlapRFManager() *slaprf.Manager {
 	if s.realEngine != nil && s.realEngine.TimingHardwareMode() == domain.HardwareModeSlapRFBLE {
 		return s.bleMgr
@@ -509,6 +570,9 @@ func (s *Server) Close() {
 	if s.tempDBPath != "" {
 		_ = os.Remove(s.tempDBPath)
 	}
+	if s.ownsAppLog && s.appLog != nil {
+		_ = s.appLog.Close()
+	}
 }
 
 // RegisterAPIRoutes attaches all native Go `/v1/*` endpoints onto mux.
@@ -516,13 +580,17 @@ func (s *Server) RegisterAPIRoutes(mux *http.ServeMux) {
 	// Core engine, simulator, race sessions, practice sessions, pilots, gates, and storage routes
 	s.apiSrv.RegisterRoutes(mux)
 
-	// Server capabilities, authentication & bbolt storage status
+	// Server capabilities, authentication, bbolt storage status & diagnostic logs
 	mux.HandleFunc("GET /v1/capabilities", s.handleCapabilities)
 	mux.HandleFunc("POST /v1/auth/sessions", s.handleAuthLogin)
 	mux.HandleFunc("GET /v1/auth/config", s.handleAuthConfig)
 	mux.HandleFunc("PUT /v1/auth/config", s.handleAuthConfig)
 	mux.HandleFunc("GET /v1/storage/status", s.handleStorageStatus)
 	mux.HandleFunc("POST /v1/storage:recordBackup", s.handleStorageBackupRecorded)
+	mux.HandleFunc("GET /v1/logs", s.handleLogsGet)
+	mux.HandleFunc("GET /v1/logs/config", s.handleLogsConfig)
+	mux.HandleFunc("PUT /v1/logs/config", s.handleLogsConfig)
+	mux.HandleFunc("POST /v1/logs:clear", s.handleLogsClear)
 
 	// Real-time event + binary telemetry WebSocket stream
 	mux.HandleFunc("GET /v1/ws/stream", s.handleStreamWS)

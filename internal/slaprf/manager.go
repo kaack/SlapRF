@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"slaprf/internal/applog"
 	"slaprf/internal/firmware"
 	"slaprf/internal/ingest"
 	"slaprf/internal/storage"
@@ -64,6 +65,7 @@ type Config struct {
 	HubRx            *ingest.HubFrameDecoder
 	SkipHubOutbound  bool
 	Store            *storage.BoltStore
+	AppLog           *applog.Logger
 	Logf             func(string, ...any)
 }
 
@@ -115,6 +117,9 @@ type connSlot struct {
 	hubOwnFrames  int
 	hubLastDbm    []float64
 	hubLiveEmitMs int64
+	lastSummaryMs int64
+	crcResyncs    int
+	lastCrcWarnMs int64
 	hubHello      map[uint8]slotHello
 	hubLive       map[uint8]slotLive
 	waiters       []*replyWaiter
@@ -230,9 +235,52 @@ func (m *Manager) HostAuthKey() string {
 }
 
 func (m *Manager) logf(format string, args ...any) {
+	if m.cfg.AppLog != nil {
+		m.cfg.AppLog.Infof(format, args...)
+		return
+	}
 	if m.cfg.Logf != nil {
 		m.cfg.Logf(format, args...)
 	}
+}
+
+func (m *Manager) warnf(format string, args ...any) {
+	if m.cfg.AppLog != nil {
+		m.cfg.AppLog.Warnf(format, args...)
+		return
+	}
+	if m.cfg.Logf != nil {
+		m.cfg.Logf(format, args...)
+	}
+}
+
+func (m *Manager) debugf(format string, args ...any) {
+	if m.cfg.AppLog != nil {
+		m.cfg.AppLog.Debugf(format, args...)
+	}
+}
+
+func (m *Manager) tracef(format string, args ...any) {
+	if m.cfg.AppLog != nil {
+		m.cfg.AppLog.Tracef(format, args...)
+	}
+}
+
+func redactSensitiveCommand(cmd string) string {
+	lines := strings.Split(strings.ReplaceAll(cmd, "\r\n", "\n"), "\n")
+	out := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		t := strings.TrimSpace(ln)
+		if t == "" {
+			continue
+		}
+		if strings.HasPrefix(strings.ToUpper(t), "AUTH ") {
+			out = append(out, "AUTH <redacted>")
+		} else {
+			out = append(out, t)
+		}
+	}
+	return strings.Join(out, " | ")
 }
 
 func (m *Manager) loadSavedTargets() {

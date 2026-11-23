@@ -22,6 +22,7 @@ import (
 	"runtime"
 	"strings"
 
+	"slaprf/internal/applog"
 	"slaprf/internal/devbundle"
 	"slaprf/internal/portable"
 )
@@ -31,6 +32,8 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:8090", "listen address")
 	webDir := flag.String("web", "./web", "path to the web/ directory")
 	openBrowser := flag.Bool("open", false, "open the app in the default browser")
+	logFlag := flag.String("log", "", "path to rolling diagnostic log file (default: slaprf.log in repo root)")
+	logLevelFlag := flag.String("log-level", "", "diagnostic log level: trace, debug, info, warn, error (default: info)")
 	portableMode := flag.Bool("portable", true, "enable SlapRF Portable /v1/* bridges (set -portable=false or -browser to mimic static GitHub Pages)")
 	flag.BoolVar(&pureBrowser, "browser", false, "start in Pure Browser Mode (disables Go /v1/* backend to mimic https://slaprf.app)")
 	flag.BoolVar(&pureBrowser, "pure-browser", false, "alias for -browser")
@@ -48,9 +51,18 @@ func main() {
 
 	mux := http.NewServeMux()
 	if *portableMode {
+		logPath := applog.ResolveDefaultLogPath(filepath.Join(repoRoot, "slaprf.db"), *logFlag)
+		appLogger := applog.New(applog.Options{
+			FilePath: logPath,
+			Console:  os.Stdout,
+		})
+		defer appLogger.Close()
 		pSrv := portable.NewServer(portable.Config{
-			Version: "dev",
-			Log:     log.New(os.Stdout, "", log.LstdFlags),
+			Version:  "dev",
+			LogPath:  logPath,
+			LogLevel: *logLevelFlag,
+			AppLog:   appLogger,
+			Log:      appLogger.StdLogger(),
 		})
 		pSrv.RegisterAPIRoutes(mux)
 	}

@@ -55,7 +55,16 @@ interface BackendStorageStatus {
   simLapsCount: number;
 }
 
+interface BackendLogStatus {
+  logPath: string;
+  sizeBytes: number;
+  level: string;
+  levels?: string[];
+  lineCount: number;
+}
+
 let cachedBackendStorageStatus: BackendStorageStatus | null = null;
+let cachedBackendLogStatus: BackendLogStatus | null = null;
 let cachedStorageStatus: StorageStatus | null = null;
 let cachedAuthConfig: {
   enabled: boolean;
@@ -75,6 +84,16 @@ export function preloadSettingsStatuses(): void {
       .then(async (resp) => {
         if (!resp.ok) return;
         cachedBackendStorageStatus = (await resp.json()) as BackendStorageStatus;
+      })
+      .catch(() => undefined);
+    void fetch(resolveBackendUrl("/v1/logs/config"), {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    })
+      .then(async (resp) => {
+        if (!resp.ok) return;
+        cachedBackendLogStatus = (await resp.json()) as BackendLogStatus;
       })
       .catch(() => undefined);
     void fetchServerAuthConfig(caps.backendBaseUrl)
@@ -872,6 +891,7 @@ export class PersistenceSettings extends Component {
   private readonly announcer?: Announcer;
   private storage: StorageStatus | null = cachedStorageStatus;
   private backendStorage: BackendStorageStatus | null = cachedBackendStorageStatus;
+  private backendLog: BackendLogStatus | null = cachedBackendLogStatus;
   private storageFetchedAt = 0;
 
   constructor(el: HTMLElement, api: ApiClient, announcer?: Announcer) {
@@ -914,6 +934,18 @@ export class PersistenceSettings extends Component {
           this.backendStorage = (await resp.json()) as BackendStorageStatus;
           cachedBackendStorageStatus = this.backendStorage;
           this.renderStatus();
+        })
+        .catch(() => undefined);
+      void fetch(resolveBackendUrl("/v1/logs/config"), {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      })
+        .then(async (resp) => {
+          if (!resp.ok) return;
+          this.backendLog = (await resp.json()) as BackendLogStatus;
+          cachedBackendLogStatus = this.backendLog;
+          this.renderLogStatus();
         })
         .catch(() => undefined);
       return;
@@ -969,14 +1001,43 @@ export class PersistenceSettings extends Component {
       (st.lastError ? `<div class="storage-status-error">${esc(st.lastError)}</div>` : "");
   }
 
+  private renderLogStatus(): void {
+    const host = this.el.querySelector<HTMLElement>("[data-log-status]");
+    const sel = this.el.querySelector<HTMLSelectElement>("[data-log-level-select]");
+    const lg = this.backendLog;
+    if (sel && lg?.level) {
+      const norm = lg.level.toLowerCase();
+      if (sel.value !== norm) {
+        sel.value = norm;
+      }
+    }
+    if (!host) return;
+    if (!lg) {
+      host.innerHTML = `Log: <strong>slaprf.log</strong> · loading…`;
+      return;
+    }
+    const parts = [
+      `Level: <strong>${esc((lg.level || "info").toUpperCase())}</strong>`,
+      lg.logPath ? `file: <span class="mono">${esc(lg.logPath)}</span>` : "in-memory",
+      `size: ${formatBytes(lg.sizeBytes || 0)}`,
+    ].filter(Boolean);
+    host.innerHTML = parts.join(" · ");
+  }
+
   private handleChange = (e: Event): void => {
-    const target = e.target as HTMLInputElement;
+    const target = e.target as HTMLElement;
     if (target.matches("[data-import-input]")) {
-      const file = target.files?.[0];
-      target.value = "";
+      const input = target as HTMLInputElement;
+      const file = input.files?.[0];
+      input.value = "";
       if (file) {
         void this.handleImportFile(file);
       }
+      return;
+    }
+    if (target.matches("[data-log-level-select]")) {
+      const sel = target as HTMLSelectElement;
+      void this.handleLogLevelChange(sel.value);
     }
   };
 
@@ -987,6 +1048,14 @@ export class PersistenceSettings extends Component {
 
     if (action === "export-data") {
       void this.handleExport();
+      return;
+    }
+    if (action === "download-log") {
+      void this.handleDownloadLog();
+      return;
+    }
+    if (action === "clear-log") {
+      void this.handleClearLog();
       return;
     }
     if (action === "import-data") {
@@ -1055,8 +1124,79 @@ export class PersistenceSettings extends Component {
     this.refreshStorage(true);
   }
 
+  private async handleLogLevelChange(level: string): Promise<void> {
+    try {
+      const resp = await fetch(resolveBackendUrl("/v1/logs/config"), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ level }),
+      });
+      if (!resp.ok) return;
+      this.backendLog = (await resp.json()) as BackendLogStatus;
+      cachedBackendLogStatus = this.backendLog;
+      this.renderLogStatus();
+    } catch {
+      // Ignore transient network errors
+    }
+  }
+
+  private async handleDownloadLog(): Promise<void> {
+    try {
+      const resp = await fetch(resolveBackendUrl("/v1/logs?format=text"), {
+        method: "GET",
+        cache: "no-store",
+      });
+      if (!resp.ok) return;
+      const text = await resp.text();
+      const stamp = new Date().toISOString().slice(0, 10);
+      downloadTextFile(`slaprf-${stamp}.log`, "text/plain", text);
+    } catch {
+      // Ignore transient network errors
+    }
+  }
+
+  private async handleClearLog(): Promise<void> {
+    try {
+      const resp = await fetch(resolveBackendUrl("/v1/logs:clear"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: "{}",
+      });
+      if (!resp.ok) return;
+      this.backendLog = (await resp.json()) as BackendLogStatus;
+      cachedBackendLogStatus = this.backendLog;
+      this.renderLogStatus();
+    } catch {
+      // Ignore transient network errors
+    }
+  }
+
   private render(): void {
     const isServer = capabilitiesSnapshot().portable;
+    const curLvl = (this.backendLog?.level || "info").toLowerCase();
+    const logCardHtml = isServer
+      ? `
+      <div class="card">
+        <div class="option-row">
+          <div>
+            <div class="option-title">Diagnostic logs</div>
+            <div class="option-sub">Server and hardware link events are written side-by-side to <span class="mono">slaprf.log</span> (and Android <span class="mono">logcat</span>). Raise the level to <span class="mono">DEBUG</span> or <span class="mono">TRACE</span> when troubleshooting timers.</div>
+            <div class="option-sub storage-status" data-log-status></div>
+          </div>
+          <div class="option-actions" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <select class="input input-sm" data-log-level-select aria-label="Diagnostic log level" style="width:auto;min-width:128px">
+              <option value="error"${curLvl === "error" ? " selected" : ""}>ERROR</option>
+              <option value="warn"${curLvl === "warn" ? " selected" : ""}>WARN</option>
+              <option value="info"${curLvl === "info" ? " selected" : ""}>INFO (default)</option>
+              <option value="debug"${curLvl === "debug" ? " selected" : ""}>DEBUG</option>
+              <option value="trace"${curLvl === "trace" ? " selected" : ""}>TRACE</option>
+            </select>
+            <button type="button" class="btn btn-sm" data-action="download-log">Download</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="clear-log">Clear</button>
+          </div>
+        </div>
+      </div>`
+      : "";
     this.el.innerHTML = `
       <div class="card">
         <div class="option-row">
@@ -1111,8 +1251,9 @@ export class PersistenceSettings extends Component {
             <button type="button" class="btn btn-sm" data-action="restore-demo-data">Restore</button>
           </div>
         </div>
-      </div>`;
+      </div>${logCardHtml}`;
     this.renderStatus();
+    this.renderLogStatus();
   }
 }
 

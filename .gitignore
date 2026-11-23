@@ -40,6 +40,7 @@ firmware/*/build-*/
 !/cmd/slaprf-android/site/.keep
 slaprf.exe
 slaprf.db*
+slaprf.log*
 
 # SlapRF E2E verification test artifacts (videos, traces, screenshots, HTML report)
 /test-results/

@@ -57,6 +57,7 @@ const (
 	KeySimOptions    = "sim.options"
 	KeyUSBTargets       = "hw.usb_targets"
 	KeyBLEHostKey       = "hw.ble_host_key"
+	KeyLogLevel         = "app.log_level"
 	KeyKnownTimers      = "hw.known_timers"
 	KeyLapRFTargets     = "hw.laprf_targets"
 	KeyRHTargets        = "hw.rh_targets"
@@ -712,6 +713,7 @@ func (s *BoltStore) Wipe(keepSimRunning bool) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		var createdAt int64
 		var preservedHostKey []byte
+		var preservedLogLevel []byte
 		if kv := tx.Bucket(bucketKV); kv != nil {
 			var meta MetaRecord
 			if raw := kv.Get([]byte(KeyMeta)); len(raw) > 0 {
@@ -720,6 +722,9 @@ func (s *BoltStore) Wipe(keepSimRunning bool) error {
 			}
 			if rawKey := kv.Get([]byte(KeyBLEHostKey)); len(rawKey) > 0 {
 				preservedHostKey = append([]byte(nil), rawKey...)
+			}
+			if rawLvl := kv.Get([]byte(KeyLogLevel)); len(rawLvl) > 0 {
+				preservedLogLevel = append([]byte(nil), rawLvl...)
 			}
 		}
 		for _, bName := range allBuckets {
@@ -747,6 +752,11 @@ func (s *BoltStore) Wipe(keepSimRunning bool) error {
 		}
 		if len(preservedHostKey) > 0 {
 			if err := kv.Put([]byte(KeyBLEHostKey), preservedHostKey); err != nil {
+				return err
+			}
+		}
+		if len(preservedLogLevel) > 0 {
+			if err := kv.Put([]byte(KeyLogLevel), preservedLogLevel); err != nil {
 				return err
 			}
 		}

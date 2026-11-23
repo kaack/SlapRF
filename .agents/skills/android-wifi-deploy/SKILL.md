@@ -95,12 +95,18 @@ curl -fsS http://127.0.0.1:18090/v1/capabilities
 ```
 Once forwarded, you can drive the entire Android timing engine, Bluetooth shim (`/v1/slaprf/bluetooth/*`), and USB OTG shim (`/v1/slaprf/usb/*`) directly over `http://127.0.0.1:18090/v1/*` from your workstation while the phone's physical USB-C port is free for a Hub timer!
 
-### Stream Native Go, USB/BLE Shim & Process Logs
-Filter by the live app PID (`--pid`) so logcat ring rotation on busy devices never hides startup messages:
+### Stream Native Go (`SlapRFGo`), Side-by-Side `slaprf.log` & Process Logs
+All Go operational and protocol logs are bridged directly to Android `logcat` under tag **`SlapRFGo`** (`V`/`D`/`I`/`W`/`E` matching `TRACE`/`DEBUG`/`INFO`/`WARN`/`ERROR`) AND written to `/data/user/0/app.slaprf/files/slaprf.log` (exposed over `/v1/logs`):
 ```bash
+# Stream only Go backend logs in real time:
+adb -s <DEVICE> logcat -s SlapRFGo
+
+# Download the full rolling slaprf.log or adjust severity level over forwarded :18090:
+curl -fsS "http://127.0.0.1:18090/v1/logs?format=text" | tail -n 60
+curl -fsS -X PUT http://127.0.0.1:18090/v1/logs/config -H "Content-Type: application/json" -d '{"level":"debug"}'
+
+# Or stream all Go + Java/WebView logs filtered by live app PID:
 PID=$(adb -s <DEVICE> shell pidof app.slaprf | tr -d '\r')
-adb -s <DEVICE> logcat -d --pid="$PID"
-# Or stream continuously:
 adb -s <DEVICE> logcat -v time --pid="$PID"
 ```
 On Windows PowerShell:

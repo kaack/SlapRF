@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -872,5 +874,70 @@ func TestPortableSeparatesUSBAndBluetoothAPIsAndCancelConnect(t *testing.T) {
 		}
 	case <-time.After(1 * time.Second):
 		t.Fatalf("PUT /v1/slaprf/bluetooth/connections/0 did not unblock after DELETE cancel")
+	}
+}
+
+func TestDiagnosticLogsSideBySideAndRuntimeLevels(t *testing.T) {
+	dir := t.TempDir()
+	dbFile := filepath.Join(dir, "slaprf.db")
+	wantLogFile := filepath.Join(dir, "slaprf.log")
+
+	srv := portable.NewServer(portable.Config{
+		Version: "v0.0.16-test",
+		DBPath:  dbFile,
+	})
+	ts := httptest.NewServer(srv.Handler())
+
+	if srv.LogPath() != wantLogFile {
+		t.Fatalf("LogPath() = %q, want side-by-side %q", srv.LogPath(), wantLogFile)
+	}
+	if _, err := os.Stat(wantLogFile); err != nil {
+		t.Fatalf("expected side-by-side slaprf.log created on startup: %v", err)
+	}
+
+	// Default level is info
+	getResp, err := http.Get(ts.URL + "/v1/logs?tail=50")
+	if err != nil || getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /v1/logs failed: %v", err)
+	}
+	var logSnap portable.LogsResponse
+	_ = json.NewDecoder(getResp.Body).Decode(&logSnap)
+	getResp.Body.Close()
+	if logSnap.Level != "info" || len(logSnap.Lines) == 0 {
+		t.Fatalf("expected initial level=info and startup log lines, got %+v", logSnap)
+	}
+
+	// Switch to debug level and trigger a mutating HTTP request
+	cfgResp := doJSONReq(t, http.MethodPut, ts.URL+"/v1/logs/config", "", map[string]any{"level": "debug"})
+	cfgResp.Body.Close()
+	if cfgResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT /v1/logs/config status=%d", cfgResp.StatusCode)
+	}
+
+	armResp := doJSONReq(t, http.MethodPut, ts.URL+"/v1/timing/arm", "", map[string]any{"armed": true})
+	armResp.Body.Close()
+
+	txtResp, err := http.Get(ts.URL + "/v1/logs?format=text")
+	if err != nil || txtResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /v1/logs?format=text failed: %v", err)
+	}
+	rawBytes, _ := io.ReadAll(txtResp.Body)
+	txtResp.Body.Close()
+	rawStr := string(rawBytes)
+	if !strings.Contains(rawStr, "[DEBUG] [HTTP] PUT /v1/timing/arm") {
+		t.Fatalf("expected DEBUG HTTP trace in slaprf.log download, got:\n%s", rawStr)
+	}
+
+	ts.Close()
+	srv.Close()
+
+	// Verify persisted log level reloads across server restarts
+	srv2 := portable.NewServer(portable.Config{
+		Version: "v0.0.16-test",
+		DBPath:  dbFile,
+	})
+	defer srv2.Close()
+	if got := srv2.AppLog().Level().String(); got != "debug" {
+		t.Fatalf("expected persisted log level debug after restart, got %q", got)
 	}
 }

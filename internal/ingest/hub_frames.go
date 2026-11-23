@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"slaprf/internal/applog"
 	"slaprf/internal/domain"
 	"slaprf/internal/firmware"
 	"slaprf/internal/tracker"
@@ -69,6 +70,7 @@ type helloInfo struct {
 type HubFrameDecoder struct {
 	mu          sync.Mutex
 	engine      *tracker.Engine
+	appLog      *applog.Logger
 	outFn       func([]byte)
 	lastChanHex string
 	slots       map[uint8]slotInfo
@@ -158,10 +160,18 @@ func NewHubFrameDecoder(engine *tracker.Engine) *HubFrameDecoder {
 	return r
 }
 
+// SetLogger attaches an optional structured application logger for slot registration and timeline diagnostics.
+func (r *HubFrameDecoder) SetLogger(lg *applog.Logger) {
+	r.mu.Lock()
+	r.appLog = lg
+	r.mu.Unlock()
+}
+
 // Reset clears cached Hub TDMA slot-to-fingerprint bindings and sequence watermarks so a fresh
 // stream of HELLO frames re-anchors telemetry cleanly after a timing-hardware mode switch or reconnect.
 func (r *HubFrameDecoder) Reset() {
 	r.mu.Lock()
+	lg := r.appLog
 	r.slots = make(map[uint8]slotInfo)
 	r.lastHello = make(map[uint8]helloInfo)
 	r.seenSeq = make(map[uint8]uint8)
@@ -171,6 +181,9 @@ func (r *HubFrameDecoder) Reset() {
 	r.timelines = make(map[uint8]*tsTracker)
 	r.lastChanHex = ""
 	r.mu.Unlock()
+	if lg != nil {
+		lg.Debugf("[HubRx] Decoder state reset")
+	}
 }
 
 // OnTelemetryFrame implements tracker.EventSubscriber.
@@ -232,8 +245,13 @@ func (r *HubFrameDecoder) sendChannelsToHub(freqs [domain.MaxPilotSlots]uint16, 
 	}
 	r.lastChanHex = hexStr
 	outFn := r.outFn
+	lg := r.appLog
+	survey := r.survey
 	r.mu.Unlock()
 
+	if lg != nil {
+		lg.Debugf("[HubRx] Pushing 5.8 GHz channel table to Hub: freqs=%v MHz survey=%v", freqs, survey)
+	}
 	if outFn != nil {
 		outFn(pkt)
 	}
@@ -364,7 +382,11 @@ func (r *HubFrameDecoder) registerHello(slot uint8, hello helloInfo) {
 	delete(r.lastTs, timerID)
 	delete(r.lastArrival, timerID)
 	delete(r.timelines, timerID)
+	lg := r.appLog
 	r.mu.Unlock()
+	if lg != nil {
+		lg.Infof("[HubRx] Bound tdma=%d -> timerID=%d fp=%s isHub=%v intervalUs=%d label=%q", slot, timerID, hello.fpHex, hello.isHub, interval, hello.label)
+	}
 	r.pushActiveChannelsToHub()
 }
 
@@ -419,6 +441,9 @@ func (r *HubFrameDecoder) trackerLocked(timerID uint8, nowUs uint64) *tsTracker 
 // for its 8-bit sequence counter to wrap past the dedupe window.
 func (r *HubFrameDecoder) expireStaleSeqLocked(timerID uint8, intervalUs, nowUs uint64) {
 	if last, ok := r.lastArrival[timerID]; ok && nowUs > last && nowUs-last > staleSeqSamples*intervalUs {
+		if r.appLog != nil {
+			r.appLog.Debugf("[HubRx] Resetting stale sequence timeline for timerID=%d after %d us silence", timerID, nowUs-last)
+		}
 		delete(r.hasSeq, timerID)
 		delete(r.lastTs, timerID)
 		delete(r.timelines, timerID)

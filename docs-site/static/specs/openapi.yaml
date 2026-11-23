@@ -6035,6 +6035,114 @@ paths:
                     type: string
                     example: "Invalid MultiGP Chapter API key"
 
+  /v1/logs:
+    get:
+      tags: [Storage]
+      summary: Read recent Go server diagnostic log lines or download slaprf.log
+      operationId: getLogs
+      parameters:
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [json, text]
+          description: Set to `text` to download the full rolling `slaprf.log` plain-text file
+        - name: tail
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+          description: Maximum number of chronological recent lines to return in JSON mode
+      responses:
+        "200":
+          description: Diagnostic log snapshot or plain-text file
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  logPath:
+                    type: string
+                  sizeBytes:
+                    type: integer
+                  level:
+                    type: string
+                    enum: [trace, debug, info, warn, error]
+                  levels:
+                    type: array
+                    items:
+                      type: string
+                  lineCount:
+                    type: integer
+                  lines:
+                    type: array
+                    items:
+                      type: string
+            text/plain:
+              schema:
+                type: string
+
+  /v1/logs/config:
+    get:
+      tags: [Storage]
+      summary: Read active diagnostic log level and slaprf.log file status
+      operationId: getLogsConfig
+      responses:
+        "200":
+          description: Diagnostic log configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    put:
+      tags: [Storage]
+      summary: Update runtime diagnostic log severity threshold
+      operationId: putLogsConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [level]
+              properties:
+                level:
+                  type: string
+                  enum: [trace, debug, info, warn, error]
+      responses:
+        "200":
+          description: Updated diagnostic log configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Invalid log level
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/logs:clear:
+    post:
+      tags: [Storage]
+      summary: Truncate slaprf.log, remove rotated backups, and reset the in-memory log buffer
+      operationId: clearLogs
+      responses:
+        "200":
+          description: Cleared diagnostic log status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
   /v1/storage/status:
     get:
       tags: [Storage]

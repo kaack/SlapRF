@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 var defaultTrustedWebOrigins = map[string]bool{
@@ -55,6 +56,22 @@ func isVersionedAPIPath(p string) bool {
 	return p == "/v1" || strings.HasPrefix(p, "/v1/")
 }
 
+type httpStatusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *httpStatusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *httpStatusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 func (s *Server) withCORSAndPNA(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := strings.TrimSpace(r.Header.Get("Origin"))
@@ -89,6 +106,23 @@ func (s *Server) withCORSAndPNA(next http.Handler) http.Handler {
 				})
 				return
 			}
+		}
+
+		isWS := strings.HasPrefix(r.URL.Path, "/v1/ws/") || strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+		if s.appLog != nil && isVersionedAPIPath(r.URL.Path) && !isWS {
+			start := time.Now()
+			rec := &httpStatusRecorder{ResponseWriter: w, status: http.StatusOK}
+			next.ServeHTTP(rec, r)
+			dur := time.Since(start).Round(100 * time.Microsecond)
+			switch {
+			case rec.status >= 500:
+				s.appLog.Errorf("[HTTP] %s %s -> %d (%s)", r.Method, r.URL.Path, rec.status, dur)
+			case rec.status >= 400:
+				s.appLog.Warnf("[HTTP] %s %s -> %d (%s)", r.Method, r.URL.Path, rec.status, dur)
+			case r.Method != http.MethodGet && r.Method != http.MethodHead:
+				s.appLog.Debugf("[HTTP] %s %s -> %d (%s)", r.Method, r.URL.Path, rec.status, dur)
+			}
+			return
 		}
 		next.ServeHTTP(w, r)
 	})

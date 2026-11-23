@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"slaprf/internal/applog"
 	"slaprf/internal/firmware"
 	"slaprf/internal/ingest"
 	"slaprf/internal/serialport"
@@ -67,6 +68,7 @@ func (m *Manager) connectInternal(slotIndex int, rawTarget string, allowKeyRecov
 	slot.mu.Unlock()
 	m.broadcastPoolState()
 
+	m.logf("[SlapRF:%s] Connecting slot %d -> %s", m.tr.Name(), slotIndex, portName)
 	port, err := m.tr.Open(openCtx, portName, func(stage string) {
 		if stage == "" || openCtx.Err() != nil {
 			return
@@ -104,6 +106,7 @@ func (m *Manager) connectInternal(slotIndex int, rawTarget string, allowKeyRecov
 		if cancelled {
 			return SlotSnapshot{}, ErrConnectCancelled
 		}
+		m.warnf("[SlapRF:%s] Open slot %d (%s) failed: %v", m.tr.Name(), slotIndex, portName, err)
 		return SlotSnapshot{}, err
 	}
 	if openCtx.Err() != nil {
@@ -270,6 +273,15 @@ func (m *Manager) connectInternal(slotIndex int, rawTarget string, allowKeyRecov
 	if m.cfg.HubRx != nil {
 		m.cfg.HubRx.PushActiveChannels()
 	}
+	if stAfter != nil {
+		fp, _ := stAfter["fp"].(string)
+		lbl, _ := stAfter["label"].(string)
+		fw, _ := stAfter["fw"].(string)
+		roleNum, _ := asInt(stAfter["role"])
+		m.logf("[SlapRF:%s] Connected slot %d -> %s (role=%d label=%q fp=%s fw=%s)", m.tr.Name(), slotIndex, portName, roleNum, lbl, fp, fw)
+	} else {
+		m.logf("[SlapRF:%s] Connected slot %d -> %s", m.tr.Name(), slotIndex, portName)
+	}
 	m.broadcastPoolState()
 	return m.Snapshot().Slots[slotIndex], nil
 }
@@ -287,7 +299,13 @@ func (m *Manager) Disconnect(slotIndex int) error {
 		return fmt.Errorf("invalid slot index %d", slotIndex)
 	}
 	slot := m.slots[slotIndex]
+	slot.mu.Lock()
+	prevPort := slot.portName
+	slot.mu.Unlock()
 	err := m.closeSlotInternal(slot, true)
+	if prevPort != "" {
+		m.logf("[SlapRF:%s] Disconnected slot %d (%s)", m.tr.Name(), slotIndex, prevPort)
+	}
 	if slotIndex == 1 {
 		m.SetDebugSlot(0)
 	}
@@ -608,6 +626,7 @@ func (m *Manager) SendCommand(slotIndex int, cmd string) error {
 			return nil
 		}
 		clean := strings.Join(outLines, "\n") + "\n"
+		m.debugf("[SlapRF:%s] TX slot %d: %s", m.tr.Name(), slotIndex, redactSensitiveCommand(clean))
 		slot.writeMu.Lock()
 		_, err := port.Write([]byte(clean))
 		slot.writeMu.Unlock()
@@ -615,6 +634,7 @@ func (m *Manager) SendCommand(slotIndex int, cmd string) error {
 	}
 
 	clean := strings.TrimRight(cmd, "\r\n") + "\n"
+	m.debugf("[SlapRF:%s] TX slot %d: %s", m.tr.Name(), slotIndex, redactSensitiveCommand(clean))
 	slot.writeMu.Lock()
 	_, err := port.Write([]byte(clean))
 	slot.writeMu.Unlock()
@@ -1052,6 +1072,18 @@ func (m *Manager) parseSlotBuffer(slot *connSlot, buf []byte) []byte {
 				m.handleHubBinaryFrame(slot, frame)
 				pos = recAt + 2 + pktLen
 			} else {
+				nowMs := time.Now().UnixMilli()
+				slot.mu.Lock()
+				slot.crcResyncs++
+				drops := slot.crcResyncs
+				shouldWarn := nowMs-slot.lastCrcWarnMs >= 5000
+				if shouldWarn {
+					slot.lastCrcWarnMs = nowMs
+				}
+				slot.mu.Unlock()
+				if shouldWarn {
+					m.warnf("[SlapRF:%s] slot %d resynced past invalid binary Hub record (len=%d totalResyncs=%d)", m.tr.Name(), slot.index, pktLen, drops)
+				}
 				pos = recAt + 1
 			}
 			continue
@@ -1211,7 +1243,22 @@ func (m *Manager) handleHubBinaryFrame(slot *connSlot, frame []byte) {
 		slot.hubLiveEmitMs = nowMs
 		hubLive = hubLivePayloadLocked(slot, nowMs)
 	}
+	var debugSummary string
+	if m.cfg.AppLog != nil && m.cfg.AppLog.Enabled(applog.LevelDebug) && nowMs-slot.lastSummaryMs >= 5000 && len(slot.hubLive) > 0 {
+		slot.lastSummaryMs = nowMs
+		parts := make([]string, 0, len(slot.hubLive))
+		for tdma := uint8(1); tdma <= 7; tdma++ {
+			if l, ok := slot.hubLive[tdma]; ok {
+				parts = append(parts, fmt.Sprintf("tdma=%d:frames=%d,seq=%d,age=%dms", tdma, l.frames, l.seq, nowMs-l.lastFrameAtMs))
+			}
+		}
+		debugSummary = strings.Join(parts, " ")
+	}
 	slot.mu.Unlock()
+
+	if debugSummary != "" {
+		m.debugf("[SlapRF:%s] slot %d telemetry summary: %s", m.tr.Name(), slot.index, debugSummary)
+	}
 
 	if hubLive != nil {
 		m.emit(Event{Type: "hub_live", SlotIndex: slot.index, Payload: hubLive})
@@ -1517,6 +1564,7 @@ func (m *Manager) emitTextLine(slot *connSlot, raw []byte) {
 		var msg map[string]any
 		if err := json.Unmarshal([]byte(jsonLine[1:]), &msg); err == nil {
 			tStr, _ := msg["t"].(string)
+			m.tracef("[SlapRF:%s] RX slot %d (%s): %s", m.tr.Name(), slot.index, tStr, jsonLine)
 			m.emit(Event{Type: "raw_reply", SlotIndex: slot.index, Line: jsonLine, MsgType: tStr})
 			if tStr == "err" {
 				codeStr, _ := msg["code"].(string)

@@ -13,7 +13,6 @@ import (
 	"embed"
 	"encoding/json"
 	"io/fs"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -24,6 +23,7 @@ import (
 	"time"
 	"unsafe"
 
+	"slaprf/internal/applog"
 	"slaprf/internal/portable"
 )
 
@@ -159,8 +159,10 @@ func Java_app_slaprf_SlapRFHost_nativeStartServer(env *C.JNIEnv, clazz C.jclass,
 		_ = os.MkdirAll(filesDir, 0o755)
 	}
 	dbPath := ""
+	logPath := ""
 	if filesDir != "" {
 		dbPath = filepath.Join(filesDir, "slaprf.db")
+		logPath = filepath.Join(filesDir, applog.DefaultLogFileName)
 	}
 
 	var ln net.Listener
@@ -174,13 +176,12 @@ func Java_app_slaprf_SlapRFHost_nativeStartServer(env *C.JNIEnv, clazz C.jclass,
 		return jstringFromGoString(env, "")
 	}
 
-	logger := log.New(os.Stdout, "[SlapRF-Android] ", log.LstdFlags)
 	pSrv := portable.NewServer(portable.Config{
 		Version:         ver,
 		StaticFS:        siteFS,
 		DBPath:          dbPath,
+		LogPath:         logPath,
 		AllowLANOrigins: true,
-		Log:             logger,
 		USBListPorts:    jniListUSBPorts,
 		USBOpenPort:     jniOpenUSBPort,
 		BLEListPorts:    jniListBLEPorts,
@@ -191,6 +192,7 @@ func Java_app_slaprf_SlapRFHost_nativeStartServer(env *C.JNIEnv, clazz C.jclass,
 	hSrv := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		ErrorLog:          pSrv.AppLog().StdLogger(),
 	}
 	go func() {
 		_ = hSrv.Serve(ln)
@@ -204,6 +206,7 @@ func Java_app_slaprf_SlapRFHost_nativeStartServer(env *C.JNIEnv, clazz C.jclass,
 	if wantLan {
 		startLanLocked(handler)
 	}
+	pSrv.AppLog().Infof("[Android] Bound loopback server %s (lan=%v lanPort=%d)", loopbackURL, lanLn != nil, lanPort)
 
 	return jstringFromGoString(env, loopbackURL)
 }

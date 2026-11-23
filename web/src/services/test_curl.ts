@@ -49,6 +49,9 @@ function isPortableHostRoute(url: string): boolean {
     pathOnly === "/v1/auth/config" ||
     pathOnly === "/v1/storage/status" ||
     pathOnly === "/v1/storage:recordBackup" ||
+    pathOnly === "/v1/logs" ||
+    pathOnly === "/v1/logs/config" ||
+    pathOnly === "/v1/logs:clear" ||
     pathOnly === "/v1/laprf-emulator" ||
     pathOnly.startsWith("/v1/laprf/") ||
     pathOnly === "/v1/laprf:sync" ||

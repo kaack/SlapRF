@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"slaprf/internal/applog"
 	"slaprf/internal/portable"
 	"slaprf/internal/storage"
 )
@@ -43,6 +44,8 @@ func main() {
 	flag.BoolVar(&pureBrowser, "pure-browser", false, "Alias for -browser")
 	flag.BoolVar(&pureBrowser, "browser-only", false, "Alias for -browser")
 	dbFlag := flag.String("db", "", "Path to single-file bbolt database (default: slaprf.db next to executable)")
+	logFlag := flag.String("log", "", "Path to rolling diagnostic log file (default: slaprf.log next to slaprf.db)")
+	logLevelFlag := flag.String("log-level", "", "Diagnostic log level: trace, debug, info, warn, error (default: info)")
 	allowOriginFlag := flag.String("allow-origin", "", "Comma-separated extra CORS origins allowed to connect")
 	noBrowser := flag.Bool("no-browser", false, "Do not automatically open the browser on startup")
 	noAuth := flag.Bool("no-auth", false, "Disable Basic authentication on startup (recovery mode if locked out)")
@@ -140,11 +143,21 @@ func main() {
 		}
 
 		allowLAN := useLAN || strings.HasPrefix(boundAddr, "0.0.0.0:") || strings.HasPrefix(boundAddr, "[::]:")
+		logPath := applog.ResolveDefaultLogPath(dbPath, *logFlag)
+		appLogger := applog.New(applog.Options{
+			FilePath: logPath,
+			Console:  os.Stdout,
+		})
+		defer appLogger.Close()
+		logger = appLogger.StdLogger()
 
 		pSrv = portable.NewServer(portable.Config{
 			Version:         version,
 			StaticFS:        siteFS,
 			DBPath:          dbPath,
+			LogPath:         logPath,
+			LogLevel:        *logLevelFlag,
+			AppLog:          appLogger,
 			AllowedOrigins:  extraOrigins,
 			AllowLANOrigins: allowLAN,
 			MultiGPBaseURL:  *mgpBase,
@@ -167,6 +180,9 @@ func main() {
 			}
 		}
 		fmt.Printf("  Database:    %s (bbolt)\n", pSrv.DBPath())
+		if pSrv.LogPath() != "" {
+			fmt.Printf("  Log file:    %s (level: %s; -log-level debug for detailed diagnostics)\n", pSrv.LogPath(), pSrv.AppLog().Level().String())
+		}
 		fmt.Printf("  Hardware:    Native Go USB (SlapRF timers), LapRF 8-Way, RotorHazard, LapRF Emulator :5403, MultiGP\n")
 		if *noAuth {
 			fmt.Printf("  Auth:        Disabled via -no-auth\n")
