@@ -18,6 +18,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"slaprf/internal/api"
 	"slaprf/internal/firmware"
 	"slaprf/internal/laprf"
 	"slaprf/internal/portable"
@@ -900,7 +901,7 @@ func TestDiagnosticLogsSideBySideAndRuntimeLevels(t *testing.T) {
 	if err != nil || getResp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /v1/logs failed: %v", err)
 	}
-	var logSnap portable.LogsResponse
+	var logSnap api.LogsResponse
 	_ = json.NewDecoder(getResp.Body).Decode(&logSnap)
 	getResp.Body.Close()
 	if logSnap.Level != "info" || len(logSnap.Lines) == 0 {
@@ -918,6 +919,10 @@ func TestDiagnosticLogsSideBySideAndRuntimeLevels(t *testing.T) {
 	armResp.Body.Close()
 	pracStartSim := doJSONReq(t, http.MethodPost, ts.URL+"/v1/practice/sessions/current:start", "", map[string]any{})
 	pracStartSim.Body.Close()
+	simConn := doJSONReq(t, http.MethodPut, ts.URL+"/v1/sim/slaprf/hub-usb", "", map[string]any{"connected": true})
+	simConn.Body.Close()
+	simDisc := doJSONReq(t, http.MethodPut, ts.URL+"/v1/sim/slaprf/hub-usb", "", map[string]any{"connected": false})
+	simDisc.Body.Close()
 
 	// Disable simulator and run real-workspace practice actions -> must log WITHOUT [SIM]
 	simOffResp := doJSONReq(t, http.MethodPatch, ts.URL+"/v1/sim", "", map[string]any{"running": false})
@@ -937,6 +942,8 @@ func TestDiagnosticLogsSideBySideAndRuntimeLevels(t *testing.T) {
 	for _, want := range []string{
 		"[DEBUG] [SIM][HTTP] PUT /v1/timing/arm",
 		"[INFO] [SIM][Practice] Session",
+		"[INFO] [SIM][Network] Disconnected simulated Hub H1",
+		"[INFO] [SIM][Network] Connected simulated Hub H1",
 		"[INFO] [Server] Simulation mode DISABLED",
 		"[INFO] [Practice] Session",
 		"action=stop",

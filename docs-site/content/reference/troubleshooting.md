@@ -82,7 +82,7 @@ If high-speed passes through a gate do not register:
 
 ## Diagnostic Logs
 
-On desktop (`SlapRF Portable`) and Android, SlapRF writes server, storage, and hardware link events to a rolling `slaprf.log` file alongside the app (and to Android `logcat` under tag `SlapRFGo`):
+SlapRF records user actions, race and practice events, completed laps, and hardware link transitions in a rolling `slaprf.log` file alongside the app on desktop and Android (and in a bounded `1,000`-line in-memory buffer in standalone Browser Demo Mode), tagging simulated activity with `[SIM]`:
 
 1. Open **Settings** and scroll to the **Diagnostics** section at the bottom of the page.
 2. Change the log level from `INFO (default)` to `DEBUG` or `TRACE` before reproducing an issue.

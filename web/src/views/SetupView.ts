@@ -79,7 +79,7 @@ export class SetupView extends Component {
         <section class="settings-section" data-section-anchor="diagnostics" data-slot="diagnostics-section">
           <div class="settings-intro">
             <h2>Diagnostics</h2>
-            <p>User actions, race &amp; practice events, laps, and hardware links are written side-by-side to <span class="mono">slaprf.log</span> (and Android <span class="mono">logcat</span>), with simulated activity tagged <span class="mono">[SIM]</span>. Raise the level to <span class="mono">DEBUG</span> or <span class="mono">TRACE</span> when troubleshooting timers.</p>
+            <p>User actions, race &amp; practice events, laps, and hardware links are written to <span class="mono">slaprf.log</span> on servers (or an in-memory buffer in Demo Mode), with simulated activity tagged <span class="mono">[SIM]</span>. Raise the level to <span class="mono">DEBUG</span> or <span class="mono">TRACE</span> when troubleshooting.</p>
           </div>
           <div class="settings-cards" data-slot="diagnostics"></div>
         </section>
@@ -91,7 +91,7 @@ export class SetupView extends Component {
     this.adopt(new LapRFEmulatorCard(this.slot("laprf-emulator"), store));
     this.adopt(new AuthenticationSettingsCard(this.slot("authentication")));
     this.adopt(new PersistenceSettings(this.slot("persistence"), api, announcer));
-    this.adopt(new DiagnosticsSettingsCard(this.slot("diagnostics")));
+    this.adopt(new DiagnosticsSettingsCard(this.slot("diagnostics"), api));
 
     this.onDispose(store.subscribe(["status", "config"], () => this.syncVisibility()));
     this.onDispose(subscribeCapabilities(() => this.syncVisibility()));
@@ -111,10 +111,6 @@ export class SetupView extends Component {
     const emuSec = this.el.querySelector<HTMLElement>('[data-slot="emulator-section"]');
     if (emuSec) {
       emuSec.style.display = caps.portable && !isLapRF ? "" : "none";
-    }
-    const diagSec = this.el.querySelector<HTMLElement>('[data-slot="diagnostics-section"]');
-    if (diagSec) {
-      diagSec.style.display = caps.portable ? "" : "none";
     }
 
     this.el.querySelectorAll<HTMLElement>(".settings-section").forEach((sec) => {

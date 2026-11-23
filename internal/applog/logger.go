@@ -94,13 +94,14 @@ type Options struct {
 	HasLevel     bool
 }
 
-// Status summarizes the live diagnostic logger configuration and on-disk footprint.
+// Status summarizes the live diagnostic logger configuration and on-disk (or in-memory) footprint.
 type Status struct {
 	LogPath   string   `json:"logPath"`
 	SizeBytes int64    `json:"sizeBytes"`
 	Level     string   `json:"level"`
 	Levels    []string `json:"levels"`
 	LineCount int      `json:"lineCount"`
+	MaxLines  int      `json:"maxLines,omitempty"`
 }
 
 // Logger writes timestamped log lines to a size-bounded side-by-side `slaprf.log` file,
@@ -410,7 +411,20 @@ func (l *Logger) Path() string {
 	return l.filePath
 }
 
-// Status returns the current file path, total on-disk bytes (`slaprf.log` + `.1`), active level, and buffered line count.
+// RingCap returns the configured capacity of the in-memory ring buffer.
+func (l *Logger) RingCap() int {
+	if l == nil {
+		return DefaultRingLines
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.ringCap <= 0 {
+		return DefaultRingLines
+	}
+	return l.ringCap
+}
+
+// Status returns the current file path, total on-disk (or in-memory) bytes, active level, and buffered line count.
 func (l *Logger) Status() Status {
 	if l == nil {
 		return Status{Level: LevelInfo.String(), Levels: AllLevels}
@@ -419,6 +433,14 @@ func (l *Logger) Status() Status {
 	p := l.filePath
 	sz := l.fileSize
 	cnt := l.ringLen
+	rCap := l.ringCap
+	if p == "" {
+		sz = 0
+		for i := 0; i < l.ringLen; i++ {
+			idx := (l.ringPos + i) % l.ringCap
+			sz += int64(len(l.ring[idx]) + 1)
+		}
+	}
 	l.mu.Unlock()
 
 	if p != "" {
@@ -433,12 +455,17 @@ func (l *Logger) Status() Status {
 			sz = total
 		}
 	}
+	maxLines := 0
+	if p == "" {
+		maxLines = rCap
+	}
 	return Status{
 		LogPath:   p,
 		SizeBytes: sz,
 		Level:     l.Level().String(),
 		Levels:    AllLevels,
 		LineCount: cnt,
+		MaxLines:  maxLines,
 	}
 }
 
@@ -489,7 +516,7 @@ func (l *Logger) ReadFullText() []byte {
 			return buf.Bytes()
 		}
 	}
-	lines := l.Tail(DefaultRingLines)
+	lines := l.Tail(l.RingCap())
 	if len(lines) == 0 {
 		return nil
 	}

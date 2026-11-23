@@ -422,6 +422,11 @@ func NewServer(cfg Config) *Server {
 			}
 			reconcileRealHardwareLinks(sim.IsRunning(), true)
 		},
+		OnLogLevelChanged: func(level string) {
+			if s.store != nil {
+				_ = s.store.PutJSON(storage.KeyLogLevel, level)
+			}
+		},
 	})
 
 	// Restore persisted hardware links & LapRF emulator listener
@@ -504,6 +509,11 @@ func (s *Server) subscribeSimHubBytes(fn func([]byte)) func() {
 }
 
 func (s *Server) logf(format string, args ...any) {
+	if s.appLog != nil {
+		msg := strings.TrimSpace(fmt.Sprintf(format, args...))
+		s.appLog.Infof("%s", msg)
+		return
+	}
 	if s.cfg.Log != nil {
 		s.cfg.Log.Printf(format, args...)
 	}
@@ -519,10 +529,7 @@ func (s *Server) DBPath() string {
 
 // LogPath returns the active rolling `slaprf.log` file path (or `""` if memory-only).
 func (s *Server) LogPath() string {
-	if s.appLog != nil {
-		return s.appLog.Path()
-	}
-	return ""
+	return s.appLog.Path()
 }
 
 // AppLog returns the server's structured diagnostic logger.
@@ -573,7 +580,7 @@ func (s *Server) Close() {
 	if s.tempDBPath != "" {
 		_ = os.Remove(s.tempDBPath)
 	}
-	if s.ownsAppLog && s.appLog != nil {
+	if s.ownsAppLog {
 		_ = s.appLog.Close()
 	}
 }
@@ -583,17 +590,13 @@ func (s *Server) RegisterAPIRoutes(mux *http.ServeMux) {
 	// Core engine, simulator, race sessions, practice sessions, pilots, gates, and storage routes
 	s.apiSrv.RegisterRoutes(mux)
 
-	// Server capabilities, authentication, bbolt storage status & diagnostic logs
+	// Server capabilities, authentication & bbolt storage status
 	mux.HandleFunc("GET /v1/capabilities", s.handleCapabilities)
 	mux.HandleFunc("POST /v1/auth/sessions", s.handleAuthLogin)
 	mux.HandleFunc("GET /v1/auth/config", s.handleAuthConfig)
 	mux.HandleFunc("PUT /v1/auth/config", s.handleAuthConfig)
 	mux.HandleFunc("GET /v1/storage/status", s.handleStorageStatus)
 	mux.HandleFunc("POST /v1/storage:recordBackup", s.handleStorageBackupRecorded)
-	mux.HandleFunc("GET /v1/logs", s.handleLogsGet)
-	mux.HandleFunc("GET /v1/logs/config", s.handleLogsConfig)
-	mux.HandleFunc("PUT /v1/logs/config", s.handleLogsConfig)
-	mux.HandleFunc("POST /v1/logs:clear", s.handleLogsClear)
 
 	// Real-time event + binary telemetry WebSocket stream
 	mux.HandleFunc("GET /v1/ws/stream", s.handleStreamWS)
@@ -810,6 +813,7 @@ func (s *Server) handleStorageBackupRecorded(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	_ = s.store.RecordBackupTimestamp(time.Now().UnixMilli())
+	s.appLog.Infof("[Storage] Exported application data backup")
 	writeJSONNoStore(w, http.StatusOK, s.store.Status())
 }
 

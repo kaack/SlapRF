@@ -70,6 +70,7 @@ func (s *Server) handlePutRHDebugStream(w http.ResponseWriter, r *http.Request) 
 	if s.simulator.IsRunning() {
 		s.simulator.SyncRHNodesNow()
 	}
+	s.logUserAction("RotorHazard", "Set debug RSSI stream active=%v on timer=#%d", body.Active, timerID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -447,6 +448,7 @@ func (s *Server) handleCreateSimLapRFUnit(w http.ResponseWriter, r *http.Request
 		writeEngineError(w, err)
 		return
 	}
+	s.logSimAction("LapRF", "Unit action=%s host=%q port=%d label=%q", req.Action, req.Host, req.Port, req.Label)
 	w.Header().Set("Location", "/v1/sim/laprf/timers")
 	writeJSON(w, http.StatusCreated, s.buildFullStateResponse())
 }
@@ -460,6 +462,7 @@ func (s *Server) handleResetSimLapRFUnits(w http.ResponseWriter, r *http.Request
 		writeEngineError(w, err)
 		return
 	}
+	s.logSimAction("LapRF", "Reset simulated LapRF 8-Way units to defaults")
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -479,6 +482,7 @@ func (s *Server) handlePatchSimLapRFUnit(w http.ResponseWriter, r *http.Request)
 		writeEngineError(w, err)
 		return
 	}
+	s.logSimAction("LapRF", "Updated simulated LapRF unit timer=#%d", timerID)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -505,6 +509,7 @@ func (s *Server) handleSimLapRFUnitCustomAction(w http.ResponseWriter, r *http.R
 		writeEngineError(w, err)
 		return
 	}
+	s.logSimAction("LapRF", "Unit timer=#%d action=%s", timerID, req.Action)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -520,6 +525,7 @@ func (s *Server) handleDeleteSimLapRFUnit(w http.ResponseWriter, r *http.Request
 		writeEngineError(w, err)
 		return
 	}
+	s.logSimAction("LapRF", "Deleted simulated LapRF unit timer=#%d", timerID)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -581,6 +587,7 @@ func (s *Server) handleCreateSimRHUnit(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
+	s.logSimAction("RotorHazard", "Unit action=%s host=%q portName=%q label=%q", req.Action, req.Host, req.PortName, req.Label)
 	w.Header().Set("Location", "/v1/sim/rotorhazard/timers")
 	writeJSON(w, http.StatusCreated, s.buildFullStateResponse())
 }
@@ -594,6 +601,7 @@ func (s *Server) handleResetSimRHUnits(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
+	s.logSimAction("RotorHazard", "Reset simulated RotorHazard units to defaults")
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -613,6 +621,7 @@ func (s *Server) handlePatchSimRHUnit(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
+	s.logSimAction("RotorHazard", "Updated simulated RotorHazard unit timer=#%d", timerID)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
@@ -639,6 +648,7 @@ func (s *Server) handleSimRHUnitCustomAction(w http.ResponseWriter, r *http.Requ
 			writeEngineError(w, err)
 			return
 		}
+		s.logSimAction("RotorHazard", "Unit timer=#%d action=%s", timerID, req.Action)
 		writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 
 	case "scan":
@@ -664,6 +674,7 @@ func (s *Server) handleSimRHUnitCustomAction(w http.ResponseWriter, r *http.Requ
 				writeEngineError(w, err)
 				return
 			}
+			s.logSimAction("RotorHazard", "Spectrum scan mode=once on timer=#%d (%d..%d MHz)", timerID, body.Start, body.Stop)
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "scan": pass})
 		case "live":
 			if err := s.simulator.SetRHUSBScanLive(timerID, true, body.Start, body.Stop, body.Step); err != nil {
@@ -671,12 +682,14 @@ func (s *Server) handleSimRHUnitCustomAction(w http.ResponseWriter, r *http.Requ
 				return
 			}
 			s.activeEngine().SetRHDebugStream(timerID, false)
+			s.logSimAction("RotorHazard", "Spectrum scan mode=live on timer=#%d (%d..%d MHz)", timerID, body.Start, body.Stop)
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "scanLive": true})
 		case "stop":
 			if err := s.simulator.SetRHUSBScanLive(timerID, false, body.Start, body.Stop, body.Step); err != nil {
 				writeEngineError(w, err)
 				return
 			}
+			s.logSimAction("RotorHazard", "Spectrum scan mode=stop on timer=#%d", timerID)
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "scanLive": false})
 		default:
 			writeErrorJSON(w, http.StatusBadRequest, "invalid scan mode (expected once, live, or stop)")
@@ -699,6 +712,7 @@ func (s *Server) handleDeleteSimRHUnit(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
+	s.logSimAction("RotorHazard", "Deleted simulated RotorHazard unit timer=#%d", timerID)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 

@@ -21,15 +21,19 @@ import (
 	"time"
 
 	"slaprf/internal/api"
+	"slaprf/internal/applog"
 	"slaprf/internal/domain"
 	"slaprf/internal/ingest"
 	"slaprf/internal/laprf"
 	"slaprf/internal/tracker"
 )
 
+const wasmLogRingLines = 1000
+
 type wasmStreamSubscriber struct {
 	mu          sync.RWMutex
 	engine      *tracker.Engine
+	appLog      *applog.Logger
 	callback    js.Value
 	telemetryCb js.Value
 
@@ -131,15 +135,26 @@ func (w *wasmStreamSubscriber) OnTelemetryFrame(frame domain.TimerTelemetryFrame
 	}
 }
 
-func (w *wasmStreamSubscriber) OnGateCrossing(event domain.GateCrossingEvent) {
-	w.send("crossing", event)
+func (w *wasmStreamSubscriber) OnGateCrossing(ev domain.GateCrossingEvent) {
+	if ev.StartedLap {
+		w.appLog.Infof("[SIM][Crossing] %s (slot=%d) started lap at gate #%d %q (peak=%.1f dBm, eventId=%d)",
+			ev.Callsign, ev.SlotIndex, ev.GateID, ev.GateName, ev.PeakRSSIDbm, ev.EventID)
+	} else {
+		w.appLog.Debugf("[SIM][Crossing] %s (slot=%d) crossed gate #%d %q (peak=%.1f dBm, hold=%.0f ms, eventId=%d)",
+			ev.Callsign, ev.SlotIndex, ev.GateID, ev.GateName, ev.PeakRSSIDbm, ev.HoldMs, ev.EventID)
+	}
+	w.send("crossing", ev)
 }
 
-func (w *wasmStreamSubscriber) OnDetectionFiltered(f domain.FilteredDetection) {
-	w.send("filtered", f)
+func (w *wasmStreamSubscriber) OnDetectionFiltered(det domain.FilteredDetection) {
+	w.appLog.Debugf("[SIM][Filter] Rejected detection for %s (slot=%d) at gate #%d: reason=%s peak=%.1f dBm (%s)",
+		det.Callsign, det.SlotIndex, det.GateID, det.Reason, det.PeakRSSIDbm, det.Detail)
+	w.send("filtered", det)
 }
 
 func (w *wasmStreamSubscriber) OnLapCompleted(lap domain.LapRecord, summaries []domain.PilotTrackSummary) {
+	w.appLog.Infof("[SIM][Lap] %s (slot=%d) completed lap #%d in %.3fs (lapId=%d, best=%v)",
+		lap.Callsign, lap.SlotIndex, lap.LapNumber, lap.LapTimeSec, lap.LapID, lap.IsBestLap)
 	w.send("lap", map[string]any{
 		"lap":       lap,
 		"summaries": summaries,
@@ -159,6 +174,10 @@ func (w *wasmStreamSubscriber) OnConfigUpdated(pilots []domain.PilotSlot, gates 
 }
 
 func (w *wasmStreamSubscriber) OnRaceUpdated(state domain.RaceTournamentState, eventState domain.EventManagerState, announcement *domain.RaceAnnouncement) {
+	if announcement != nil && announcement.Kind != "countdown_prompt" {
+		w.appLog.Infof("[SIM][RaceEvent] kind=%s race=%q (id=%s, heat=%q, pilot=%q) %s",
+			announcement.Kind, state.Config.EventName, state.RaceID, announcement.HeatID, announcement.Callsign, announcement.Text)
+	}
 	var serverTsUs uint64
 	if w.engine != nil {
 		serverTsUs = w.engine.NowUs()
@@ -227,10 +246,15 @@ func ingestRawHubStream(rx *ingest.HubFrameDecoder, eng *tracker.Engine, raw []b
 }
 
 func main() {
+	appLogger := applog.New(applog.Options{
+		RingLines: wasmLogRingLines,
+	})
 	simEngine := tracker.NewEngine()
 	sim := ingest.NewTrackSimulator(simEngine)
 	simHubRx := ingest.NewHubFrameDecoder(simEngine)
-	simStreamSub := &wasmStreamSubscriber{engine: simEngine}
+	simHubRx.SetSimContext(true)
+	simHubRx.SetLogger(appLogger)
+	simStreamSub := &wasmStreamSubscriber{engine: simEngine, appLog: appLogger}
 	simEngine.Subscribe(simStreamSub)
 	sim.SetTelemetryBatchHooks(simStreamSub.beginBatch, simStreamSub.endBatch)
 
@@ -293,6 +317,7 @@ func main() {
 
 	laprfSrv := laprf.NewServer(simEngine)
 	srv := api.NewServer(simEngine, sim, laprfSrv, simEngine)
+	srv.SetLogger(appLogger)
 	// Enforce Simulator ON even if PATCH /v1/sim is called inside Demo WASM
 	srv.SetHooks(api.ServerHooks{
 		OnModeChanged: func(running bool) {
@@ -302,6 +327,7 @@ func main() {
 		},
 	})
 	handler := srv.Handler()
+	appLogger.Infof("[WASM] SlapRF Browser Engine ready (in-memory log buffer, maxLines=%d, simRunning=true)", wasmLogRingLines)
 
 	// Advance live heat countdowns and race timers natively inside WASM at 10 Hz so the UI
 	// never needs to poll GET /v1/race/clock across the JS/JSON boundary.
@@ -346,8 +372,20 @@ func main() {
 			}
 		}
 
+		start := time.Now()
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
+		dur := time.Since(start).Round(100 * time.Microsecond)
+		if !strings.HasPrefix(req.URL.Path, "/v1/logs") {
+			switch {
+			case rec.Code >= 500:
+				appLogger.Errorf("[SIM][HTTP] %s %s -> %d (%s)", method, req.URL.Path, rec.Code, dur)
+			case rec.Code >= 400:
+				appLogger.Warnf("[SIM][HTTP] %s %s -> %d (%s)", method, req.URL.Path, rec.Code, dur)
+			case method != http.MethodGet && method != http.MethodHead:
+				appLogger.Debugf("[SIM][HTTP] %s %s -> %d (%s)", method, req.URL.Path, rec.Code, dur)
+			}
+		}
 
 		hdrObj := js.Global().Get("Object").New()
 		for k, vals := range rec.Header() {
@@ -450,7 +488,14 @@ func main() {
 
 	apiObj.Set("setSimHubUsbConnected", js.FuncOf(func(_ js.Value, args []js.Value) any {
 		connected := len(args) > 0 && args[0].Truthy()
-		simHubUSBConnected.Store(connected)
+		prev := simHubUSBConnected.Swap(connected)
+		if prev != connected {
+			if connected {
+				appLogger.Infof("[SIM][Network] Connected simulated Hub H1 (mode=%s)", simEngine.TimingHardwareMode())
+			} else {
+				appLogger.Infof("[SIM][Network] Disconnected simulated Hub H1 (mode=%s)", simEngine.TimingHardwareMode())
+			}
+		}
 		if !connected {
 			if domain.IsSlapRFMode(simEngine.TimingHardwareMode()) {
 				simEngine.SetAllTimersOffline()

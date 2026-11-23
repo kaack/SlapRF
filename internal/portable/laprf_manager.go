@@ -651,12 +651,14 @@ func (s *Server) handleLapRFConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	snap, err := s.laprfMgr.Connect(req)
 	if err != nil {
+		s.appLog.Warnf("[LapRF] Connect failed (host=%q, portName=%q): %v", req.Host, req.PortName, err)
 		writeJSONNoStore(w, http.StatusBadGateway, map[string]any{
 			"error":      err.Error(),
 			"connection": snap,
 		})
 		return
 	}
+	s.appLog.Infof("[LapRF] Connected timer=#%d (host=%q, portName=%q)", snap.TimerID, req.Host, req.PortName)
 	w.Header().Set("Location", fmt.Sprintf("/v1/laprf/connections/%d", snap.TimerID))
 	writeJSONNoStore(w, http.StatusCreated, map[string]any{"connection": snap})
 }
@@ -673,6 +675,7 @@ func (s *Server) handleLapRFDisconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.laprfMgr.Disconnect(uint8(tid))
+	s.appLog.Infof("[LapRF] Disconnected timer=#%d", tid)
 	writeJSONNoStore(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -686,6 +689,7 @@ func (s *Server) handleLapRFSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.laprfMgr.SyncAll()
+	s.appLog.Infof("[LapRF] Synced active pilot channels and thresholds")
 	writeJSONNoStore(w, http.StatusOK, map[string]any{"ok": true})
 }
 

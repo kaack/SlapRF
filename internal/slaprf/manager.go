@@ -255,15 +255,11 @@ func (m *Manager) warnf(format string, args ...any) {
 }
 
 func (m *Manager) debugf(format string, args ...any) {
-	if m.cfg.AppLog != nil {
-		m.cfg.AppLog.Debugf(format, args...)
-	}
+	m.cfg.AppLog.Debugf(format, args...)
 }
 
 func (m *Manager) tracef(format string, args ...any) {
-	if m.cfg.AppLog != nil {
-		m.cfg.AppLog.Tracef(format, args...)
-	}
+	m.cfg.AppLog.Tracef(format, args...)
 }
 
 func redactSensitiveCommand(cmd string) string {

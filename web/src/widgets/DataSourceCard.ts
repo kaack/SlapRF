@@ -61,7 +61,10 @@ interface BackendLogStatus {
   level: string;
   levels?: string[];
   lineCount: number;
+  maxLines?: number;
 }
+
+const DEMO_LOG_LEVEL_STORAGE_KEY = "slaprf.demoLogLevel";
 
 let cachedBackendStorageStatus: BackendStorageStatus | null = null;
 let cachedBackendLogStatus: BackendLogStatus | null = null;
@@ -1136,13 +1139,16 @@ export class PersistenceSettings extends Component {
   }
 }
 
-/** Diagnostics section: runtime log level (`ERROR`..`TRACE`), download, and clear controls for `slaprf.log`. */
+/** Diagnostics section: runtime log level (`ERROR`..`TRACE`), download, and clear controls (`slaprf.log` on Server/Android, bounded in-memory ring buffer in Browser Demo Mode). */
 export class DiagnosticsSettingsCard extends Component {
+  private readonly api: ApiClient;
   private backendLog: BackendLogStatus | null = cachedBackendLogStatus;
   private logFetchedAt = 0;
+  private restoredDemoLevel = false;
 
-  constructor(el: HTMLElement) {
+  constructor(el: HTMLElement, api: ApiClient) {
     super(el);
+    this.api = api;
     el.addEventListener("change", this.handleChange);
     el.addEventListener("click", this.handleClick);
     this.onDispose(() => {
@@ -1163,19 +1169,35 @@ export class DiagnosticsSettingsCard extends Component {
 
   private refreshLogs(force: boolean): void {
     this.renderLogStatus();
-    if (!capabilitiesSnapshot().portable) return;
+    if (typeof this.api?.getLogsConfig !== "function") return;
     if (!force && performance.now() - this.logFetchedAt < 4000) return;
     this.logFetchedAt = performance.now();
 
-    void fetch(resolveBackendUrl("/v1/logs/config"), {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      cache: "no-store",
-    })
-      .then(async (resp) => {
-        if (!resp.ok) return;
-        this.backendLog = (await resp.json()) as BackendLogStatus;
-        cachedBackendLogStatus = this.backendLog;
+    if (!capabilitiesSnapshot().portable && !this.restoredDemoLevel) {
+      this.restoredDemoLevel = true;
+      try {
+        const saved = window.localStorage.getItem(DEMO_LOG_LEVEL_STORAGE_KEY);
+        if (saved && saved !== "info") {
+          void this.api
+            .setLogLevel(saved)
+            .then((st) => {
+              this.backendLog = st;
+              cachedBackendLogStatus = st;
+              this.renderLogStatus();
+            })
+            .catch(() => undefined);
+          return;
+        }
+      } catch {
+        // Ignore storage errors
+      }
+    }
+
+    void this.api
+      .getLogsConfig()
+      .then((st) => {
+        this.backendLog = st;
+        cachedBackendLogStatus = st;
         this.renderLogStatus();
       })
       .catch(() => undefined);
@@ -1193,13 +1215,19 @@ export class DiagnosticsSettingsCard extends Component {
       }
     }
     if (!host) return;
+    const isServer = capabilitiesSnapshot().portable;
     if (!lg) {
-      host.innerHTML = `Level: <strong>INFO</strong> · file: <strong>slaprf.log</strong> · loading…`;
+      host.innerHTML = isServer
+        ? `Level: <strong>INFO</strong> · file: <strong>slaprf.log</strong> · loading…`
+        : `Level: <strong>INFO</strong> · in-memory buffer · loading…`;
       return;
     }
+    const locationPart = lg.logPath
+      ? `file: <span class="mono">${esc(lg.logPath)}</span>`
+      : `in-memory (${lg.lineCount}${lg.maxLines ? ` / ${lg.maxLines}` : ""} lines)`;
     const parts = [
       `Level: <strong>${esc((lg.level || "info").toUpperCase())}</strong>`,
-      lg.logPath ? `file: <span class="mono">${esc(lg.logPath)}</span>` : "in-memory",
+      locationPart,
       `size: ${formatBytes(lg.sizeBytes || 0)}`,
     ].filter(Boolean);
     host.innerHTML = parts.join(" · ");
@@ -1227,57 +1255,45 @@ export class DiagnosticsSettingsCard extends Component {
   };
 
   private async handleLogLevelChange(level: string): Promise<void> {
+    if (!capabilitiesSnapshot().portable) {
+      try {
+        window.localStorage.setItem(DEMO_LOG_LEVEL_STORAGE_KEY, level);
+      } catch {
+        // Ignore storage errors
+      }
+    }
     try {
-      const resp = await fetch(resolveBackendUrl("/v1/logs/config"), {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ level }),
-      });
-      if (!resp.ok) return;
-      this.backendLog = (await resp.json()) as BackendLogStatus;
-      cachedBackendLogStatus = this.backendLog;
+      const st = await this.api.setLogLevel(level);
+      this.backendLog = st;
+      cachedBackendLogStatus = st;
       this.renderLogStatus();
     } catch {
-      // Ignore transient network errors
+      // Ignore transient errors
     }
   }
 
   private async handleDownloadLog(): Promise<void> {
     try {
-      const resp = await fetch(resolveBackendUrl("/v1/logs?format=text"), {
-        method: "GET",
-        cache: "no-store",
-      });
-      if (!resp.ok) return;
-      const text = await resp.text();
+      const text = await this.api.downloadLogsText();
       const stamp = new Date().toISOString().slice(0, 10);
       downloadTextFile(`slaprf-${stamp}.log`, "text/plain", text);
     } catch {
-      // Ignore transient network errors
+      // Ignore transient errors
     }
   }
 
   private async handleClearLog(): Promise<void> {
     try {
-      const resp = await fetch(resolveBackendUrl("/v1/logs:clear"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: "{}",
-      });
-      if (!resp.ok) return;
-      this.backendLog = (await resp.json()) as BackendLogStatus;
-      cachedBackendLogStatus = this.backendLog;
+      const st = await this.api.clearLogs();
+      this.backendLog = st;
+      cachedBackendLogStatus = st;
       this.renderLogStatus();
     } catch {
-      // Ignore transient network errors
+      // Ignore transient errors
     }
   }
 
   private render(): void {
-    if (!capabilitiesSnapshot().portable) {
-      this.el.innerHTML = "";
-      return;
-    }
     const curLvl = (this.backendLog?.level || "info").toLowerCase();
     this.el.innerHTML = `
       <div class="card">

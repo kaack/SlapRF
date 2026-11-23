@@ -66,6 +66,7 @@ func (s *Server) handleUSBDebugSlot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.usbMgr.SetDebugSlot(req.SlotIndex)
+	s.appLog.Infof("[USB] Selected debug slot=%d", req.SlotIndex)
 	writeJSONNoStore(w, http.StatusOK, s.usbMgr.Snapshot())
 }
 
@@ -100,7 +101,15 @@ func (s *Server) handleSimHubUSB(w http.ResponseWriter, r *http.Request) {
 		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
 		return
 	}
+	prevConnected := s.simHubUSBConnected.Load()
 	s.setSimHubUSBConnected(req.Connected)
+	if prevConnected != req.Connected {
+		if req.Connected {
+			s.appLog.Infof("[SIM][Network] Connected simulated Hub H1 (mode=%s)", s.simEngine.TimingHardwareMode())
+		} else {
+			s.appLog.Infof("[SIM][Network] Disconnected simulated Hub H1 (mode=%s)", s.simEngine.TimingHardwareMode())
+		}
+	}
 	writeJSONNoStore(w, http.StatusOK, map[string]any{
 		"connected": s.simHubUSBConnected.Load(),
 	})
@@ -158,6 +167,7 @@ func (s *Server) handleUSBRawWS(w http.ResponseWriter, r *http.Request) {
 
 	port, info, openErr := s.usbTransport.OpenRawPort(s.usbMgr, portName, baud)
 	if openErr != nil {
+		s.appLog.Warnf("[Flasher] Failed to open raw USB port=%q (baud=%d): %v", portName, baud, openErr)
 		_ = sendText(map[string]any{
 			"type":  "open",
 			"ok":    false,
@@ -166,11 +176,13 @@ func (s *Server) handleUSBRawWS(w http.ResponseWriter, r *http.Request) {
 		_ = ws.Close(websocket.StatusNormalClosure, "open failed")
 		return
 	}
+	s.appLog.Infof("[Flasher] Opened raw USB session on port=%q (baud=%d)", info.Name, baud)
 
 	var closePortOnce sync.Once
 	closePort := func() {
 		closePortOnce.Do(func() {
 			_ = port.Close()
+			s.appLog.Infof("[Flasher] Closed raw USB session on port=%q", info.Name)
 		})
 	}
 	defer closePort()

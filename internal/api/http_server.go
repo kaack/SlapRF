@@ -74,11 +74,12 @@ type SimBackendState struct {
 // ServerHooks allows a native host (e.g. `internal/portable` + `bbolt` persistence) to react
 // immediately when REST requests mutate state, switch simulation mode, or reset/import storage.
 type ServerHooks struct {
-	OnMutation      func()
-	OnModeChanged   func(simRunning bool)
-	OnTimingStarted func()
-	OnStorageReset  func()
-	OnStorageImport func()
+	OnMutation        func()
+	OnModeChanged     func(simRunning bool)
+	OnTimingStarted   func()
+	OnStorageReset    func()
+	OnStorageImport   func()
+	OnLogLevelChanged func(level string)
 }
 
 // StreamEnvelope wraps a typed real-time message sent to the TypeScript SPA
@@ -315,6 +316,12 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/storage:restoreDemo", s.handleRestoreDemoData)
 	mux.HandleFunc("GET /v1/storage/sim", s.handleExportSimStorage)
 	mux.HandleFunc("PUT /v1/storage/sim", s.handleImportSimStorage)
+
+	// Diagnostic Logs (`/v1/logs`, `/v1/logs/config`, `/v1/logs:clear`) — shared across Go Server & Browser WASM
+	mux.HandleFunc("GET /v1/logs", s.handleLogsGet)
+	mux.HandleFunc("GET /v1/logs/config", s.handleGetLogsConfig)
+	mux.HandleFunc("PUT /v1/logs/config", s.handlePutLogsConfig)
+	mux.HandleFunc("POST /v1/logs:clear", s.handleLogsClear)
 }
 
 // Handler builds the HTTP multiplexer for the application's `/v1/*` routes.

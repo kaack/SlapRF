@@ -124,8 +124,12 @@ func (f *engineStreamForwarder) OnTelemetryFrame(frame domain.TimerTelemetryFram
 	}
 }
 
+func (f *engineStreamForwarder) isAllowed() bool {
+	return f.allow == nil || f.allow()
+}
+
 func (f *engineStreamForwarder) OnGateCrossing(ev domain.GateCrossingEvent) {
-	if f.appLog != nil && (f.allow == nil || f.allow()) {
+	if f.isAllowed() {
 		pfx := f.logPrefix()
 		if ev.StartedLap {
 			f.appLog.Infof("%s[Crossing] %s (slot=%d) started lap at gate #%d %q (peak=%.1f dBm, eventId=%d)",
@@ -139,7 +143,7 @@ func (f *engineStreamForwarder) OnGateCrossing(ev domain.GateCrossingEvent) {
 }
 
 func (f *engineStreamForwarder) OnDetectionFiltered(det domain.FilteredDetection) {
-	if f.appLog != nil && (f.allow == nil || f.allow()) {
+	if f.isAllowed() {
 		f.appLog.Debugf("%s[Filter] Rejected detection for %s (slot=%d) at gate #%d: reason=%s peak=%.1f dBm (%s)",
 			f.logPrefix(), det.Callsign, det.SlotIndex, det.GateID, det.Reason, det.PeakRSSIDbm, det.Detail)
 	}
@@ -147,7 +151,7 @@ func (f *engineStreamForwarder) OnDetectionFiltered(det domain.FilteredDetection
 }
 
 func (f *engineStreamForwarder) OnLapCompleted(lap domain.LapRecord, summaries []domain.PilotTrackSummary) {
-	if f.appLog != nil && (f.allow == nil || f.allow()) {
+	if f.isAllowed() {
 		f.appLog.Infof("%s[Lap] %s (slot=%d) completed lap #%d in %.3fs (lapId=%d, best=%v)",
 			f.logPrefix(), lap.Callsign, lap.SlotIndex, lap.LapNumber, lap.LapTimeSec, lap.LapID, lap.IsBestLap)
 	}
@@ -170,7 +174,7 @@ func (f *engineStreamForwarder) OnConfigUpdated(pilots []domain.PilotSlot, gates
 }
 
 func (f *engineStreamForwarder) OnRaceUpdated(state domain.RaceTournamentState, eventState domain.EventManagerState, announcement *domain.RaceAnnouncement) {
-	if f.appLog != nil && announcement != nil && announcement.Kind != "countdown_prompt" && (f.allow == nil || f.allow()) {
+	if announcement != nil && announcement.Kind != "countdown_prompt" && f.isAllowed() {
 		f.appLog.Infof("%s[RaceEvent] kind=%s race=%q (id=%s, heat=%q, pilot=%q) %s",
 			f.logPrefix(), announcement.Kind, state.Config.EventName, state.RaceID, announcement.HeatID, announcement.Callsign, announcement.Text)
 	}

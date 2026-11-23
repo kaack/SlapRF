@@ -7482,6 +7482,10 @@ components:
           type: integer
           description: Number of recent log lines currently buffered in memory
           example: 84
+        maxLines:
+          type: integer
+          description: Capacity of the bounded in-memory ring buffer when running without an on-disk log file (such as standalone Browser Demo Mode)
+          example: 1000
 
     DiagnosticLogResponse:
       allOf:

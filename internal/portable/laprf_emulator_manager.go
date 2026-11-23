@@ -326,5 +326,6 @@ func (s *Server) handleLapRFEmulatorConfig(w http.ResponseWriter, r *http.Reques
 		next.Bind = *req.Bind
 	}
 	snap := s.laprfEmulatorMgr.SetConfig(next)
+	s.appLog.Infof("[LapRFEmulator] Updated config: enabled=%v bind=%s port=%d", next.Enabled, next.Bind, next.Port)
 	writeJSONNoStore(w, http.StatusOK, snap)
 }

@@ -198,9 +198,7 @@ func (r *HubFrameDecoder) Reset() {
 	r.timelines = make(map[uint8]*tsTracker)
 	r.lastChanHex = ""
 	r.mu.Unlock()
-	if lg != nil {
-		lg.Debugf("%s Decoder state reset", tag)
-	}
+	lg.Debugf("%s Decoder state reset", tag)
 }
 
 // OnTelemetryFrame implements tracker.EventSubscriber.
@@ -267,9 +265,7 @@ func (r *HubFrameDecoder) sendChannelsToHub(freqs [domain.MaxPilotSlots]uint16, 
 	survey := r.survey
 	r.mu.Unlock()
 
-	if lg != nil {
-		lg.Debugf("%s Pushing 5.8 GHz channel table to Hub: freqs=%v MHz survey=%v", tag, freqs, survey)
-	}
+	lg.Debugf("%s Pushing 5.8 GHz channel table to Hub: freqs=%v MHz survey=%v", tag, freqs, survey)
 	if outFn != nil {
 		outFn(pkt)
 	}
@@ -403,9 +399,7 @@ func (r *HubFrameDecoder) registerHello(slot uint8, hello helloInfo) {
 	lg := r.appLog
 	tag := r.logTagLocked()
 	r.mu.Unlock()
-	if lg != nil {
-		lg.Infof("%s Bound tdma=%d -> timerID=%d fp=%s isHub=%v intervalUs=%d label=%q", tag, slot, timerID, hello.fpHex, hello.isHub, interval, hello.label)
-	}
+	lg.Infof("%s Bound tdma=%d -> timerID=%d fp=%s isHub=%v intervalUs=%d label=%q", tag, slot, timerID, hello.fpHex, hello.isHub, interval, hello.label)
 	r.pushActiveChannelsToHub()
 }
 
@@ -460,9 +454,7 @@ func (r *HubFrameDecoder) trackerLocked(timerID uint8, nowUs uint64) *tsTracker 
 // for its 8-bit sequence counter to wrap past the dedupe window.
 func (r *HubFrameDecoder) expireStaleSeqLocked(timerID uint8, intervalUs, nowUs uint64) {
 	if last, ok := r.lastArrival[timerID]; ok && nowUs > last && nowUs-last > staleSeqSamples*intervalUs {
-		if r.appLog != nil {
-			r.appLog.Debugf("%s Resetting stale sequence timeline for timerID=%d after %d us silence", r.logTagLocked(), timerID, nowUs-last)
-		}
+		r.appLog.Debugf("%s Resetting stale sequence timeline for timerID=%d after %d us silence", r.logTagLocked(), timerID, nowUs-last)
 		delete(r.hasSeq, timerID)
 		delete(r.lastTs, timerID)
 		delete(r.timelines, timerID)

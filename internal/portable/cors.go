@@ -109,7 +109,7 @@ func (s *Server) withCORSAndPNA(next http.Handler) http.Handler {
 		}
 
 		isWS := strings.HasPrefix(r.URL.Path, "/v1/ws/") || strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
-		if s.appLog != nil && isVersionedAPIPath(r.URL.Path) && !isWS {
+		if isVersionedAPIPath(r.URL.Path) && !isWS {
 			start := time.Now()
 			rec := &httpStatusRecorder{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rec, r)

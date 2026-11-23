@@ -52,6 +52,7 @@ func (s *Server) serveHubSurvey(w http.ResponseWriter, r *http.Request, wantMode
 		}
 		if wasActive != req.On {
 			mgr.SendToHub("CHANNELS RESET")
+			s.appLog.Infof("[%s] 5.8 GHz Raceband survey active=%v", mgr.Transport().Name(), req.On)
 		}
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

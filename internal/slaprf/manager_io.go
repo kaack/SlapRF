@@ -1244,7 +1244,7 @@ func (m *Manager) handleHubBinaryFrame(slot *connSlot, frame []byte) {
 		hubLive = hubLivePayloadLocked(slot, nowMs)
 	}
 	var debugSummary string
-	if m.cfg.AppLog != nil && m.cfg.AppLog.Enabled(applog.LevelDebug) && nowMs-slot.lastSummaryMs >= 5000 && len(slot.hubLive) > 0 {
+	if m.cfg.AppLog.Enabled(applog.LevelDebug) && nowMs-slot.lastSummaryMs >= 5000 && len(slot.hubLive) > 0 {
 		slot.lastSummaryMs = nowMs
 		parts := make([]string, 0, len(slot.hubLive))
 		for tdma := uint8(1); tdma <= 7; tdma++ {

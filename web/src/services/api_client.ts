@@ -741,6 +741,47 @@ export class ApiClient {
     await this.refresh();
   }
 
+  public async getLogsConfig(): Promise<{
+    logPath: string;
+    sizeBytes: number;
+    level: string;
+    levels?: string[];
+    lineCount: number;
+    maxLines?: number;
+  }> {
+    return await this.transport.request("GET", "/v1/logs/config");
+  }
+
+  public async setLogLevel(level: string): Promise<{
+    logPath: string;
+    sizeBytes: number;
+    level: string;
+    levels?: string[];
+    lineCount: number;
+    maxLines?: number;
+  }> {
+    return await this.transport.request("PUT", "/v1/logs/config", { level });
+  }
+
+  public async clearLogs(): Promise<{
+    logPath: string;
+    sizeBytes: number;
+    level: string;
+    levels?: string[];
+    lineCount: number;
+    maxLines?: number;
+  }> {
+    return await this.transport.request("POST", "/v1/logs:clear", {});
+  }
+
+  public async downloadLogsText(): Promise<string> {
+    if (this.transport.requestText) {
+      return await this.transport.requestText("GET", "/v1/logs?format=text");
+    }
+    const resp = await this.transport.request<{ lines?: string[] }>("GET", "/v1/logs?tail=1000");
+    return resp.lines && resp.lines.length > 0 ? resp.lines.join("\n") + "\n" : "";
+  }
+
   public async updatePilotSlot(slot: PilotSlot): Promise<void> {
     this.store.hydrate(
       await this.transport.request<FullStateResponse>("PUT", `/v1/pilots/${slot.slotIndex}`, slot)

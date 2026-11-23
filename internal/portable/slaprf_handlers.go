@@ -138,6 +138,7 @@ func (s *Server) serveSlapRFDisconnectAll(w http.ResponseWriter, r *http.Request
 	for i := 0; i < slaprf.MaxConnections; i++ {
 		_ = mgr.Disconnect(i)
 	}
+	s.appLog.Infof("[%s] Disconnected all slots", strings.ToUpper(mgr.Transport().Name()))
 	writeJSONNoStore(w, http.StatusOK, mgr.Snapshot())
 }
 
@@ -159,6 +160,11 @@ func (s *Server) serveSlapRFCommand(w http.ResponseWriter, r *http.Request, mgr 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
 		return
+	}
+	trTag := strings.ToUpper(mgr.Transport().Name())
+	cmdTrim := strings.TrimSpace(req.Command)
+	if !strings.EqualFold(cmdTrim, "STATUS?") {
+		s.appLog.Infof("[%s] Console command on slot=%d: %q", trTag, req.SlotIndex, cmdTrim)
 	}
 	if req.ExpectType != "" {
 		timeout := 3 * time.Second
@@ -195,6 +201,7 @@ func (s *Server) serveSlapRFKnownForget(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	mgr.ForgetKnownTimer(fp)
+	s.appLog.Infof("[%s] Forgot known timer fp=%s", strings.ToUpper(mgr.Transport().Name()), fp)
 	writeJSONNoStore(w, http.StatusOK, mgr.Snapshot())
 }
 
