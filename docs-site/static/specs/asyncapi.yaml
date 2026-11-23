@@ -367,6 +367,16 @@ components:
               type: number
             estimatedSpeedMph:
               type: number
+            holdMs:
+              type: number
+            aboveEnterMs:
+              type: number
+            aboveEnterAreaDbSec:
+              type: number
+            passAreaDbSec:
+              type: number
+            isStepBurst:
+              type: boolean
             passingNumber:
               type: integer
 

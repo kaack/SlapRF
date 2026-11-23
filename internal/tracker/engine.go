@@ -47,6 +47,8 @@ type ArmStateSubscriber interface {
 
 // pilotProgress tracks where a pilot is on the track between accepted crossings.
 type pilotProgress struct {
+	prevGateID     uint8  // prior gate before lastGateID (for stronger-peak supersede)
+	prevGateTimeUs uint64 // timestamp of prevGateID
 	lastGateID     uint8  // 0 = no accepted crossing in the current run
 	lastGateTimeUs uint64 // timestamp of that crossing
 	lapStartUs     uint64 // 0 = waiting for the first start/finish crossing
@@ -801,10 +803,11 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 			LapRFPeakHeight:   candidate.LapRFPeakHeight,
 			BeamwidthMs:       candidate.BeamwidthMs,
 			EstimatedSpeedMph: candidate.EstimatedSpeedMph,
-			HoldMs:            candidate.HoldMs,
-			AboveEnterMs:      candidate.AboveEnterMs,
-			PassAreaDbSec:     candidate.PassAreaDbSec,
-			IsStepBurst:       candidate.IsStepBurst,
+			HoldMs:              candidate.HoldMs,
+			AboveEnterMs:        candidate.AboveEnterMs,
+			AboveEnterAreaDbSec: candidate.AboveEnterAreaDbSec,
+			PassAreaDbSec:       candidate.PassAreaDbSec,
+			IsStepBurst:         candidate.IsStepBurst,
 		}
 
 		if !e.raceArmed {
@@ -838,6 +841,9 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 			continue
 		}
 
+		if out.supersededEventID != 0 {
+			e.removeCrossingByIDLocked(out.supersededEventID)
+		}
 		e.nextEventID++
 		e.passingNumbers[gate.GateID]++
 		ev.EventID = e.nextEventID

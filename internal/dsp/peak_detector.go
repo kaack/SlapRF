@@ -6,17 +6,18 @@ import (
 
 // CrossingCandidate is returned when a pilot completes a valid gate pass (enter -> peak -> exit nadir).
 type CrossingCandidate struct {
-	GateID            uint8
-	SlotIndex         int
-	TimestampUs       uint64
-	PeakRSSIDbm       float32
-	LapRFPeakHeight   float32
-	BeamwidthMs       float64
-	EstimatedSpeedMph float64
-	HoldMs            float64
-	AboveEnterMs      float64
-	PassAreaDbSec     float64
-	IsStepBurst       bool
+	GateID              uint8
+	SlotIndex           int
+	TimestampUs         uint64
+	PeakRSSIDbm         float32
+	LapRFPeakHeight     float32
+	BeamwidthMs         float64
+	EstimatedSpeedMph   float64
+	HoldMs              float64
+	AboveEnterMs        float64
+	AboveEnterAreaDbSec float64
+	PassAreaDbSec       float64
+	IsStepBurst         bool
 }
 
 type samplePoint struct {
@@ -340,7 +341,7 @@ func (d *ChannelDetector) ProcessSample(
 
 	if exited {
 		d.inGate = false
-		holdMs, aboveEnterMs, areaDbSec := d.measurePassHoldAndArea(enterThresholdDbm, effectiveExit)
+		holdMs, aboveEnterMs, aboveEnterAreaDbSec, areaDbSec := d.measurePassHoldAndArea(enterThresholdDbm, effectiveExit)
 		// Discard sub-45 ms micro-grazes (< 4 dB above enter in dBm mode) immediately without arming
 		// lockout so an ambient Wi-Fi/RF impulse never blocks an approaching drone right behind it.
 		if enterThresholdDbm < 0 && aboveEnterMs < 45.0 && d.peakRSSI < enterThresholdDbm+4.0 {
@@ -366,17 +367,18 @@ func (d *ChannelDetector) ProcessSample(
 		laprfHeight := float32(math.Max(400, math.Min(3900, float64(d.peakRSSI+95.0)*46.0)))
 
 		return &CrossingCandidate{
-			GateID:            d.gateID,
-			SlotIndex:         d.slotIndex,
-			TimestampUs:       refinedTimeUs,
-			PeakRSSIDbm:       d.peakRSSI,
-			LapRFPeakHeight:   laprfHeight,
-			BeamwidthMs:       beamwidthMs,
-			EstimatedSpeedMph: speedMph,
-			HoldMs:            holdMs,
-			AboveEnterMs:      aboveEnterMs,
-			PassAreaDbSec:     areaDbSec,
-			IsStepBurst:       isStepBurst,
+			GateID:              d.gateID,
+			SlotIndex:           d.slotIndex,
+			TimestampUs:         refinedTimeUs,
+			PeakRSSIDbm:         d.peakRSSI,
+			LapRFPeakHeight:     laprfHeight,
+			BeamwidthMs:         beamwidthMs,
+			EstimatedSpeedMph:   speedMph,
+			HoldMs:              holdMs,
+			AboveEnterMs:        aboveEnterMs,
+			AboveEnterAreaDbSec: aboveEnterAreaDbSec,
+			PassAreaDbSec:       areaDbSec,
+			IsStepBurst:         isStepBurst,
 		}
 	}
 
@@ -534,14 +536,14 @@ func (d *ChannelDetector) estimateBeamwidthAndSpeed() (float64, float64) {
 // and area on `smoothedRSSI` artificially stretches a 40 ms 5 GHz Wi-Fi packet burst into a
 // ~260 ms decay tail; `passMedSamples` preserves true physical duration for both indoor and
 // high-speed outdoor passes while exposing short RF packet bursts at their true 40-80 ms width.
-func (d *ChannelDetector) measurePassHoldAndArea(enterThresholdDbm, effectiveExit float32) (holdMs, aboveEnterMs, areaDbSec float64) {
+func (d *ChannelDetector) measurePassHoldAndArea(enterThresholdDbm, effectiveExit float32) (holdMs, aboveEnterMs, aboveEnterAreaDbSec, areaDbSec float64) {
 	pts := d.passMedSamples
 	if len(pts) < 3 {
 		pts = d.windowSamples
 	}
 	n := len(pts)
 	if n < 2 {
-		return 0, 0, 0
+		return 0, 0, 0, 0
 	}
 
 	var firstExitUs, lastExitUs uint64
@@ -607,7 +609,11 @@ func (d *ChannelDetector) measurePassHoldAndArea(enterThresholdDbm, effectiveExi
 			}
 		}
 
-		// Trapezoidal area above effectiveExit (dB*s).
+		// Trapezoidal area above enterThresholdDbm and effectiveExit (dB*s).
+		he0 := math.Max(0, float64(p0.rssiDbm-enterThresholdDbm))
+		he1 := math.Max(0, float64(p1.rssiDbm-enterThresholdDbm))
+		aboveEnterAreaDbSec += 0.5 * (he0 + he1) * dtSec
+
 		h0 := math.Max(0, float64(p0.rssiDbm-effectiveExit))
 		h1 := math.Max(0, float64(p1.rssiDbm-effectiveExit))
 		areaDbSec += 0.5 * (h0 + h1) * dtSec
@@ -619,7 +625,10 @@ func (d *ChannelDetector) measurePassHoldAndArea(enterThresholdDbm, effectiveExi
 	if holdMs < aboveEnterMs {
 		holdMs = aboveEnterMs
 	}
-	return math.Round(holdMs*10) / 10, math.Round(aboveEnterMs*10) / 10, math.Round(areaDbSec*100) / 100
+	return math.Round(holdMs*10) / 10,
+		math.Round(aboveEnterMs*10) / 10,
+		math.Round(aboveEnterAreaDbSec*100) / 100,
+		math.Round(areaDbSec*100) / 100
 }
 
 // isRectangularStepBurst detects a 5 GHz Wi-Fi TXOP / digital packet burst on an unused FPV

@@ -26,9 +26,10 @@ type GateCrossingEvent struct {
 	LapRFPeakHeight   float32 `json:"laprfPeakHeight"`      // Normalized LapRF peak height (600..3500 scale)
 	BeamwidthMs       float64 `json:"beamwidthMs"`             // Time spent within -6 dB of peak (inversely proportional to gate speed)
 	EstimatedSpeedMph float64 `json:"estimatedSpeedMph"`       // Estimated gate crossing speed derived from inverse-square RF curve width
-	HoldMs            float64 `json:"holdMs,omitempty"`        // Total gate pass hold time (enter to exit) in milliseconds
-	AboveEnterMs      float64 `json:"aboveEnterMs,omitempty"`  // Duration signal remained at or above enterThreshold in milliseconds
-	PassAreaDbSec     float64 `json:"passAreaDbSec,omitempty"` // Integrated area under the pass curve above exitThreshold (dB*s)
+	HoldMs              float64 `json:"holdMs,omitempty"`              // Total gate pass hold time (enter to exit) in milliseconds
+	AboveEnterMs        float64 `json:"aboveEnterMs,omitempty"`        // Duration signal remained at or above enterThreshold in milliseconds
+	AboveEnterAreaDbSec float64 `json:"aboveEnterAreaDbSec,omitempty"` // Integrated area under the pass curve above enterThreshold (dB*s)
+	PassAreaDbSec       float64 `json:"passAreaDbSec,omitempty"`       // Integrated area under the pass curve above exitThreshold (dB*s)
 	IsStepBurst       bool    `json:"isStepBurst,omitempty"`   // True when burst rose/fell instantaneously out of thermal noise (Wi-Fi packet TXOP)
 	PassingNumber     uint32  `json:"passingNumber"`           // Per-gate or global passing sequence number
 }

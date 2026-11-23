@@ -994,6 +994,35 @@ describe("services/announcer — Phonetic Names, Lap Formatting, Queue Dedup & W
 
       store.ingestTelemetry({ timerId: 2, seqNum: 23, timestampUs: 5_240_000, rssi: [-70] });
       expect(nonKeepAwake().length).toBe(3);
+
+      // 5. "peak" mode ignores shallow approach jitter lacking area-under-the-curve, then fires on the real pass peak!
+      store.hydrate({
+        ...storeSnapshotMinimal(store),
+        rules: {
+          minLapSec: 5,
+          maxLapSec: 120,
+          minCrossingSec: 0.12,
+          beepOnCross: true,
+          beepMode: "peak",
+        },
+      });
+      // Approach ripple on Gate 2 (enter = -58, exit = -68): crosses to -54.8 dBm (+3.2 dB) for 100 ms (~0.18 dB*s),
+      // then dips into the hysteresis band (-62 dBm) and even drops out (-70 dBm) — must NOT beep!
+      store.ingestTelemetry({ timerId: 2, seqNum: 30, timestampUs: 7_000_000, rssi: [-74] });
+      store.ingestTelemetry({ timerId: 2, seqNum: 31, timestampUs: 7_040_000, rssi: [-56.2] });
+      store.ingestTelemetry({ timerId: 2, seqNum: 32, timestampUs: 7_080_000, rssi: [-54.8] });
+      store.ingestTelemetry({ timerId: 2, seqNum: 33, timestampUs: 7_110_000, rssi: [-56.4] });
+      store.ingestTelemetry({ timerId: 2, seqNum: 34, timestampUs: 7_140_000, rssi: [-62.0] });
+      store.ingestTelemetry({ timerId: 2, seqNum: 35, timestampUs: 7_220_000, rssi: [-70.0] });
+      expect(nonKeepAwake().length).toBe(3);
+
+      // 2.0 s later, the real strong gate pass (-36 dBm) arrives and fires once right as the crest turns over!
+      store.ingestTelemetry({ timerId: 2, seqNum: 36, timestampUs: 9_100_000, rssi: [-53] });
+      store.ingestTelemetry({ timerId: 2, seqNum: 37, timestampUs: 9_150_000, rssi: [-42] });
+      store.ingestTelemetry({ timerId: 2, seqNum: 38, timestampUs: 9_200_000, rssi: [-36] });
+      store.ingestTelemetry({ timerId: 2, seqNum: 39, timestampUs: 9_225_000, rssi: [-37.2] });
+      store.ingestTelemetry({ timerId: 2, seqNum: 40, timestampUs: 9_250_000, rssi: [-39.0] });
+      expect(nonKeepAwake().length).toBe(4);
     } finally {
       ann.stop();
     }

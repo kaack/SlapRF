@@ -6500,6 +6500,25 @@ components:
         estimatedSpeedMph:
           type: number
           example: 41.2
+        holdMs:
+          type: number
+          description: Total gate pass hold time from enter to exit in milliseconds.
+          example: 540.0
+        aboveEnterMs:
+          type: number
+          description: Duration the signal remained at or above enterThreshold in milliseconds.
+          example: 420.0
+        aboveEnterAreaDbSec:
+          type: number
+          description: Integrated area under the pass curve above enterThreshold in dB*s.
+          example: 6.4
+        passAreaDbSec:
+          type: number
+          description: Integrated area under the pass curve above exitThreshold in dB*s.
+          example: 11.8
+        isStepBurst:
+          type: boolean
+          description: True when the waveform exhibited a step-like Wi-Fi or packet burst signature.
         passingNumber:
           type: integer
           example: 12

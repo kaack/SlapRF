@@ -2110,10 +2110,26 @@ export class AppStore {
   }
 
   public ingestFiltered(f: FilteredDetection): void {
+    if (f.reason === "SPIKE") {
+      this._crossings = this._crossings.filter(
+        (c) =>
+          !(c.gateId === f.gateId && c.slotIndex === f.slotIndex && c.timestampUs === f.timestampUs)
+      );
+    }
     this._filtered.push(f);
     if (this._filtered.length > MAX_FILTERED) this._filtered.shift();
     const activeSess = !this.isLiveRaceHeatRunning ? this.activePracticeSession : undefined;
     if (activeSess) {
+      if (f.reason === "SPIKE") {
+        activeSess.crossings = activeSess.crossings.filter(
+          (c) =>
+            !(
+              c.gateId === f.gateId &&
+              c.slotIndex === f.slotIndex &&
+              c.timestampUs === f.timestampUs
+            )
+        );
+      }
       activeSess.filtered.push(f);
       if (activeSess.filtered.length > MAX_FILTERED) activeSess.filtered.shift();
     }

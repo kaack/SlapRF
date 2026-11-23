@@ -760,6 +760,7 @@ export class Announcer {
       {
         gateId: number;
         beepMode: "enter" | "peak" | "exit";
+        minCrossingSec: number;
         pilots: Array<{
           slotIndex: number;
           rssiIdx: number;
@@ -776,6 +777,8 @@ export class Announcer {
       peakBeepFired: boolean;
       awaitingRearm: boolean;
       enterTsUs: number;
+      aboveEnterUs: number;
+      aboveEnterAreaDbSec: number;
       peakRssi: number;
       peakTsUs: number;
       prevRssi: number;
@@ -813,6 +816,7 @@ export class Announcer {
       {
         gateId: number;
         beepMode: "enter" | "peak" | "exit";
+        minCrossingSec: number;
         pilots: Array<{
           slotIndex: number;
           rssiIdx: number;
@@ -871,7 +875,8 @@ export class Announcer {
         pilots.push({ slotIndex: p.slotIndex, rssiIdx: i, enterDbm, exitDbm });
       }
       if (pilots.length === 0) continue;
-      const entry = { gateId: node.gateId, beepMode: mode, pilots };
+      const minCrossingSec = eff.minCrossingSec > 0 ? eff.minCrossingSec : 0.12;
+      const entry = { gateId: node.gateId, beepMode: mode, minCrossingSec, pilots };
       gatesByFrameTimerId.set(node.gateId, entry);
       if (node.assignedTimerId && !gatesByFrameTimerId.has(node.assignedTimerId)) {
         gatesByFrameTimerId.set(node.assignedTimerId, entry);
@@ -913,6 +918,8 @@ export class Announcer {
           peakBeepFired: false,
           awaitingRearm: false,
           enterTsUs: 0,
+          aboveEnterUs: 0,
+          aboveEnterAreaDbSec: 0,
           peakRssi: -127,
           peakTsUs: 0,
           prevRssi: -127,
@@ -938,6 +945,10 @@ export class Announcer {
         st.peakBeepFired = false;
         st.awaitingRearm = false;
       }
+      const dtUs =
+        st.lastSampleTsUs > 0 && tsUs > st.lastSampleTsUs
+          ? Math.min(tsUs - st.lastSampleTsUs, 120_000)
+          : 0;
       st.lastSampleTsUs = tsUs;
 
       const enterDbm = p.enterDbm;
@@ -958,6 +969,8 @@ export class Announcer {
           st.inGate = true;
           st.peakBeepFired = false;
           st.enterTsUs = tsUs;
+          st.aboveEnterUs = 0;
+          st.aboveEnterAreaDbSec = 0;
           st.peakRssi = s;
           st.peakTsUs = tsUs;
           st.prevRssi = s;
@@ -968,6 +981,17 @@ export class Announcer {
           }
         }
         continue;
+      }
+
+      if (dtUs > 0) {
+        if (s >= enterDbm) {
+          st.aboveEnterUs += dtUs;
+        }
+        if (s > enterDbm || st.prevRssi > enterDbm) {
+          const h0 = Math.max(0, st.prevRssi - enterDbm);
+          const h1 = Math.max(0, s - enterDbm);
+          st.aboveEnterAreaDbSec += 0.5 * (h0 + h1) * (dtUs / 1_000_000);
+        }
       }
 
       if (s >= st.peakRssi) {
@@ -981,14 +1005,20 @@ export class Announcer {
       }
       st.prevRssi = s;
 
-      // In "peak" mode, trigger right as the smoothed envelope turns the corner over the gate and starts dropping away.
-      if (gateCfg.beepMode === "peak" && !st.peakBeepFired) {
+      const minCrossSec = gateCfg.minCrossingSec;
+      const hasGenuinePassEnergy =
+        (st.peakRssi >= enterDbm + 5.5 &&
+          st.aboveEnterUs >= Math.max(80_000, minCrossSec * 650_000)) ||
+        (st.aboveEnterUs >= Math.max(140_000, minCrossSec * 1_000_000) &&
+          st.aboveEnterAreaDbSec >= Math.max(1.3, minCrossSec * 10.5));
+
+      // In "peak" mode, trigger right as the genuine pass crest turns the corner over the gate and starts dropping away.
+      if (gateCfg.beepMode === "peak" && !st.peakBeepFired && hasGenuinePassEnergy) {
         const riseAboveEnter = Math.max(0, st.peakRssi - enterDbm);
         const peakDropDb = Math.min(2.2, Math.max(1.2, riseAboveEnter * 0.28));
         const droppedFromPeak = st.peakRssi - s;
-        const hasMinHold = tsUs - st.enterTsUs >= 40_000;
         const confirmedFall = st.fallingStreak >= 2 || tsUs - st.peakTsUs >= 35_000;
-        if (hasMinHold && droppedFromPeak >= peakDropDb && confirmedFall) {
+        if (droppedFromPeak >= peakDropDb && confirmedFall) {
           st.peakBeepFired = true;
           st.lastAudioWallMs = nowMs;
           playShortCrossingBeep(cfg.scopedStore, gateCfg.gateId, vol);
@@ -1002,14 +1032,13 @@ export class Announcer {
         st.peakRssi - s >= 10 &&
         tsUs >= st.peakTsUs + 500_000;
       if (exitedBelow || exitedValley) {
-        const holdUs = tsUs - st.enterTsUs;
         st.inGate = false;
         st.lastExitUs = tsUs;
         st.awaitingRearm = !exitedBelow;
         if (gateCfg.beepMode === "exit") {
           st.lastAudioWallMs = nowMs;
           playShortCrossingBeep(cfg.scopedStore, gateCfg.gateId, vol);
-        } else if (gateCfg.beepMode === "peak" && !st.peakBeepFired && holdUs >= 40_000) {
+        } else if (gateCfg.beepMode === "peak" && !st.peakBeepFired && hasGenuinePassEnergy) {
           st.peakBeepFired = true;
           st.lastAudioWallMs = nowMs;
           playShortCrossingBeep(cfg.scopedStore, gateCfg.gateId, vol);

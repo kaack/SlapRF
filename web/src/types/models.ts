@@ -159,6 +159,11 @@ export interface GateCrossingEvent {
   laprfPeakHeight: number;
   beamwidthMs: number;
   estimatedSpeedMph: number;
+  holdMs?: number;
+  aboveEnterMs?: number;
+  aboveEnterAreaDbSec?: number;
+  passAreaDbSec?: number;
+  isStepBurst?: boolean;
   passingNumber: number;
 }
 
