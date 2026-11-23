@@ -1,6 +1,6 @@
 import { Component } from "../core/component";
 import { isCustomSelectOpenWithin } from "../core/custom_select";
-import { esc, fmtDelta, fmtTime } from "../core/format";
+import { esc, fmtDelta, fmtRaceClock, fmtTime } from "../core/format";
 import { icons } from "../core/icons";
 import {
   bindLapsInnerScroll,
@@ -28,7 +28,7 @@ import {
   slugifyPracticeName,
 } from "../core/router";
 import { ApiClient } from "../services/api_client";
-import { sectionKey } from "../state/analysis";
+import { currentLap, practiceStats, sectionKey } from "../state/analysis";
 import { allLapsFor, gateColor, gateLabel, lapsFor, sectionLabel, sectionShort } from "../state/selectors";
 import { AppStore } from "../state/store";
 import { PracticeSession } from "../types/models";
@@ -109,10 +109,29 @@ export class PracticeView extends Component {
   private pilotDrawerAnimatedOpen = false;
   private pilotDrawerClosing = false;
   private pilotDrawerCloseTimer: ReturnType<typeof setTimeout> | null = null;
+  private mobileLapClockTimer: number | null = null;
   private isViewActive = true;
+
+  private startMobileLapClock(): void {
+    if (this.mobileLapClockTimer !== null) return;
+    this.mobileLapClockTimer = window.setInterval(() => {
+      if (!this.isViewActive || this.activeTab !== "session" || this.mobilePracticeTab !== "laps") {
+        return;
+      }
+      this.tickMobileLapClock();
+    }, 100);
+  }
+
+  private stopMobileLapClock(): void {
+    if (this.mobileLapClockTimer !== null) {
+      window.clearInterval(this.mobileLapClockTimer);
+      this.mobileLapClockTimer = null;
+    }
+  }
 
   public override onDeactivate(): void {
     this.isViewActive = false;
+    this.stopMobileLapClock();
     this.pilotPopoverOpen = false;
     this.pilotDrawerAnimatedOpen = false;
     this.pilotDrawerClosing = false;
@@ -121,6 +140,7 @@ export class PracticeView extends Component {
 
   public override onActivate(): void {
     this.isViewActive = true;
+    this.startMobileLapClock();
     this.lastDirSig = "";
     this.lastWorkspaceControlsSig = "";
     this.lastPopoverSig = "";
@@ -321,6 +341,7 @@ export class PracticeView extends Component {
         clearTimeout(this.pilotDrawerCloseTimer);
         this.pilotDrawerCloseTimer = null;
       }
+      this.stopMobileLapClock();
       this.disposePracticeSignalsChart();
       this.disposePracticeTrackView();
       this.disposePracticeAnalyticsView();
@@ -366,6 +387,7 @@ export class PracticeView extends Component {
       })
     );
 
+    this.startMobileLapClock();
     this.resolvePendingRouteIfReady();
     this.syncAll();
   }
@@ -757,6 +779,35 @@ export class PracticeView extends Component {
         }
         this.lastMobileSectorsSig = "";
         this.renderMobileSectorsPanel();
+      }
+      return;
+    }
+
+    const clearPilotLapsBtn = target.closest<HTMLButtonElement>("[data-practice-clear-pilot-laps]");
+    if (clearPilotLapsBtn && !clearPilotLapsBtn.disabled) {
+      const slotIndex = Number(clearPilotLapsBtn.dataset.practiceClearPilotLaps ?? "0");
+      const pilot = slotIndex > 0 ? this.workspaceStore.pilot(slotIndex) : undefined;
+      if (pilot) {
+        const lapCount = allLapsFor(this.workspaceStore, pilot.slotIndex).length;
+        const sess = this.store.selectedPracticeSession;
+        const sessLabel = sess ? `<strong>${esc(sess.name)}</strong>` : "this practice session";
+        openConfirmModal({
+          title: "Clear Pilot Laps?",
+          messageHtml: `<p>Delete all ${lapCount > 0 ? `${lapCount} ` : ""}recorded lap${lapCount === 1 ? "" : "s"} for <strong>${esc(pilot.callsign)}</strong> in ${sessLabel}?</p>`,
+          confirmLabel: "Clear Laps",
+          danger: true,
+          onConfirm: async () => {
+            const curSess = this.store.selectedPracticeSession;
+            this.store.clearPracticePilotLaps(pilot.slotIndex);
+            await this.api
+              .practiceAction({
+                action: "clear_pilot_laps",
+                sessionId: curSess?.sessionId,
+                slotIndex: pilot.slotIndex,
+              })
+              .catch(this.reportErr);
+          },
+        });
       }
       return;
     }
@@ -2849,6 +2900,17 @@ export class PracticeView extends Component {
         : enabled[0]?.slotIndex ?? null;
     const pilot = focusSlot !== null ? this.workspaceStore.pilot(focusSlot) : undefined;
     const laps = pilot ? allLapsFor(this.workspaceStore, pilot.slotIndex) : [];
+    const ps = pilot ? practiceStats(this.workspaceStore, pilot) : null;
+    const validLapTimes = ps ? ps.laps.map((l) => l.lapTimeSec).filter((t) => t > 0) : [];
+    let stdDevSec: number | null = null;
+    if (validLapTimes.length >= 2) {
+      const meanSec = validLapTimes.reduce((acc, t) => acc + t, 0) / validLapTimes.length;
+      const variance =
+        validLapTimes.reduce((acc, t) => acc + (t - meanSec) ** 2, 0) / validLapTimes.length;
+      stdDevSec = Math.sqrt(variance);
+    }
+    const liveLap = pilot ? currentLap(this.workspaceStore, pilot.slotIndex) : null;
+    const canClearLaps = Boolean(pilot && (laps.length > 0 || liveLap !== null));
 
     const lapsSig = laps
       .slice(-20)
@@ -2864,8 +2926,10 @@ export class PracticeView extends Component {
       )
       .join("|");
     const checkedSig = checkedCols.map((c) => c.key).join(",");
-    const fullSig = `${sess.sessionId}:${pilot?.slotIndex ?? 0}:${pilot?.callsign ?? ""}:${checkedSig}:${gatesMetaSig}:${lapsSig}`;
+    const statsSig = `${laps.length}:${canClearLaps ? 1 : 0}:${ps?.lastLap ?? 0}:${ps?.bestLap ?? 0}:${ps?.rollingAvg ?? 0}:${stdDevSec !== null ? stdDevSec.toFixed(3) : "na"}`;
+    const fullSig = `${sess.sessionId}:${pilot?.slotIndex ?? 0}:${pilot?.callsign ?? ""}:${statsSig}:${checkedSig}:${gatesMetaSig}:${lapsSig}`;
     if (fullSig === this.lastMobileSectorsSig && host.children.length > 0) {
+      this.tickMobileLapClock();
       return;
     }
     this.lastMobileSectorsSig = fullSig;
@@ -2998,7 +3062,60 @@ export class PracticeView extends Component {
               .join("")}
           </div>`;
 
+    const avgTone =
+      ps && Number.isFinite(ps.trend) ? (ps.trend < 0 ? "tone-good" : "tone-bad") : "";
+    const liveAnyDone = Boolean(
+      liveLap && liveLap.sections.some((x) => x.state === "done" && x.bestSec > 0)
+    );
+    const liveTone =
+      liveLap && liveAnyDone && Math.abs(liveLap.deltaSoFar) >= 0.01
+        ? liveLap.deltaSoFar > 0
+          ? "tone-bad"
+          : "tone-good"
+        : "";
+    const firstLabelHtml = liveLap
+      ? `<span class="practice-mobile-live-dot" aria-hidden="true"></span>Lap ${liveLap.lapNumber}`
+      : "Last lap";
+    const firstValText = liveLap
+      ? fmtRaceClock(liveLap.elapsedSec)
+      : ps && ps.lastLap > 0
+        ? fmtTime(ps.lastLap)
+        : "—";
+    const clearLabel = pilot ? `Clear all laps for ${esc(pilot.callsign)}` : "Clear pilot laps";
+    const summaryStripMarkup = `
+      <div class="card practice-mobile-laps-strip" role="region" aria-label="Pilot lap summary">
+        <div class="practice-mobile-laps-pillars">
+          <div class="practice-mobile-laps-pillar ${liveLap ? "is-live" : ""}" data-mobile-lap-clock-pillar>
+            <span class="practice-mobile-pillar-label" data-mobile-lap-clock-label>${firstLabelHtml}</span>
+            <span class="practice-mobile-pillar-val mono ${liveTone}" data-mobile-lap-clock-val>${firstValText}</span>
+          </div>
+          <div class="practice-mobile-laps-pillar">
+            <span class="practice-mobile-pillar-label">Fastest</span>
+            <span class="practice-mobile-pillar-val mono ${ps && ps.bestLap > 0 ? "tone-accent" : ""}">${ps && ps.bestLap > 0 ? fmtTime(ps.bestLap) : "—"}</span>
+          </div>
+          <div class="practice-mobile-laps-pillar">
+            <span class="practice-mobile-pillar-label">Average</span>
+            <span class="practice-mobile-pillar-val mono ${avgTone}">${ps && ps.rollingAvg > 0 ? fmtTime(ps.rollingAvg) : "—"}</span>
+          </div>
+          <div class="practice-mobile-laps-pillar">
+            <span class="practice-mobile-pillar-label">Consistency</span>
+            <span class="practice-mobile-pillar-val mono">${stdDevSec !== null ? `±${stdDevSec.toFixed(2)}s` : "—"}</span>
+          </div>
+        </div>
+        <button
+          type="button"
+          class="btn btn-sm btn-icon btn-ghost practice-mobile-clear-laps-btn"
+          data-practice-clear-pilot-laps="${pilot?.slotIndex ?? 0}"
+          ${canClearLaps ? "" : "disabled"}
+          title="${clearLabel}"
+          aria-label="${clearLabel}"
+        >
+          ${icons.trash(15)}
+        </button>
+      </div>`;
+
     host.innerHTML = `
+      ${summaryStripMarkup}
       <section class="card card-flush practice-sectors-table-card">
         ${tableMarkup}
       </section>
@@ -3025,6 +3142,63 @@ export class PracticeView extends Component {
     const nextPickerScroll = host.querySelector<HTMLElement>(".practice-sectors-picker-list");
     if (nextPickerScroll && prevPickerScroll > 0) {
       nextPickerScroll.scrollTop = prevPickerScroll;
+    }
+  }
+
+  /** Lightweight 10 Hz updater for the mobile Last lap / live Lap N clock pillar (zero table DOM churn). */
+  private tickMobileLapClock(): void {
+    const host = this.slot("mobile-sectors");
+    const pillarEl = host.querySelector<HTMLElement>("[data-mobile-lap-clock-pillar]");
+    if (!pillarEl) return;
+    const labelEl = pillarEl.querySelector<HTMLElement>("[data-mobile-lap-clock-label]");
+    const valEl = pillarEl.querySelector<HTMLElement>("[data-mobile-lap-clock-val]");
+    if (!labelEl || !valEl) return;
+
+    const enabled = this.workspaceStore.enabledPilots;
+    const focusSlot =
+      this.store.liveFocus !== null && enabled.some((p) => p.slotIndex === this.store.liveFocus)
+        ? this.store.liveFocus
+        : enabled[0]?.slotIndex ?? null;
+    const pilot = focusSlot !== null ? this.workspaceStore.pilot(focusSlot) : undefined;
+    const live = pilot ? currentLap(this.workspaceStore, pilot.slotIndex) : null;
+
+    if (live) {
+      pillarEl.classList.add("is-live");
+      const wantLabel = `<span class="practice-mobile-live-dot" aria-hidden="true"></span>Lap ${live.lapNumber}`;
+      if (labelEl.innerHTML !== wantLabel) {
+        labelEl.innerHTML = wantLabel;
+      }
+      const wantVal = fmtRaceClock(live.elapsedSec);
+      if (valEl.textContent !== wantVal) {
+        valEl.textContent = wantVal;
+      }
+      const anyDone = live.sections.some((x) => x.state === "done" && x.bestSec > 0);
+      const wantCls =
+        anyDone && Math.abs(live.deltaSoFar) >= 0.01
+          ? `practice-mobile-pillar-val mono ${live.deltaSoFar > 0 ? "tone-bad" : "tone-good"}`
+          : "practice-mobile-pillar-val mono";
+      if (valEl.className !== wantCls) {
+        valEl.className = wantCls;
+      }
+    } else {
+      pillarEl.classList.remove("is-live");
+      if (labelEl.textContent !== "Last lap") {
+        labelEl.textContent = "Last lap";
+      }
+      const ps = pilot ? practiceStats(this.workspaceStore, pilot) : null;
+      const wantVal = ps && ps.lastLap > 0 ? fmtTime(ps.lastLap) : "—";
+      if (valEl.textContent !== wantVal) {
+        valEl.textContent = wantVal;
+      }
+      if (valEl.className !== "practice-mobile-pillar-val mono") {
+        valEl.className = "practice-mobile-pillar-val mono";
+      }
+    }
+
+    const clearBtn = host.querySelector<HTMLButtonElement>("[data-practice-clear-pilot-laps]");
+    if (clearBtn) {
+      const hasLaps = pilot ? allLapsFor(this.workspaceStore, pilot.slotIndex).length > 0 : false;
+      clearBtn.disabled = !pilot || (!hasLaps && live === null);
     }
   }
 

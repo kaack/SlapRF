@@ -1171,6 +1171,14 @@ export class AppStore {
         get: () => overrides.nodes().historical,
         enumerable: true,
       },
+      liveServerTimestampUs: {
+        get: () => base.liveServerTimestampUs,
+        enumerable: true,
+      },
+      smoothLatestTimestampUs: {
+        get: () => base.smoothLatestTimestampUs,
+        enumerable: true,
+      },
       node: {
         value: (nodeId: number) => {
           syncNodeMap();
@@ -2103,6 +2111,9 @@ export class AppStore {
     }
     if (ev.timestampUs > this._latestTimestampUs) {
       this._latestTimestampUs = ev.timestampUs;
+    }
+    if (ev.timestampUs >= this._serverClockBaseUs) {
+      this.anchorServerClock(ev.timestampUs, false);
     }
     this.lastCrossingBySlot.set(ev.slotIndex, ev);
     this.crossingListeners.forEach((fn) => fn(ev));

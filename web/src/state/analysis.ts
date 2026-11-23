@@ -299,8 +299,12 @@ export function currentLap(store: AppStore, slotIndex: number): CurrentLap | nul
   if (startIdx < 0) return null;
 
   const start = mine[startIdx];
-  const now = store.latestTimestampUs;
-  const elapsedSec = (now - start.timestampUs) / 1e6;
+  const now = Math.max(
+    store.latestTimestampUs,
+    store.smoothLatestTimestampUs || 0,
+    store.liveServerTimestampUs || 0
+  );
+  const elapsedSec = Math.max(0, (now - start.timestampUs) / 1e6);
   if (elapsedSec > store.rules.maxLapSec) return null;
 
   // Sections around the loop, starting at the start / finish gate.

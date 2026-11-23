@@ -16434,6 +16434,23 @@ button.bkt-wire-endpoint.is-reconnecting,
 .practice-strip-add-pilot-btn {
   display: none;
 }
+.practice-sectors-table-card {
+  flex: 0 0 clamp(200px, 40dvh, 330px);
+  height: clamp(200px, 40dvh, 330px);
+  min-height: clamp(200px, 40dvh, 330px);
+  max-height: clamp(200px, 40dvh, 330px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.practice-sectors-table-card > .empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+}
 .practice-workspace-stack {
   display: contents;
 }
@@ -23122,22 +23139,140 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
     min-height: 0;
     display: flex !important;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
     overflow: hidden;
   }
 
+  .practice-workspace-page .practice-mobile-laps-strip {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: stretch;
+    padding: 0;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-strong);
+    background: var(--surface-2);
+    overflow: hidden;
+  }
+
+  .practice-workspace-page .practice-mobile-laps-pillars {
+    flex: 1 1 0;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .practice-workspace-page .practice-mobile-laps-pillar {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 5px 7px;
+    min-width: 0;
+    border-right: 1px solid var(--border);
+  }
+
+  .practice-workspace-page .practice-mobile-pillar-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 9.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--text-3);
+    line-height: 1.15;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .practice-workspace-page .practice-mobile-laps-pillar.is-live .practice-mobile-pillar-label {
+    color: var(--good);
+  }
+
+  .practice-workspace-page .practice-mobile-live-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--good);
+    flex-shrink: 0;
+    box-shadow: 0 0 6px color-mix(in srgb, var(--good) 65%, transparent);
+  }
+
+  .practice-workspace-page .practice-mobile-pillar-val {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.25;
+    margin-top: 1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .practice-workspace-page .practice-mobile-pillar-val.tone-accent {
+    color: var(--accent);
+  }
+
+  .practice-workspace-page .practice-mobile-pillar-val.tone-good {
+    color: var(--good);
+  }
+
+  .practice-workspace-page .practice-mobile-pillar-val.tone-bad {
+    color: var(--bad);
+  }
+
+  .practice-workspace-page .practice-mobile-clear-laps-btn {
+    flex: 0 0 40px;
+    width: 40px;
+    height: auto;
+    min-height: 40px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    color: #94a3b8;
+    background: transparent;
+  }
+
+  .practice-workspace-page .practice-mobile-clear-laps-btn:hover:not(:disabled) {
+    color: #e2e8f0;
+    background: rgba(148, 163, 184, 0.12);
+  }
+
+  html[data-theme="light"] .practice-workspace-page .practice-mobile-clear-laps-btn {
+    color: #64748b;
+  }
+
+  html[data-theme="light"] .practice-workspace-page .practice-mobile-clear-laps-btn:hover:not(:disabled) {
+    color: #0f172a;
+    background: rgba(15, 23, 42, 0.06);
+  }
+
+  .practice-workspace-page .practice-mobile-clear-laps-btn:disabled {
+    opacity: 0.32;
+  }
+
   .practice-workspace-page .practice-sectors-table-card {
-    flex: 0 1 50%;
-    min-height: 0;
-    max-height: 50%;
+    flex: 0 0 clamp(200px, 40dvh, 330px);
+    height: clamp(200px, 40dvh, 330px);
+    min-height: clamp(200px, 40dvh, 330px);
+    max-height: clamp(200px, 40dvh, 330px);
     display: flex;
     flex-direction: column;
     overflow: hidden;
   }
 
+  .practice-workspace-page .practice-sectors-table-card > .empty {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+  }
+
   .practice-workspace-page .practice-sectors-table-card .table-scroll-shell,
   .practice-workspace-page .practice-sectors-table-card .laps-inner-scroll-shell {
-    flex: 0 1 auto;
+    flex: 1 1 auto;
     min-height: 0;
     max-height: none;
     display: flex;
@@ -23147,7 +23282,7 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
 
   .practice-workspace-page .practice-sectors-table-card .table-scroll,
   .practice-workspace-page .practice-sectors-table-card .laps-inner-scroll-viewport {
-    flex: 0 1 auto;
+    flex: 1 1 auto;
     min-height: 0;
     max-height: none;
     overflow-x: auto;
@@ -23156,7 +23291,7 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
   }
 
   .practice-workspace-page .practice-sectors-picker-list {
-    flex: 1 1 50%;
+    flex: 1 1 0;
     min-height: 0;
     margin-top: 0;
     padding: 0;
@@ -23164,8 +23299,9 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
     border: 0;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 5px;
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
   }
 

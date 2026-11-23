@@ -13,6 +13,7 @@ import {
   expect,
   flushMicrotasks,
   it,
+  makeCrossing,
   makeEventPilot,
   makeGate,
   makeHeat,
@@ -1925,6 +1926,9 @@ describe("PracticeView two-step lap deletion and per-pilot lap clearing", () => 
       // Switch to Practice -> Laps tab (mounts PilotPanel/PilotLaps for Desktop AND mobile sectors table for Mobile)
       host.querySelector<HTMLButtonElement>("[data-practice-mobile-tab='laps']")!.click();
       await flushMicrotasks();
+      await new Promise((r) =>
+        window.requestAnimationFrame(() => window.requestAnimationFrame(() => r(null)))
+      );
 
       // 1. Desktop PilotLaps: fixed-width columns, no clear-all icon in Lap <th>, and normal valid rows hide [data-practice-delete-lap]
       const desktopTable = host.querySelector<HTMLElement>(".practice-laps-table")!;
@@ -2068,6 +2072,9 @@ describe("PracticeView two-step lap deletion and per-pilot lap clearing", () => 
       await flushMicrotasks();
       host.querySelector<HTMLButtonElement>("[data-practice-mobile-tab='laps']")!.click();
       await flushMicrotasks();
+      await new Promise((r) =>
+        window.requestAnimationFrame(() => window.requestAnimationFrame(() => r(null)))
+      );
 
       // 1. Desktop PilotLaps: all 5 sections rendered inside sideways-scrollable inner shell (>3 sections)
       const desktopShell = host.querySelector<HTMLElement>(
@@ -2141,6 +2148,86 @@ describe("PracticeView two-step lap deletion and per-pilot lap clearing", () => 
       expect(
         updatedMobileShell.querySelector<HTMLButtonElement>(".laps-sec-cue.is-right")!.hidden
       ).toBe(true);
+
+      // 3. Mobile KPI + Clear Pilot Laps strip & Desktop Clear Pilot Laps button
+      const desktopClearBtn = host.querySelector<HTMLButtonElement>(
+        '.practice-laps-card [data-action="clear-pilot-laps"]'
+      )!;
+      expect(desktopClearBtn).not.toBeNull();
+      expect(desktopClearBtn.disabled).toBe(false);
+
+      const mobileStrip = mobileHost.querySelector<HTMLElement>(".practice-mobile-laps-strip")!;
+      expect(mobileStrip).not.toBeNull();
+      const pillarLabels = Array.from(
+        mobileStrip.querySelectorAll<HTMLElement>(".practice-mobile-pillar-label")
+      ).map((el) => el.textContent?.trim());
+      expect(pillarLabels).toEqual(["Last lap", "Fastest", "Average", "Consistency"]);
+
+      const mobileClearBtn = mobileStrip.querySelector<HTMLButtonElement>(
+        "[data-practice-clear-pilot-laps='1']"
+      )!;
+      expect(mobileClearBtn).not.toBeNull();
+      expect(mobileClearBtn.disabled).toBe(false);
+
+      const mobileCardBefore = mobileHost.querySelector<HTMLElement>(
+        ".practice-sectors-table-card"
+      )!;
+      const heightWithLaps = Math.round(mobileCardBefore.getBoundingClientRect().height);
+      expect(heightWithLaps >= 200).toBe(true);
+
+      mobileClearBtn.click();
+      await flushMicrotasks();
+      const confirmBtn = document.querySelector<HTMLButtonElement>(
+        ".slaprf-modal-backdrop [data-modal-confirm]"
+      )!;
+      expect(confirmBtn).not.toBeNull();
+      confirmBtn.click();
+      await flushMicrotasks();
+
+      const clearCall = calls.find(
+        (c) =>
+          c.method === "practiceAction" &&
+          (c.args[0] as { action?: string })?.action === "clear_pilot_laps"
+      );
+      expect(clearCall).toBeDefined();
+      expect(clearCall!.args[0]).toEqual({
+        action: "clear_pilot_laps",
+        sessionId: "prac-sec-5",
+        slotIndex: 1,
+      });
+      expect(
+        mobileHost.querySelector<HTMLButtonElement>("[data-practice-clear-pilot-laps='1']")!
+          .disabled
+      ).toBe(true);
+      const mobileCardAfter = mobileHost.querySelector<HTMLElement>(
+        ".practice-sectors-table-card"
+      )!;
+      const heightWhenEmpty = Math.round(mobileCardAfter.getBoundingClientRect().height);
+      expect(heightWhenEmpty).toBe(heightWithLaps);
+
+      // 4. Crossing the Start/Finish gate flips Pillar 1 from "Last lap" into live "Lap 1" clock
+      expect(
+        mobileHost.querySelector<HTMLElement>("[data-mobile-lap-clock-label]")!.textContent?.trim()
+      ).toBe("Last lap");
+      store.ingestCrossing(
+        makeCrossing(401, 1, 1, 305_000_000, { isStartFinish: true, startedLap: true })
+      );
+      store.ingestTelemetry({ timerId: 1, seqNum: 1, timestampUs: 308_400_000, rssi: [-80] });
+      await new Promise((r) => window.setTimeout(r, 120));
+      const clockPillar = mobileHost.querySelector<HTMLElement>("[data-mobile-lap-clock-pillar]")!;
+      expect(clockPillar.classList.contains("is-live")).toBe(true);
+      expect(
+        clockPillar.querySelector<HTMLElement>("[data-mobile-lap-clock-label]")!.textContent?.trim()
+      ).toBe("Lap 1");
+      expect(
+        clockPillar
+          .querySelector<HTMLElement>("[data-mobile-lap-clock-val]")!
+          .textContent?.startsWith("00:03.")
+      ).toBe(true);
+      expect(
+        mobileHost.querySelector<HTMLButtonElement>("[data-practice-clear-pilot-laps='1']")!
+          .disabled
+      ).toBe(false);
     } finally {
       document.querySelectorAll(".slaprf-modal-backdrop").forEach((m) => m.remove());
       view.destroy();
