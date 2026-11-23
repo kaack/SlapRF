@@ -1,8 +1,10 @@
 package slaprf
 
 import (
+	"bytes"
 	"crypto/rand"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -127,7 +129,99 @@ func NewKnownTimerRegistry(store *storage.BoltStore) *KnownTimerRegistry {
 
 // HostAuthKey returns this host's persistent 32-hex-character authentication key.
 func (r *KnownTimerRegistry) HostAuthKey() string {
-	return r.hostKey
+	r.mu.RLock()
+	k := r.hostKey
+	r.mu.RUnlock()
+	return k
+}
+
+// AdoptHostAuthKey updates and persists this host's 32-hex-character authentication key.
+func (r *KnownTimerRegistry) AdoptHostAuthKey(key string) bool {
+	clean := strings.ToUpper(strings.TrimSpace(key))
+	if !isValidHostKey(clean) {
+		return false
+	}
+	r.mu.Lock()
+	r.hostKey = clean
+	store := r.store
+	r.mu.Unlock()
+
+	if store != nil {
+		_ = store.PutJSON(kvHostAuthKey, clean)
+		if sidecar := hostKeySidecarPath(store); sidecar != "" {
+			_ = os.WriteFile(sidecar, []byte(clean+"\n"), 0o600)
+		}
+	}
+	return true
+}
+
+// HistoricalHostAuthKeys scans uncompacted bbolt leaf pages in `slaprf.db` for any previous
+// `hw.ble_host_key` values (e.g. from before an earlier storage reset) distinct from `HostAuthKey()`,
+// ordered from latest offset to earliest.
+func (r *KnownTimerRegistry) HistoricalHostAuthKeys() []string {
+	if r.store == nil {
+		return nil
+	}
+	dbPath := strings.TrimSpace(r.store.Path())
+	if dbPath == "" {
+		return nil
+	}
+	f, err := os.Open(dbPath)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	curKey := r.HostAuthKey()
+	needle := []byte(kvHostAuthKey + `"`)
+	const chunkSize = 1 << 20
+	const overlap = 64
+	buf := make([]byte, overlap+chunkSize)
+	carry := 0
+
+	var foundOrder []string
+	seen := map[string]bool{curKey: true}
+
+	for {
+		n, readErr := f.Read(buf[carry : carry+chunkSize])
+		if n > 0 {
+			window := buf[:carry+n]
+			off := 0
+			for {
+				idx := bytes.Index(window[off:], needle)
+				if idx < 0 {
+					break
+				}
+				pos := off + idx + len(needle)
+				if pos+33 <= len(window) && window[pos+32] == '"' {
+					cand := strings.ToUpper(string(window[pos : pos+32]))
+					if isValidHostKey(cand) {
+						if !seen[cand] {
+							seen[cand] = true
+							foundOrder = append(foundOrder, cand)
+						}
+					}
+				}
+				off = pos
+			}
+			total := carry + n
+			if total > overlap {
+				copy(buf[:overlap], window[total-overlap:total])
+				carry = overlap
+			} else {
+				carry = total
+			}
+		}
+		if readErr == io.EOF || readErr != nil {
+			break
+		}
+	}
+
+	// Reverse so newer leaf pages at higher file offsets are tried first.
+	for i, j := 0, len(foundOrder)-1; i < j; i, j = i+1, j-1 {
+		foundOrder[i], foundOrder[j] = foundOrder[j], foundOrder[i]
+	}
+	return foundOrder
 }
 
 // OnChange registers a listener notified when the timer inventory changes.
@@ -289,7 +383,7 @@ func (r *KnownTimerRegistry) Upsert(entry KnownHardwareTimer) {
 
 	if r.store != nil {
 		_ = r.store.PutJSON(kvKnownTimersKey, list)
-		_ = r.store.PutJSON(kvHostAuthKey, r.hostKey)
+		_ = r.store.PutJSON(kvHostAuthKey, r.HostAuthKey())
 	}
 }
 
@@ -316,7 +410,7 @@ func (r *KnownTimerRegistry) ClearBLEPairing(fp string) {
 
 	if r.store != nil {
 		_ = r.store.PutJSON(kvKnownTimersKey, list)
-		_ = r.store.PutJSON(kvHostAuthKey, r.hostKey)
+		_ = r.store.PutJSON(kvHostAuthKey, r.HostAuthKey())
 	}
 	for _, fn := range cbs {
 		fn()
@@ -341,7 +435,7 @@ func (r *KnownTimerRegistry) Forget(fp string) {
 
 	if r.store != nil {
 		_ = r.store.PutJSON(kvKnownTimersKey, list)
-		_ = r.store.PutJSON(kvHostAuthKey, r.hostKey)
+		_ = r.store.PutJSON(kvHostAuthKey, r.HostAuthKey())
 	}
 	for _, fn := range forgetCbs {
 		fn(clean)

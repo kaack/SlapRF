@@ -19,6 +19,10 @@ import (
 // Connect opens `rawTarget` on `slotIndex` (0..2), streams live connection progress, starts the
 // wire/console demultiplexer, and probes `STATUS?` / `SLAPRF?`.
 func (m *Manager) Connect(slotIndex int, rawTarget string) (SlotSnapshot, error) {
+	return m.connectInternal(slotIndex, rawTarget, true)
+}
+
+func (m *Manager) connectInternal(slotIndex int, rawTarget string, allowKeyRecovery bool) (SlotSnapshot, error) {
 	if slotIndex < 0 || slotIndex >= MaxConnections {
 		return SlotSnapshot{}, fmt.Errorf("invalid slot index %d", slotIndex)
 	}
@@ -201,12 +205,32 @@ func (m *Manager) Connect(slotIndex int, rawTarget string) (SlotSnapshot, error)
 			rejMsg = m.defaultAuthMismatchMsg()
 		}
 		_ = m.closeSlotInternal(slot, true)
+		if allowKeyRecovery {
+			candidates := m.timers.HistoricalHostAuthKeys()
+			if len(candidates) > 0 {
+				origKey := m.timers.HostAuthKey()
+				m.logf("[SlapRF] auth_mismatch on %s; trying %d historical host key(s) from slaprf.db", portName, len(candidates))
+				if len(candidates) > 8 {
+					candidates = candidates[:8]
+				}
+				for _, cand := range candidates {
+					time.Sleep(400 * time.Millisecond)
+					m.timers.AdoptHostAuthKey(cand)
+					if snap, recErr := m.connectInternal(slotIndex, rawTarget, false); recErr == nil {
+						m.logf("[SlapRF] recovered historical BLE host key for %s", portName)
+						return snap, nil
+					}
+				}
+				m.timers.AdoptHostAuthKey(origKey)
+			}
+		}
 		slot.mu.Lock()
 		slot.lastError = rejMsg
 		slot.reconnectFailed = true
 		slot.authRejected = true
 		slot.mu.Unlock()
 		m.removeRejectedTarget(portName)
+		m.emit(Event{Type: "error", SlotIndex: slot.index, Error: rejMsg})
 		m.broadcastPoolState()
 		return m.Snapshot().Slots[slotIndex], errors.New(rejMsg)
 	}
@@ -1503,16 +1527,21 @@ func (m *Manager) emitTextLine(slot *connSlot, raw []byte) {
 					}
 					slot.mu.Lock()
 					pName := slot.portName
+					wasProbing := slot.probing
 					slot.authRejected = true
 					slot.probing = false
 					slot.reconnecting = false
 					slot.reconnectFailed = true
 					slot.lastError = errMsg
 					slot.mu.Unlock()
-					m.removeRejectedTarget(pName)
-					m.emit(Event{Type: "error", SlotIndex: slot.index, Error: errMsg})
+					if !wasProbing {
+						m.removeRejectedTarget(pName)
+						m.emit(Event{Type: "error", SlotIndex: slot.index, Error: errMsg})
+					}
 					m.failWaiters(slot, errors.New(errMsg))
-					m.broadcastPoolState()
+					if !wasProbing {
+						m.broadcastPoolState()
+					}
 					return
 				}
 				if errMsg == "" {
