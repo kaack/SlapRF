@@ -2101,6 +2101,16 @@ html[data-theme="light"] .practice-sector-checkbox.is-checked::after {
   font-variant-numeric: tabular-nums;
 }
 
+.table.practice-laps-table th.col-sector,
+.table.practice-laps-table td.col-sector {
+  text-align: center;
+}
+
+.practice-laps-table .split {
+  min-width: 60px;
+  text-align: right;
+}
+
 .practice-laps-table.is-scrollable-sectors th.col-sector,
 .practice-laps-table.is-scrollable-sectors td.col-sector {
   width: var(--sector-col-w, 92px);
@@ -2134,6 +2144,16 @@ html[data-theme="light"] .practice-sector-checkbox.is-checked::after {
   white-space: nowrap;
 }
 
+.practice-laps-table td.col-lap-time,
+.practice-sectors-table td.col-lap-time {
+  padding-left: 6px;
+}
+
+.practice-laps-table td.col-lap-time .split-neutral,
+.practice-sectors-table td.col-lap-time .split-neutral {
+  color: var(--text);
+}
+
 .practice-laps-table th.col-vs-best,
 .practice-laps-table td.col-vs-best {
   width: 86px;
@@ -2148,6 +2168,20 @@ html[data-theme="light"] .practice-sector-checkbox.is-checked::after {
   width: 100%;
   min-width: 100%;
   font-variant-numeric: tabular-nums;
+}
+
+.table.practice-sectors-table th.col-mobile-sector,
+.table.practice-sectors-table td.col-mobile-sector {
+  text-align: center;
+  padding-left: 3px;
+  padding-right: 3px;
+}
+
+.practice-sectors-table .split {
+  min-width: 46px;
+  padding: 2px 4px;
+  font-size: 11.5px;
+  text-align: right;
 }
 
 .practice-sectors-table.is-scrollable-sectors th.col-mobile-sector,
@@ -16443,6 +16477,20 @@ button.bkt-wire-endpoint.is-reconnecting,
   flex-direction: column;
   overflow: hidden;
 }
+.practice-sectors-table-card .laps-inner-scroll-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.practice-sectors-table-card .laps-inner-scroll-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .practice-sectors-table-card > .empty {
   flex: 1 1 auto;
   display: flex;
@@ -16450,6 +16498,37 @@ button.bkt-wire-endpoint.is-reconnecting,
   align-items: center;
   justify-content: center;
   margin: 0;
+}
+.practice-mobile-laps-pillar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.practice-mobile-pillar-label,
+.practice-mobile-pillar-val {
+  display: block;
+  width: 100%;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.lap-num-live {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  margin: 0;
+  font-weight: 700;
+  color: var(--text);
+}
+.lap-cell-pending {
+  color: var(--text-3);
+  opacity: 0.55;
+  letter-spacing: 0.08em;
+}
+.lap-cell-pending.is-active {
+  color: var(--text-2);
+  opacity: 0.9;
 }
 .practice-workspace-stack {
   display: contents;
@@ -23115,9 +23194,10 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
   }
 
   .practice-workspace-page .practice-sectors-table .split {
-    min-width: 0;
-    padding: 2px 5px;
+    min-width: 46px;
+    padding: 2px 4px;
     font-size: 11.5px;
+    text-align: right;
   }
 
   .practice-workspace-page .practice-laps-card th:first-child,
@@ -23164,16 +23244,18 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
   .practice-workspace-page .practice-mobile-laps-pillar {
     display: flex;
     flex-direction: column;
+    align-items: center;
     justify-content: center;
-    padding: 5px 7px;
+    text-align: center;
+    padding: 5px 6px;
     min-width: 0;
     border-right: 1px solid var(--border);
   }
 
   .practice-workspace-page .practice-mobile-pillar-label {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
+    display: block;
+    width: 100%;
+    text-align: center;
     font-size: 9.5px;
     font-weight: 600;
     text-transform: uppercase;
@@ -23185,20 +23267,11 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
     text-overflow: ellipsis;
   }
 
-  .practice-workspace-page .practice-mobile-laps-pillar.is-live .practice-mobile-pillar-label {
-    color: var(--good);
-  }
-
-  .practice-workspace-page .practice-mobile-live-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--good);
-    flex-shrink: 0;
-    box-shadow: 0 0 6px color-mix(in srgb, var(--good) 65%, transparent);
-  }
-
   .practice-workspace-page .practice-mobile-pillar-val {
+    display: block;
+    width: 100%;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
     font-size: 13px;
     font-weight: 700;
     color: var(--text);

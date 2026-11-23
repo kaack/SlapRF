@@ -1,5 +1,5 @@
-import { LapRecord, PilotSlot } from "../types/models";
-import { bestLapOf, lapsFor, mean, median, ON_TRACK_WINDOW_SEC, secondsSinceSeen } from "./selectors";
+import { LapRecord, PilotSlot, SectorBadge } from "../types/models";
+import { allLapsFor, bestLapOf, lapsFor, mean, median, ON_TRACK_WINDOW_SEC, secondsSinceSeen } from "./selectors";
 import { AppStore } from "./store";
 
 // ---------------------------------------------------------------------------
@@ -266,14 +266,18 @@ export interface LiveSection {
   /** The pilot's own best on this section (0 if never flown). */
   bestSec: number;
   delta: number;
+  badge: SectorBadge;
 }
 
 export interface CurrentLap {
   lapNumber: number;
+  startTimestampUs: number;
   elapsedSec: number;
   sections: LiveSection[];
   /** Sum of deltas over completed sections vs. the pilot's best sections. */
   deltaSoFar: number;
+  /** Set during the brief (<600 ms wall-clock) window after a finish crossing arrives before its `LapRecord`. */
+  provisionalLapTimeSec?: number;
 }
 
 /**
@@ -282,7 +286,7 @@ export interface CurrentLap {
  */
 export function currentLap(store: AppStore, slotIndex: number): CurrentLap | null {
   const sess = store.selectedPracticeSession;
-  if (sess && !sess.active) return null;
+  if (sess && (!sess.active || sess.paused)) return null;
   const gates = store.nodes;
   const sfIdx = gates.findIndex((p) => p.role === "START_FINISH");
   if (sfIdx < 0) return null;
@@ -298,28 +302,66 @@ export function currentLap(store: AppStore, slotIndex: number): CurrentLap | nul
   }
   if (startIdx < 0) return null;
 
-  const start = mine[startIdx];
+  const allMine = allLapsFor(store, slotIndex);
+  let start = mine[startIdx];
   const now = Math.max(
     store.latestTimestampUs,
     store.smoothLatestTimestampUs || 0,
     store.liveServerTimestampUs || 0
   );
+  // If a finish crossing at Start/Finish arrived over WebSocket a few milliseconds before its
+  // matching `LapRecord` (note: `start.timestampUs` is the RSSI peak, which can be 300-1500 ms
+  // earlier than `now` when finalized on exit!), check wall-clock `lastCrossingIngestPerfMs` so
+  // the finishing lap fills in its final section + total time immediately without ever blanking out.
+  let endSliceIdx = mine.length;
+  let provisionalLapTimeSec: number | undefined;
+  const nowPerfMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const crossAgeMs = nowPerfMs - store.lastCrossingIngestPerfMs(slotIndex);
+  if (
+    startIdx > 0 &&
+    !start.startedLap &&
+    store.lastCrossingIngestPerfMs(slotIndex) > 0 &&
+    crossAgeMs >= 0 &&
+    crossAgeMs < 600 &&
+    !allMine.some((l) => Math.abs(l.completedAtUs - start.timestampUs) <= 50_000)
+  ) {
+    const finishEv = start;
+    for (let i = startIdx - 1; i >= 0; i--) {
+      if (mine[i].gateId === sfId && (finishEv.timestampUs - mine[i].timestampUs) / 1e6 <= store.rules.maxLapSec) {
+        endSliceIdx = startIdx + 1;
+        startIdx = i;
+        start = mine[i];
+        provisionalLapTimeSec = Math.max(0, (finishEv.timestampUs - start.timestampUs) / 1e6);
+        break;
+      }
+    }
+  }
   const elapsedSec = Math.max(0, (now - start.timestampUs) / 1e6);
   if (elapsedSec > store.rules.maxLapSec) return null;
 
   // Sections around the loop, starting at the start / finish gate.
   const order = [...gates.slice(sfIdx), ...gates.slice(0, sfIdx)];
   const best = new Map(sectionConsistency(store, slotIndex).map((s) => [s.key, s.best]));
+  const overall = new Map(sectionRecords(store).map((r) => [r.key, r.recordSlot !== null ? r.recordSec : 0]));
   const sections: LiveSection[] = order.map((p, i) => {
     const to = order[(i + 1) % order.length];
     const key = sectionKey(p.gateId, to.gateId);
-    return { key, fromGateId: p.gateId, toGateId: to.gateId, state: "pending", splitSec: 0, bestSec: best.get(key) ?? 0, delta: NaN };
+    return {
+      key,
+      fromGateId: p.gateId,
+      toGateId: to.gateId,
+      state: "pending",
+      splitSec: 0,
+      bestSec: best.get(key) ?? 0,
+      delta: NaN,
+      badge: "NORMAL",
+    };
   });
   const indexOfGate = (gateId: number) => order.findIndex((p) => p.gateId === gateId);
 
   let prev = start;
   let deltaSoFar = 0;
-  for (const c of mine.slice(startIdx + 1)) {
+  for (const c of mine.slice(startIdx + 1, endSliceIdx)) {
     const split = (c.timestampUs - prev.timestampUs) / 1e6;
     const from = indexOfGate(prev.gateId);
     const to = indexOfGate(c.gateId);
@@ -327,6 +369,16 @@ export function currentLap(store: AppStore, slotIndex: number): CurrentLap | nul
       const s = sections[from];
       s.state = "done";
       s.splitSec = split;
+      const oBest = overall.get(s.key) ?? 0;
+      if (oBest <= 0 || split <= oBest + 0.0005) {
+        s.badge = "OVERALL_BEST";
+      } else if (s.bestSec <= 0 || split <= s.bestSec + 0.0005) {
+        s.badge = "PERSONAL_BEST";
+      } else if (split > s.bestSec * 1.10) {
+        s.badge = "OFF_PACE";
+      } else {
+        s.badge = "NORMAL";
+      }
       if (s.bestSec > 0) {
         s.delta = split - s.bestSec;
         deltaSoFar += s.delta;
@@ -341,8 +393,149 @@ export function currentLap(store: AppStore, slotIndex: number): CurrentLap | nul
   const cur = sections.find((s) => s.fromGateId === prev.gateId && s.state === "pending");
   if (cur) {
     cur.state = "current";
-    cur.splitSec = (now - prev.timestampUs) / 1e6;
+    cur.splitSec = Math.max(0, (now - prev.timestampUs) / 1e6);
   }
 
-  return { lapNumber: lapsFor(store, slotIndex).length + 1, elapsedSec, sections, deltaSoFar };
+  const nextLapNum =
+    (allMine.length > 0 ? allMine[allMine.length - 1].lapNumber : 0) + 1;
+
+  return {
+    lapNumber: nextLapNum,
+    startTimestampUs: start.timestampUs,
+    elapsedSec,
+    sections,
+    deltaSoFar,
+    ...(provisionalLapTimeSec !== undefined ? { provisionalLapTimeSec } : {}),
+  };
+}
+
+/** Dwell duration (ms) to keep a just-finished lap's numbers in the active row before inserting below. */
+export const LIVE_LAP_COMPLETION_HOLD_MS = 1100;
+
+export interface LiveLapTableState {
+  /** Active row at Row #1 (`tr.is-in-progress`), either mid-lap or holding a just-finished lap's numbers. */
+  live: CurrentLap | null;
+  /** Completed lap whose numbers are currently held inside `live` on Row #1 before inserting below. */
+  heldLap: LapRecord | null;
+  /** True when `heldLap` came from `laps` (vs provisional finish crossing) and should be excluded from history below. */
+  excludeHeldFromHistory: boolean;
+  /** Remaining ms (> 0) before `heldLap` inserts into the history rows below and `live` clears for the next lap. */
+  holdRemainingMs: number;
+}
+
+/**
+ * Returns remaining dwell time in ms (> 0) when a continuous flying lap just completed via
+ * `store.ingestLap` so the user can see the final section split, `Lap time`, and `vs best` fill in
+ * on the top row for ~1.1 s wall-clock before clearing and inserting the completed row below.
+ */
+export function liveLapHoldRemainingMs(
+  store: AppStore,
+  slotIndex: number,
+  live: CurrentLap | null,
+  laps: LapRecord[],
+  holdMs = LIVE_LAP_COMPLETION_HOLD_MS
+): number {
+  if (!live || laps.length === 0) return 0;
+  if (live.sections.some((s) => s.state === "done" || s.state === "missed")) return 0;
+  const lastLap = laps[laps.length - 1];
+  if (!lastLap || Math.abs(live.startTimestampUs - lastLap.completedAtUs) > 50_000) {
+    return 0;
+  }
+  const ingestedAtMs = store.lastLapIngestPerfMs(slotIndex);
+  if (!(ingestedAtMs > 0)) return 0;
+  const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const elapsedWallMs = Math.max(0, nowMs - ingestedAtMs);
+  return elapsedWallMs < holdMs ? Math.ceil(holdMs - elapsedWallMs) : 0;
+}
+
+/**
+ * Resolves the active Row #1 state (`tr.is-in-progress`): when a continuous flying lap just
+ * finished (`< 1.1 s` ago), keeps `tr.is-in-progress` in place without changing row style, fills in
+ * all final numbers (`Lap time`, `vs best`, last section) on that active row, and holds off
+ * inserting the completed row below until the hold expires.
+ */
+export function resolveLiveLapTableState(
+  store: AppStore,
+  slotIndex: number,
+  rawLive: CurrentLap | null,
+  laps: LapRecord[],
+  holdMs = LIVE_LAP_COMPLETION_HOLD_MS
+): LiveLapTableState {
+  if (rawLive?.provisionalLapTimeSec !== undefined) {
+    const synthLap: LapRecord = {
+      lapId: -1,
+      slotIndex,
+      callsign: "",
+      lapNumber: rawLive.lapNumber,
+      lapTimeSec: rawLive.provisionalLapTimeSec,
+      deltaToBest: rawLive.deltaSoFar,
+      completedAtUs: rawLive.startTimestampUs + Math.round(rawLive.provisionalLapTimeSec * 1e6),
+      isBestLap: false,
+      sectors: rawLive.sections
+        .filter((s) => s.state === "done")
+        .map((s, idx) => ({
+          sectorIndex: idx,
+          fromGateId: s.fromGateId,
+          toGateId: s.toGateId,
+          label: "",
+          splitSeconds: s.splitSec,
+          deltaToBestSec: Number.isFinite(s.delta) ? s.delta : 0,
+          exitSpeedMph: 0,
+          badge: s.badge,
+        })),
+    };
+    return {
+      live: rawLive,
+      heldLap: synthLap,
+      excludeHeldFromHistory: false,
+      holdRemainingMs: holdMs,
+    };
+  }
+  const remaining = liveLapHoldRemainingMs(store, slotIndex, rawLive, laps, holdMs);
+  if (remaining <= 0 || laps.length === 0) {
+    return { live: rawLive, heldLap: null, excludeHeldFromHistory: false, holdRemainingMs: 0 };
+  }
+  const heldLap = laps[laps.length - 1];
+  const gates = store.nodes;
+  const byKey = new Map(
+    (heldLap.sectors ?? []).map((s) => [sectionKey(s.fromGateId, s.toGateId), s])
+  );
+  const heldSections: LiveSection[] = gates.map((g, i) => {
+    const to = gates[(i + 1) % gates.length];
+    const key = sectionKey(g.gateId, to.gateId);
+    const sec = byKey.get(key);
+    return sec
+      ? {
+          key,
+          fromGateId: g.gateId,
+          toGateId: to.gateId,
+          state: "done",
+          splitSec: sec.splitSeconds,
+          bestSec: 0,
+          delta: sec.deltaToBestSec,
+          badge: sec.badge,
+        }
+      : {
+          key,
+          fromGateId: g.gateId,
+          toGateId: to.gateId,
+          state: "missed",
+          splitSec: 0,
+          bestSec: 0,
+          delta: NaN,
+          badge: "NORMAL",
+        };
+  });
+  return {
+    live: {
+      lapNumber: heldLap.lapNumber,
+      startTimestampUs: Math.max(0, heldLap.completedAtUs - Math.round(heldLap.lapTimeSec * 1e6)),
+      elapsedSec: heldLap.lapTimeSec,
+      sections: heldSections,
+      deltaSoFar: heldLap.deltaToBest,
+    },
+    heldLap,
+    excludeHeldFromHistory: true,
+    holdRemainingMs: remaining,
+  };
 }

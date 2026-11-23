@@ -28,13 +28,19 @@ import {
   slugifyPracticeName,
 } from "../core/router";
 import { ApiClient } from "../services/api_client";
-import { currentLap, practiceStats, sectionKey } from "../state/analysis";
+import { currentLap, practiceStats, resolveLiveLapTableState, sectionKey } from "../state/analysis";
 import { allLapsFor, gateColor, gateLabel, lapsFor, sectionLabel, sectionShort } from "../state/selectors";
 import { AppStore } from "../state/store";
 import { PracticeSession } from "../types/models";
 import { openConfirmModal } from "../widgets/ConfirmModal";
 import { openConfirmPreemptModal } from "../widgets/ConfirmPreemptModal";
-import { renderEmpty, renderSectionCapsuleIcon, SPLIT_CLASS } from "../widgets/markup";
+import {
+  computePilotBestMetrics,
+  renderEmpty,
+  renderSectionCapsuleIcon,
+  resolveSectorSplitClass,
+  SPLIT_CLASS,
+} from "../widgets/markup";
 import { PilotPicker } from "../widgets/PilotPicker";
 import { PilotRssiChart } from "../widgets/PilotRssiChart";
 import { ScopedTrackWorkspace } from "../widgets/ScopedTrackWorkspace";
@@ -110,7 +116,25 @@ export class PracticeView extends Component {
   private pilotDrawerClosing = false;
   private pilotDrawerCloseTimer: ReturnType<typeof setTimeout> | null = null;
   private mobileLapClockTimer: number | null = null;
+  private mobileLiveHoldTimer: number | null = null;
   private isViewActive = true;
+
+  private scheduleMobileLiveHoldRelease(holdMs: number): void {
+    if (this.mobileLiveHoldTimer !== null) {
+      window.clearTimeout(this.mobileLiveHoldTimer);
+      this.mobileLiveHoldTimer = null;
+    }
+    if (holdMs > 0) {
+      this.mobileLiveHoldTimer = window.setTimeout(() => {
+        this.mobileLiveHoldTimer = null;
+        if (!this.isViewActive || this.activeTab !== "session" || this.mobilePracticeTab !== "laps") {
+          return;
+        }
+        this.lastMobileSectorsSig = "";
+        this.renderMobileSectorsPanel();
+      }, holdMs + 20);
+    }
+  }
 
   private startMobileLapClock(): void {
     if (this.mobileLapClockTimer !== null) return;
@@ -126,6 +150,10 @@ export class PracticeView extends Component {
     if (this.mobileLapClockTimer !== null) {
       window.clearInterval(this.mobileLapClockTimer);
       this.mobileLapClockTimer = null;
+    }
+    if (this.mobileLiveHoldTimer !== null) {
+      window.clearTimeout(this.mobileLiveHoldTimer);
+      this.mobileLiveHoldTimer = null;
     }
   }
 
@@ -2910,10 +2938,19 @@ export class PracticeView extends Component {
       stdDevSec = Math.sqrt(variance);
     }
     const liveLap = pilot ? currentLap(this.workspaceStore, pilot.slotIndex) : null;
+    const display = pilot
+      ? resolveLiveLapTableState(this.workspaceStore, pilot.slotIndex, liveLap, laps)
+      : { live: null, heldLap: null, excludeHeldFromHistory: false, holdRemainingMs: 0 };
+    this.scheduleMobileLiveHoldRelease(display.holdRemainingMs);
+    const tableLiveLap = display.live;
+    const heldLap = display.heldLap;
+    const historyLaps =
+      heldLap && display.excludeHeldFromHistory
+        ? laps.filter((l) => l.lapId !== heldLap.lapId)
+        : laps;
     const canClearLaps = Boolean(pilot && (laps.length > 0 || liveLap !== null));
 
-    const lapsSig = laps
-      .slice(-20)
+    const lapsSig = historyLaps
       .map(
         (l) =>
           `${l.lapId}:${l.lapNumber}:${l.lapTimeSec}:${l.invalidated ? 1 : 0}:${l.isBestLap ? 1 : 0}:${l.deltaToBest}:${(l.sectors ?? []).map((s) => `${s.fromGateId}>${s.toGateId}=${s.splitSeconds}:${s.badge}`).join(",")}`
@@ -2926,7 +2963,10 @@ export class PracticeView extends Component {
       )
       .join("|");
     const checkedSig = checkedCols.map((c) => c.key).join(",");
-    const statsSig = `${laps.length}:${canClearLaps ? 1 : 0}:${ps?.lastLap ?? 0}:${ps?.bestLap ?? 0}:${ps?.rollingAvg ?? 0}:${stdDevSec !== null ? stdDevSec.toFixed(3) : "na"}`;
+    const liveLapSig = tableLiveLap
+      ? `${heldLap ? `held:${heldLap.lapNumber}:${heldLap.lapTimeSec.toFixed(3)}:` : "live:"}${tableLiveLap.lapNumber}:${tableLiveLap.sections.map((s) => `${s.key}=${s.state}:${s.state === "done" ? s.splitSec.toFixed(3) : ""}`).join(",")}`
+      : "none";
+    const statsSig = `${historyLaps.length}:${canClearLaps ? 1 : 0}:${liveLapSig}:${ps?.bestLap ?? 0}:${ps?.rollingAvg ?? 0}:${stdDevSec !== null ? stdDevSec.toFixed(3) : "na"}`;
     const fullSig = `${sess.sessionId}:${pilot?.slotIndex ?? 0}:${pilot?.callsign ?? ""}:${statsSig}:${checkedSig}:${gatesMetaSig}:${lapsSig}`;
     if (fullSig === this.lastMobileSectorsSig && host.children.length > 0) {
       this.tickMobileLapClock();
@@ -2942,8 +2982,58 @@ export class PracticeView extends Component {
     const prevPickerScroll =
       host.querySelector<HTMLElement>(".practice-sectors-picker-list")?.scrollTop ?? 0;
 
+    const metricsSource =
+      heldLap && !display.excludeHeldFromHistory ? [...laps, heldLap] : laps;
+    const bestMetrics = computePilotBestMetrics(metricsSource);
+    const liveRowMarkup = tableLiveLap
+      ? (() => {
+          const liveByKey = new Map(tableLiveLap.sections.map((s) => [s.key, s]));
+          const liveCells = checkedCols
+            .map((c) => {
+              const s = liveByKey.get(c.key);
+              if (s?.state === "done") {
+                const splitCls = heldLap
+                  ? resolveSectorSplitClass(bestMetrics, heldLap.slotIndex, c.from, c.to, s.splitSec)
+                  : SPLIT_CLASS[s.badge];
+                return `<td class="num col-mobile-sector"><span class="split ${splitCls}">${s.splitSec.toFixed(3)}</span></td>`;
+              }
+              if (s?.state === "missed") {
+                return `<td class="num muted col-mobile-sector" title="Timer missed">—</td>`;
+              }
+              if (s?.state === "current") {
+                return `<td class="num muted col-mobile-sector" title="In section"><span class="lap-cell-pending is-active">···</span></td>`;
+              }
+              return `<td class="num muted col-mobile-sector"><span class="lap-cell-pending">·</span></td>`;
+            })
+            .join("");
+          let lapTimeCell = `<td class="num mono muted col-lap-time is-sticky-col"><span class="lap-sticky-inner"><span class="lap-cell-pending">···</span></span></td>`;
+          let vsBestCell = `<td class="num mono muted col-vs-best is-sticky-col"><span class="lap-sticky-inner"><span class="lap-cell-pending">·</span></span></td>`;
+          if (heldLap) {
+            const bestLapSec = bestMetrics.bestLapBySlot.get(heldLap.slotIndex) ?? 0;
+            const isBestLap = bestLapSec > 0 && Math.abs(heldLap.lapTimeSec - bestLapSec) <= 0.0005;
+            const deltaToBest = bestLapSec > 0 && !isBestLap ? heldLap.lapTimeSec - bestLapSec : 0;
+            const vs =
+              isBestLap && heldLap.lapNumber > 1
+                ? `<span class="badge badge-accent">PB</span>`
+                : deltaToBest > 0.0005
+                  ? fmtDelta(deltaToBest)
+                  : "best";
+            lapTimeCell = `<td class="num mono strong col-lap-time is-sticky-col"><span class="lap-sticky-inner"><span class="split ${isBestLap ? "split-best" : "split-neutral"}">${fmtTime(heldLap.lapTimeSec)}</span></span></td>`;
+            vsBestCell = `<td class="num mono muted col-vs-best is-sticky-col"><span class="lap-sticky-inner">${vs}</span></td>`;
+          }
+          return `<tr class="is-in-progress" data-live-lap-row="${tableLiveLap.lapNumber}" title="Lap ${tableLiveLap.lapNumber} in progress">
+            <td class="mono col-mobile-lap-num is-sticky-col">
+              <span class="lap-num-live">${tableLiveLap.lapNumber}</span>
+            </td>
+            ${liveCells}
+            ${lapTimeCell}
+            ${vsBestCell}
+          </tr>`;
+        })()
+      : "";
+
     const tableMarkup =
-      laps.length === 0
+      historyLaps.length === 0 && !tableLiveLap
         ? renderEmpty(
             "No laps yet",
             pilot
@@ -2966,28 +3056,40 @@ export class PracticeView extends Component {
                 </tr>
               </thead>
               <tbody>
-                ${[...laps]
+                ${liveRowMarkup}${[...historyLaps]
                   .reverse()
-                  .slice(0, 20)
                   .map((lap) => {
                     const isInvalid = Boolean(lap.invalidated);
+                    const bestLapSec = bestMetrics.bestLapBySlot.get(lap.slotIndex) ?? 0;
+                    const isBestLap =
+                      !isInvalid && bestLapSec > 0 && Math.abs(lap.lapTimeSec - bestLapSec) <= 0.0005;
+                    const deltaToBest =
+                      !isInvalid && bestLapSec > 0 && !isBestLap ? lap.lapTimeSec - bestLapSec : 0;
                     const byKey = new Map(
                       (lap.sectors ?? []).map((s) => [sectionKey(s.fromGateId, s.toGateId), s])
                     );
                     const cells = checkedCols
                       .map((c) => {
                         const s = byKey.get(c.key);
-                        return s
-                          ? `<td class="num col-mobile-sector"><span class="split ${isInvalid ? "" : SPLIT_CLASS[s.badge]}">${s.splitSeconds.toFixed(3)}</span></td>`
-                          : `<td class="num muted col-mobile-sector" title="Timer missed">—</td>`;
+                        if (!s) return `<td class="num muted col-mobile-sector" title="Timer missed">—</td>`;
+                        const splitCls = isInvalid
+                          ? ""
+                          : resolveSectorSplitClass(
+                              bestMetrics,
+                              lap.slotIndex,
+                              c.from,
+                              c.to,
+                              s.splitSeconds
+                            );
+                        return `<td class="num col-mobile-sector"><span class="split ${splitCls}">${s.splitSeconds.toFixed(3)}</span></td>`;
                       })
                       .join("");
                     const vs = isInvalid
                       ? "—"
-                      : lap.isBestLap && lap.lapNumber > 1
-                        ? `<span class="badge badge-good">PB</span>`
-                        : lap.deltaToBest > 0
-                          ? fmtDelta(lap.deltaToBest)
+                      : isBestLap && lap.lapNumber > 1
+                        ? `<span class="badge badge-accent">PB</span>`
+                        : deltaToBest > 0.0005
+                          ? fmtDelta(deltaToBest)
                           : "best";
                     const toggleTitle = isInvalid
                       ? `Restore Lap ${lap.lapNumber}`
@@ -3017,12 +3119,13 @@ export class PracticeView extends Component {
                           title="${esc(toggleTitle)}"
                           aria-label="${esc(toggleTitle)}"
                         >${lap.lapNumber}</button>`;
+                    const lapTimeSplitCls = isInvalid ? "" : isBestLap ? "split-best" : "split-neutral";
                     return `<tr class="${isInvalid ? "is-invalidated" : ""}" data-lap-row="${lap.lapId}" data-practice-toggle-lap="${lap.lapId}" title="${esc(toggleTitle)}">
                       <td class="mono col-mobile-lap-num is-sticky-col">
                         ${lapNumContent}
                       </td>
                       ${cells}
-                      <td class="num mono strong col-lap-time is-sticky-col ${!isInvalid && lap.isBestLap ? "tone-good" : ""}"><span class="lap-sticky-inner">${fmtTime(lap.lapTimeSec)}</span></td>
+                      <td class="num mono strong col-lap-time is-sticky-col"><span class="lap-sticky-inner"><span class="split ${lapTimeSplitCls}">${fmtTime(lap.lapTimeSec)}</span></span></td>
                       <td class="num mono muted col-vs-best is-sticky-col"><span class="lap-sticky-inner">${vs}</span></td>
                     </tr>`;
                   })
@@ -3073,9 +3176,7 @@ export class PracticeView extends Component {
           ? "tone-bad"
           : "tone-good"
         : "";
-    const firstLabelHtml = liveLap
-      ? `<span class="practice-mobile-live-dot" aria-hidden="true"></span>Lap ${liveLap.lapNumber}`
-      : "Last lap";
+    const firstLabelText = liveLap ? `Lap ${liveLap.lapNumber}` : "Last lap";
     const firstValText = liveLap
       ? fmtRaceClock(liveLap.elapsedSec)
       : ps && ps.lastLap > 0
@@ -3086,7 +3187,7 @@ export class PracticeView extends Component {
       <div class="card practice-mobile-laps-strip" role="region" aria-label="Pilot lap summary">
         <div class="practice-mobile-laps-pillars">
           <div class="practice-mobile-laps-pillar ${liveLap ? "is-live" : ""}" data-mobile-lap-clock-pillar>
-            <span class="practice-mobile-pillar-label" data-mobile-lap-clock-label>${firstLabelHtml}</span>
+            <span class="practice-mobile-pillar-label" data-mobile-lap-clock-label>${firstLabelText}</span>
             <span class="practice-mobile-pillar-val mono ${liveTone}" data-mobile-lap-clock-val>${firstValText}</span>
           </div>
           <div class="practice-mobile-laps-pillar">
@@ -3164,9 +3265,9 @@ export class PracticeView extends Component {
 
     if (live) {
       pillarEl.classList.add("is-live");
-      const wantLabel = `<span class="practice-mobile-live-dot" aria-hidden="true"></span>Lap ${live.lapNumber}`;
-      if (labelEl.innerHTML !== wantLabel) {
-        labelEl.innerHTML = wantLabel;
+      const wantLabel = `Lap ${live.lapNumber}`;
+      if (labelEl.textContent !== wantLabel) {
+        labelEl.textContent = wantLabel;
       }
       const wantVal = fmtRaceClock(live.elapsedSec);
       if (valEl.textContent !== wantVal) {

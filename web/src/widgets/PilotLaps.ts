@@ -2,13 +2,17 @@ import { Component } from "../core/component";
 import { esc, fmtDelta, fmtTime } from "../core/format";
 import { icons } from "../core/icons";
 import { bindLapsInnerScroll, renderLapsInnerScrollShell } from "../core/laps_inner_scroll";
-import { sectionKey } from "../state/analysis";
+import { CurrentLap, currentLap, resolveLiveLapTableState, sectionKey } from "../state/analysis";
 import { allLapsFor, gateColor, sectionLabel, sectionShort } from "../state/selectors";
 import { AppStore } from "../state/store";
 import { LapRecord } from "../types/models";
-import { renderEmpty, SPLIT_CLASS } from "./markup";
-
-const VISIBLE_LAPS = 20;
+import {
+  computePilotBestMetrics,
+  PilotBestMetrics,
+  renderEmpty,
+  resolveSectorSplitClass,
+  SPLIT_CLASS,
+} from "./markup";
 
 interface Column {
   from: number;
@@ -54,6 +58,7 @@ export class PilotLaps extends Component {
   private readonly onToggleLap?: (lapId: number) => void;
   private readonly onDeleteLap?: (lapId: number) => void;
   private savedScrollLeft = 0;
+  private liveHoldTimer: number | null = null;
 
   constructor(
     el: HTMLElement,
@@ -87,8 +92,29 @@ export class PilotLaps extends Component {
       this.store.togglePracticeLap(lapId);
       this.onToggleLap?.(lapId);
     });
-    this.onDispose(store.subscribe(["laps", "selection", "config", "practice"], () => this.render()));
+    this.onDispose(() => {
+      if (this.liveHoldTimer !== null) {
+        window.clearTimeout(this.liveHoldTimer);
+        this.liveHoldTimer = null;
+      }
+    });
+    this.onDispose(
+      store.subscribe(["laps", "crossings", "selection", "config", "practice"], () => this.render())
+    );
     this.render();
+  }
+
+  private scheduleLiveHoldRelease(holdMs: number): void {
+    if (this.liveHoldTimer !== null) {
+      window.clearTimeout(this.liveHoldTimer);
+      this.liveHoldTimer = null;
+    }
+    if (holdMs > 0) {
+      this.liveHoldTimer = window.setTimeout(() => {
+        this.liveHoldTimer = null;
+        this.render();
+      }, holdMs + 20);
+    }
   }
 
   private render(): void {
@@ -96,7 +122,18 @@ export class PilotLaps extends Component {
       this.store.selectedPilot !== null ? this.store.pilot(this.store.selectedPilot) : undefined;
     const isAllMode = !pilot;
     const laps = pilot ? allLapsFor(this.store, pilot.slotIndex) : this.store.laps;
-    if (laps.length === 0) {
+    const rawLive = !isAllMode && pilot ? currentLap(this.store, pilot.slotIndex) : null;
+    const display =
+      !isAllMode && pilot
+        ? resolveLiveLapTableState(this.store, pilot.slotIndex, rawLive, laps)
+        : { live: null, heldLap: null, excludeHeldFromHistory: false, holdRemainingMs: 0 };
+    this.scheduleLiveHoldRelease(display.holdRemainingMs);
+    const live = display.live;
+    const historyLaps =
+      display.heldLap && display.excludeHeldFromHistory
+        ? laps.filter((l) => l.lapId !== display.heldLap!.lapId)
+        : laps;
+    if (historyLaps.length === 0 && !live) {
       this.el.innerHTML = renderEmpty(
         "No laps yet",
         pilot
@@ -112,11 +149,16 @@ export class PilotLaps extends Component {
     const head = cols
       .map((c) => `<th class="num col-sector" title="${esc(sectionLabel(this.store, c.from, c.to))}"><span class="th-pilot"><span class="dot" style="--c:${gateColor(this.store, c.from)}"></span>${sectionShort(this.store, c.from)}</span></th>`)
       .join("");
-    const rows = [...laps]
-      .reverse()
-      .slice(0, VISIBLE_LAPS)
-      .map((lap) => this.renderLap(lap, cols, isAllMode))
-      .join("");
+    const metricsSource =
+      display.heldLap && !display.excludeHeldFromHistory ? [...laps, display.heldLap] : laps;
+    const bestMetrics = computePilotBestMetrics(metricsSource);
+    const liveRow = live ? this.renderLiveLap(live, cols, bestMetrics, display.heldLap) : "";
+    const rows =
+      liveRow +
+      [...historyLaps]
+        .reverse()
+        .map((lap) => this.renderLap(lap, cols, bestMetrics, isAllMode))
+        .join("");
 
     const pilotTh = isAllMode ? `<th class="col-pilot is-sticky-col">Pilot</th>` : "";
     const fixedLeftPx = isAllMode ? 306 : 170;
@@ -128,6 +170,8 @@ export class PilotLaps extends Component {
     const existingTable = this.el.querySelector<HTMLElement>("table.table-compact");
     const existingShell = this.el.querySelector<HTMLElement>(".laps-inner-scroll-shell");
     if (existingTable && existingShell) {
+      const existingVp = existingShell.querySelector<HTMLElement>(".laps-inner-scroll-viewport");
+      const prevScrollTop = existingVp?.scrollTop ?? 0;
       existingTable.style.setProperty("--sector-cols", String(cols.length));
       existingTable.style.setProperty("--pilot-col-extra", isAllMode ? "136px" : "0px");
       existingTable.innerHTML = tableInnerHtml;
@@ -142,6 +186,9 @@ export class PilotLaps extends Component {
           this.savedScrollLeft = left;
         },
       });
+      if (existingVp && prevScrollTop > 0) {
+        existingVp.scrollTop = prevScrollTop;
+      }
       return;
     }
 
@@ -154,9 +201,8 @@ export class PilotLaps extends Component {
         "table-scroll-y"
       )}
       <div class="legend-row">
-        <span><i class="split-purple"></i>Track record</span>
-        <span><i class="split-good"></i>Own best</span>
-        <span><i class="split-bad"></i>&gt;10% off own best</span>
+        <span><i class="split-best"></i>Fastest</span>
+        <span><i class="split-bad"></i>&gt;10% off best</span>
       </div>`;
 
     const shell = this.el.querySelector<HTMLElement>(".laps-inner-scroll-shell");
@@ -175,23 +221,88 @@ export class PilotLaps extends Component {
     }
   }
 
-  private renderLap(lap: LapRecord, cols: Column[], showPilot = false): string {
+  private renderLiveLap(
+    live: CurrentLap,
+    cols: Column[],
+    bestMetrics: PilotBestMetrics,
+    heldLap: LapRecord | null
+  ): string {
+    const byKey = new Map(live.sections.map((s) => [s.key, s]));
+    const cells = cols
+      .map((c) => {
+        const s = byKey.get(sectionKey(c.from, c.to));
+        if (s?.state === "done") {
+          const splitCls = heldLap
+            ? resolveSectorSplitClass(bestMetrics, heldLap.slotIndex, c.from, c.to, s.splitSec)
+            : SPLIT_CLASS[s.badge];
+          return `<td class="num col-sector"><span class="split ${splitCls}">${s.splitSec.toFixed(3)}</span></td>`;
+        }
+        if (s?.state === "missed") {
+          return `<td class="num muted col-sector" title="Timer missed">—</td>`;
+        }
+        if (s?.state === "current") {
+          return `<td class="num muted col-sector" title="In section"><span class="lap-cell-pending is-active">···</span></td>`;
+        }
+        return `<td class="num muted col-sector"><span class="lap-cell-pending">·</span></td>`;
+      })
+      .join("");
+    const clockCell = heldLap
+      ? `<td class="mono muted col-lap-clock is-sticky-col"><span class="lap-sticky-inner">${esc(formatLapWallClock(this.store, heldLap))}</span></td>`
+      : `<td class="mono muted col-lap-clock is-sticky-col"><span class="lap-sticky-inner"><span class="lap-cell-pending">···</span></span></td>`;
+    let lapTimeCell = `<td class="num mono muted col-lap-time is-sticky-col"><span class="lap-sticky-inner"><span class="lap-cell-pending">···</span></span></td>`;
+    let vsBestCell = `<td class="num mono muted col-vs-best is-sticky-col"><span class="lap-sticky-inner"><span class="lap-cell-pending">·</span></span></td>`;
+    if (heldLap) {
+      const bestLapSec = bestMetrics.bestLapBySlot.get(heldLap.slotIndex) ?? 0;
+      const isBestLap = bestLapSec > 0 && Math.abs(heldLap.lapTimeSec - bestLapSec) <= 0.0005;
+      const deltaToBest = bestLapSec > 0 && !isBestLap ? heldLap.lapTimeSec - bestLapSec : 0;
+      const vs =
+        isBestLap && heldLap.lapNumber > 1
+          ? `<span class="badge badge-accent">PB</span>`
+          : deltaToBest > 0.0005
+            ? fmtDelta(deltaToBest)
+            : "best";
+      lapTimeCell = `<td class="num mono strong col-lap-time is-sticky-col"><span class="lap-sticky-inner"><span class="split ${isBestLap ? "split-best" : "split-neutral"}">${fmtTime(heldLap.lapTimeSec)}</span></span></td>`;
+      vsBestCell = `<td class="num mono muted col-vs-best is-sticky-col"><span class="lap-sticky-inner">${vs}</span></td>`;
+    }
+    return `
+      <tr class="is-in-progress" data-live-lap-row="${live.lapNumber}" title="Lap ${live.lapNumber} in progress">
+        <td class="mono col-lap-num is-sticky-col">
+          <span class="lap-num-live">${live.lapNumber}</span>
+        </td>
+        ${clockCell}
+        ${cells}
+        ${lapTimeCell}
+        ${vsBestCell}
+      </tr>`;
+  }
+
+  private renderLap(
+    lap: LapRecord,
+    cols: Column[],
+    bestMetrics: PilotBestMetrics,
+    showPilot = false
+  ): string {
     const isInvalid = Boolean(lap.invalidated);
+    const bestLapSec = bestMetrics.bestLapBySlot.get(lap.slotIndex) ?? 0;
+    const isBestLap = !isInvalid && bestLapSec > 0 && Math.abs(lap.lapTimeSec - bestLapSec) <= 0.0005;
+    const deltaToBest = !isInvalid && bestLapSec > 0 && !isBestLap ? lap.lapTimeSec - bestLapSec : 0;
     const byKey = new Map((lap.sectors ?? []).map((s) => [sectionKey(s.fromGateId, s.toGateId), s]));
     const cells = cols
       .map((c) => {
         const s = byKey.get(sectionKey(c.from, c.to));
-        return s
-          ? `<td class="num col-sector"><span class="split ${isInvalid ? "" : SPLIT_CLASS[s.badge]}">${s.splitSeconds.toFixed(3)}</span></td>`
-          : `<td class="num muted col-sector" title="Timer missed">—</td>`;
+        if (!s) return `<td class="num muted col-sector" title="Timer missed">—</td>`;
+        const splitCls = isInvalid
+          ? ""
+          : resolveSectorSplitClass(bestMetrics, lap.slotIndex, c.from, c.to, s.splitSeconds);
+        return `<td class="num col-sector"><span class="split ${splitCls}">${s.splitSeconds.toFixed(3)}</span></td>`;
       })
       .join("");
     const vs = isInvalid
       ? "—"
-      : lap.isBestLap && lap.lapNumber > 1
-        ? `<span class="badge badge-good">PB</span>`
-        : lap.deltaToBest > 0
-          ? fmtDelta(lap.deltaToBest)
+      : isBestLap && lap.lapNumber > 1
+        ? `<span class="badge badge-accent">PB</span>`
+        : deltaToBest > 0.0005
+          ? fmtDelta(deltaToBest)
           : "best";
     const pObj = showPilot ? this.store.pilot(lap.slotIndex) : undefined;
     const pColor = pObj?.color || "#38bdf8";
@@ -227,6 +338,7 @@ export class PilotLaps extends Component {
             title="${esc(toggleTitle)}"
             aria-label="${esc(toggleTitle)}"
           >${lap.lapNumber}</button>`;
+    const lapTimeSplitCls = isInvalid ? "" : isBestLap ? "split-best" : "split-neutral";
     return `
       <tr class="${isInvalid ? "is-invalidated" : ""}" data-lap-row="${lap.lapId}" data-practice-toggle-lap="${lap.lapId}" title="${esc(toggleTitle)}">
         ${pilotTd}
@@ -235,7 +347,7 @@ export class PilotLaps extends Component {
         </td>
         <td class="mono muted col-lap-clock is-sticky-col"><span class="lap-sticky-inner">${esc(clockText)}</span></td>
         ${cells}
-        <td class="num mono strong col-lap-time is-sticky-col ${!isInvalid && lap.isBestLap ? "tone-good" : ""}"><span class="lap-sticky-inner">${fmtTime(lap.lapTimeSec)}</span></td>
+        <td class="num mono strong col-lap-time is-sticky-col"><span class="lap-sticky-inner"><span class="split ${lapTimeSplitCls}">${fmtTime(lap.lapTimeSec)}</span></span></td>
         <td class="num mono muted col-vs-best is-sticky-col"><span class="lap-sticky-inner">${vs}</span></td>
       </tr>`;
   }

@@ -514,6 +514,18 @@ export class AppStore {
   }
 
   private _stateRev = 0;
+  private readonly lastLapIngestPerfMsBySlot = new Map<number, number>();
+  private readonly lastCrossingIngestPerfMsBySlot = new Map<number, number>();
+
+  /** Monotonic wall-clock `performance.now()` timestamp (ms) when `slotIndex`'s latest live lap arrived via `ingestLap`. */
+  public lastLapIngestPerfMs(slotIndex: number): number {
+    return this.lastLapIngestPerfMsBySlot.get(slotIndex) ?? 0;
+  }
+
+  /** Monotonic wall-clock `performance.now()` timestamp (ms) when `slotIndex`'s latest live crossing arrived via `ingestCrossing`. */
+  public lastCrossingIngestPerfMs(slotIndex: number): number {
+    return this.lastCrossingIngestPerfMsBySlot.get(slotIndex) ?? 0;
+  }
   private _cachedPracticeNodes: {
     rev: number;
     sess: PracticeSession | null | undefined;
@@ -1730,6 +1742,8 @@ export class AppStore {
     this.anchorServerClock(state.serverTimestampUs, modeChanged);
 
     this.lastCrossingBySlot.clear();
+    this.lastLapIngestPerfMsBySlot.clear();
+    this.lastCrossingIngestPerfMsBySlot.clear();
     let maxTs = state.serverTimestampUs ?? 0;
     for (const ev of this._crossings) {
       this.lastCrossingBySlot.set(ev.slotIndex, ev);
@@ -1948,6 +1962,8 @@ export class AppStore {
 
   /** Optimistically clears all recorded laps and crossings for `slotIndex` in the selected practice session. */
   public clearPracticePilotLaps(slotIndex: number): void {
+    this.lastLapIngestPerfMsBySlot.delete(slotIndex);
+    this.lastCrossingIngestPerfMsBySlot.delete(slotIndex);
     const sess = this.selectedPracticeSession;
     const isActiveSelected = !sess || sess.sessionId === this.activePracticeSession?.sessionId;
     if (isActiveSelected) {
@@ -2102,6 +2118,10 @@ export class AppStore {
   }
 
   public ingestCrossing(ev: GateCrossingEvent): void {
+    this.lastCrossingIngestPerfMsBySlot.set(
+      ev.slotIndex,
+      typeof performance !== "undefined" ? performance.now() : Date.now()
+    );
     this._crossings.push(ev);
     if (this._crossings.length > MAX_CROSSINGS) this._crossings.shift();
     const activeSess = !this.isLiveRaceHeatRunning ? this.activePracticeSession : undefined;
@@ -2155,6 +2175,10 @@ export class AppStore {
 
   public ingestLap(lap: LapRecord, summaries: PilotTrackSummary[]): void {
     const normalized: LapRecord = Array.isArray(lap.sectors) ? lap : { ...lap, sectors: [] };
+    this.lastLapIngestPerfMsBySlot.set(
+      normalized.slotIndex,
+      typeof performance !== "undefined" ? performance.now() : Date.now()
+    );
     this._laps.push(normalized);
     if (this._laps.length > MAX_LAPS) this._laps.shift();
     const activeSess = !this.isLiveRaceHeatRunning ? this.activePracticeSession : undefined;

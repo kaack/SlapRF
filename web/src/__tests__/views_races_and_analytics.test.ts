@@ -2206,9 +2206,22 @@ describe("PracticeView two-step lap deletion and per-pilot lap clearing", () => 
       expect(heightWhenEmpty).toBe(heightWithLaps);
 
       // 4. Crossing the Start/Finish gate flips Pillar 1 from "Last lap" into live "Lap 1" clock
+      //    AND immediately prepends the in-progress Lap 1 row even with 0 completed laps
       expect(
         mobileHost.querySelector<HTMLElement>("[data-mobile-lap-clock-label]")!.textContent?.trim()
       ).toBe("Last lap");
+      expect(mobileHost.querySelector("tr[data-live-lap-row]")).toBeNull();
+
+      // Re-check all 5 mobile sections (re-query after each click since renderMobileSectorsPanel updates host.innerHTML)
+      for (;;) {
+        const unchecked = mobileHost.querySelector<HTMLButtonElement>(
+          '[data-practice-sector-toggle][aria-checked="false"]'
+        );
+        if (!unchecked) break;
+        unchecked.click();
+      }
+      await flushMicrotasks();
+
       store.ingestCrossing(
         makeCrossing(401, 1, 1, 305_000_000, { isStartFinish: true, startedLap: true })
       );
@@ -2216,18 +2229,230 @@ describe("PracticeView two-step lap deletion and per-pilot lap clearing", () => 
       await new Promise((r) => window.setTimeout(r, 120));
       const clockPillar = mobileHost.querySelector<HTMLElement>("[data-mobile-lap-clock-pillar]")!;
       expect(clockPillar.classList.contains("is-live")).toBe(true);
-      expect(
-        clockPillar.querySelector<HTMLElement>("[data-mobile-lap-clock-label]")!.textContent?.trim()
-      ).toBe("Lap 1");
-      expect(
-        clockPillar
-          .querySelector<HTMLElement>("[data-mobile-lap-clock-val]")!
-          .textContent?.startsWith("00:03.")
-      ).toBe(true);
+      const clockLabelEl = clockPillar.querySelector<HTMLElement>("[data-mobile-lap-clock-label]")!;
+      const fastestLabelEl = mobileHost.querySelectorAll<HTMLElement>(
+        ".practice-mobile-pillar-label"
+      )[1]!;
+      expect(clockLabelEl.textContent?.trim()).toBe("Lap 1");
+      expect(clockLabelEl.children.length).toBe(0);
+      expect(window.getComputedStyle(clockLabelEl).color).toBe(
+        window.getComputedStyle(fastestLabelEl).color
+      );
+      expect(window.getComputedStyle(clockLabelEl).textAlign).toBe("center");
+      expect(window.getComputedStyle(fastestLabelEl).textAlign).toBe("center");
+      const clockValEl = clockPillar.querySelector<HTMLElement>("[data-mobile-lap-clock-val]")!;
+      expect(window.getComputedStyle(clockValEl).textAlign).toBe("center");
+      expect(clockValEl.textContent?.startsWith("00:03.")).toBe(true);
       expect(
         mobileHost.querySelector<HTMLButtonElement>("[data-practice-clear-pilot-laps='1']")!
           .disabled
       ).toBe(false);
+
+      // Both mobile and desktop tables immediately show in-progress Lap 1 row (bright white number, no green LED)
+      const mobileLiveRow1 = mobileHost.querySelector<HTMLTableRowElement>(
+        "tr[data-live-lap-row='1']"
+      )!;
+      const desktopLiveRow1 = host.querySelector<HTMLTableRowElement>(
+        ".practice-laps-card tr[data-live-lap-row='1']"
+      )!;
+      expect(mobileLiveRow1).not.toBeNull();
+      expect(desktopLiveRow1).not.toBeNull();
+      expect(mobileLiveRow1.querySelector(".lap-num-live")!.children.length).toBe(0);
+      expect(desktopLiveRow1.querySelector(".lap-num-live")!.children.length).toBe(0);
+      expect(
+        mobileLiveRow1
+          .querySelectorAll<HTMLElement>("td.col-mobile-sector")
+          .length
+      ).toBe(5);
+      expect(
+        mobileLiveRow1.querySelector<HTMLElement>("td.col-lap-time")!.textContent?.trim()
+      ).toBe("···");
+      expect(
+        mobileLiveRow1.querySelector<HTMLElement>("td.col-vs-best")!.textContent?.trim()
+      ).toBe("·");
+
+      // 5. Progressive section splits fill in cell-by-cell as pilot crosses T1 (gate 2) and T2 (gate 3)
+      store.ingestCrossing(makeCrossing(402, 2, 1, 308_510_000));
+      store.ingestCrossing(makeCrossing(403, 3, 1, 312_130_000));
+      await flushMicrotasks();
+
+      const mobileCellsMid = Array.from(
+        mobileHost.querySelectorAll<HTMLElement>("tr[data-live-lap-row='1'] td.col-mobile-sector")
+      ).map((td) => td.textContent?.trim());
+      expect(mobileCellsMid).toEqual(["3.510", "3.620", "···", "·", "·"]);
+
+      const desktopCellsMid = Array.from(
+        host.querySelectorAll<HTMLElement>(
+          ".practice-laps-card tr[data-live-lap-row='1'] td.col-sector"
+        )
+      ).map((td) => td.textContent?.trim());
+      expect(desktopCellsMid).toEqual(["3.510", "3.620", "···", "·", "·"]);
+
+      // 6. Completing Lap 1 (even when exit telemetry is 650 ms ahead of peak timestamp, and crossing arrives 45 ms before lap!)
+      //    fills in S5 + Lap time + vs best in place with ZERO blanking flash, holds ~1.1 s, then clears and inserts below
+      store.ingestCrossing(makeCrossing(404, 4, 1, 315_600_000));
+      store.ingestCrossing(makeCrossing(405, 5, 1, 319_200_000));
+      store.ingestTelemetry({ timerId: 1, seqNum: 2, timestampUs: 323_650_000, rssi: [-82] });
+      store.ingestCrossing(makeCrossing(406, 1, 1, 323_000_000, { isStartFinish: true }));
+      await flushMicrotasks();
+
+      // Right after "crossing" arrives (BEFORE "lap" arrives!), Row #1 already shows 18.000 & 3.800 — NEVER blanks to "···"!
+      const preLapRowMobile = mobileHost.querySelector<HTMLTableRowElement>(
+        "tr.is-in-progress[data-live-lap-row='1']"
+      )!;
+      expect(preLapRowMobile).not.toBeNull();
+      expect(
+        Array.from(preLapRowMobile.querySelectorAll<HTMLElement>("td.col-mobile-sector")).map(
+          (td) => td.textContent?.trim()
+        )
+      ).toEqual(["3.510", "3.620", "3.470", "3.600", "3.800"]);
+      expect(
+        preLapRowMobile.querySelector<HTMLElement>("td.col-lap-time")!.textContent?.trim()
+      ).toBe("18.000");
+
+      await new Promise((r) => window.setTimeout(r, 45));
+      store.ingestLap({
+        lapId: 501,
+        slotIndex: 1,
+        callsign: "Maverick",
+        lapNumber: 1,
+        lapTimeSec: 18.0,
+        deltaToBest: 0,
+        completedAtUs: 323_000_000,
+        isBestLap: true,
+        sectors: [
+          { sectorIndex: 0, fromGateId: 1, toGateId: 2, label: "S1", splitSeconds: 3.51, deltaToBestSec: 0, exitSpeedMph: 45, badge: "OVERALL_BEST" },
+          { sectorIndex: 1, fromGateId: 2, toGateId: 3, label: "S2", splitSeconds: 3.62, deltaToBestSec: 0, exitSpeedMph: 44, badge: "OVERALL_BEST" },
+          { sectorIndex: 2, fromGateId: 3, toGateId: 4, label: "S3", splitSeconds: 3.47, deltaToBestSec: 0, exitSpeedMph: 46, badge: "OVERALL_BEST" },
+          { sectorIndex: 3, fromGateId: 4, toGateId: 5, label: "S4", splitSeconds: 3.6, deltaToBestSec: 0, exitSpeedMph: 45, badge: "OVERALL_BEST" },
+          { sectorIndex: 4, fromGateId: 5, toGateId: 1, label: "S5", splitSeconds: 3.8, deltaToBestSec: 0, exitSpeedMph: 47, badge: "OVERALL_BEST" },
+        ],
+      });
+      await flushMicrotasks();
+
+      // Immediately on finish (<1.1 s hold), Row #1 STAYS tr.is-in-progress[data-live-lap-row='1'] (zero style flash!)
+      // with S5 + Lap time + vs best filled in, while history row 501 has NOT been inserted below yet!
+      const heldLiveRowMobile = mobileHost.querySelector<HTMLTableRowElement>(
+        "tr.is-in-progress[data-live-lap-row='1']"
+      )!;
+      const heldLiveRowDesktop = host.querySelector<HTMLTableRowElement>(
+        ".practice-laps-card tr.is-in-progress[data-live-lap-row='1']"
+      )!;
+      expect(heldLiveRowMobile).not.toBeNull();
+      expect(heldLiveRowDesktop).not.toBeNull();
+      expect(mobileHost.querySelector("tbody")!.firstElementChild).toBe(heldLiveRowMobile);
+      expect(
+        Array.from(heldLiveRowMobile.querySelectorAll<HTMLElement>("td.col-mobile-sector")).map(
+          (td) => td.textContent?.trim()
+        )
+      ).toEqual(["3.510", "3.620", "3.470", "3.600", "3.800"]);
+      expect(
+        heldLiveRowMobile.querySelector<HTMLElement>("td.col-lap-time")!.textContent?.trim()
+      ).toBe("18.000");
+      expect(
+        heldLiveRowMobile.querySelector<HTMLElement>("td.col-vs-best")!.textContent?.trim()
+      ).toBe("best");
+      expect(mobileHost.querySelector("tr[data-lap-row='501']")).toBeNull();
+      expect(host.querySelector(".practice-laps-card tr[data-lap-row='501']")).toBeNull();
+      expect(mobileHost.querySelector("tr[data-live-lap-row='2']")).toBeNull();
+
+      // After the ~1.1 s hold expires, Row #1 stays tr.is-in-progress and clears to Lap 2 while Lap 1 inserts below at Row #2
+      await new Promise((r) => window.setTimeout(r, 1180));
+      const completedRowMobile = mobileHost.querySelector<HTMLTableRowElement>(
+        "tr[data-lap-row='501']"
+      )!;
+      expect(completedRowMobile).not.toBeNull();
+      expect(
+        mobileHost.querySelector("tbody")!.firstElementChild?.getAttribute("data-live-lap-row")
+      ).toBe("2");
+      expect(
+        mobileHost
+          .querySelector<HTMLElement>("tr[data-live-lap-row='2'] td.col-lap-time")!
+          .textContent?.trim()
+      ).toBe("···");
+      expect(
+        host.querySelector(".practice-laps-card tbody")!.firstElementChild?.getAttribute("data-live-lap-row")
+      ).toBe("2");
+      expect(host.querySelector(".practice-laps-card tr[data-lap-row='501']")).not.toBeNull();
+
+      // Live lap number left-aligns with completed lap numbers; sector headers center while split digits stay right-aligned
+      const mobileLiveNumRect = mobileHost
+        .querySelector<HTMLElement>("tr[data-live-lap-row='2'] .lap-num-live")!
+        .getBoundingClientRect();
+      const mobileDoneNumRect = completedRowMobile
+        .querySelector<HTMLElement>(".lap-num-toggle")!
+        .getBoundingClientRect();
+      expect(Math.round(mobileLiveNumRect.left)).toBe(Math.round(mobileDoneNumRect.left));
+
+      const desktopLiveNumRect = host
+        .querySelector<HTMLElement>(".practice-laps-card tr[data-live-lap-row='2'] .lap-num-live")!
+        .getBoundingClientRect();
+      const desktopDoneNumRect = host
+        .querySelector<HTMLElement>(".practice-laps-card tr[data-lap-row='501'] .lap-num-toggle")!
+        .getBoundingClientRect();
+      expect(Math.round(desktopLiveNumRect.left)).toBe(Math.round(desktopDoneNumRect.left));
+
+      const desktopS1Th = host.querySelector<HTMLElement>(
+        ".practice-laps-card th.col-sector"
+      )!;
+      const desktopS1Td = host.querySelector<HTMLElement>(
+        ".practice-laps-card tr[data-lap-row='501'] td.col-sector"
+      )!;
+      const desktopS1Split = desktopS1Td.querySelector<HTMLElement>(".split")!;
+      expect(window.getComputedStyle(desktopS1Th).textAlign).toBe("center");
+      expect(window.getComputedStyle(desktopS1Td).textAlign).toBe("center");
+      expect(window.getComputedStyle(desktopS1Split).textAlign).toBe("right");
+
+      // 7. Full lap history (>20 laps) renders all early laps without truncating at 20
+      for (let n = 2; n <= 25; n++) {
+        store.ingestLap({
+          lapId: 500 + n,
+          slotIndex: 1,
+          callsign: "Maverick",
+          lapNumber: n,
+          lapTimeSec: 18.0 + n * 0.05,
+          deltaToBest: n * 0.05,
+          completedAtUs: 323_000_000 + n * 18_000_000,
+          isBestLap: false,
+          sectors: [],
+        });
+      }
+      await flushMicrotasks();
+      expect(mobileHost.querySelectorAll("tr[data-lap-row]").length).toBe(25);
+      expect(host.querySelectorAll(".practice-laps-card tr[data-lap-row]").length).toBe(25);
+      expect(mobileHost.querySelector("tr[data-lap-row='501']")).not.toBeNull();
+      expect(host.querySelector(".practice-laps-card tr[data-lap-row='501']")).not.toBeNull();
+
+      // 8. Fastest section splits AND fastest total Lap time use unified neon .split-best pill (matching Fastest KPI color, no purple/emerald mismatch)
+      const fastestKpiVal = mobileHost.querySelectorAll<HTMLElement>(
+        ".practice-mobile-pillar-val"
+      )[1]!;
+      const mobileBestSecPill = mobileHost.querySelector<HTMLElement>(
+        "tr[data-lap-row='501'] td.col-mobile-sector .split-best"
+      )!;
+      const mobileBestLapPill = mobileHost.querySelector<HTMLElement>(
+        "tr[data-lap-row='501'] td.col-lap-time .split-best"
+      )!;
+      const desktopBestSecPill = host.querySelector<HTMLElement>(
+        ".practice-laps-card tr[data-lap-row='501'] td.col-sector .split-best"
+      )!;
+      const desktopBestLapPill = host.querySelector<HTMLElement>(
+        ".practice-laps-card tr[data-lap-row='501'] td.col-lap-time .split-best"
+      )!;
+      expect(mobileBestSecPill).not.toBeNull();
+      expect(mobileBestLapPill).not.toBeNull();
+      expect(desktopBestSecPill).not.toBeNull();
+      expect(desktopBestLapPill).not.toBeNull();
+      const kpiColor = window.getComputedStyle(fastestKpiVal).color;
+      expect(window.getComputedStyle(mobileBestSecPill).color).toBe(kpiColor);
+      expect(window.getComputedStyle(mobileBestLapPill).color).toBe(kpiColor);
+      expect(window.getComputedStyle(desktopBestSecPill).color).toBe(kpiColor);
+      expect(window.getComputedStyle(desktopBestLapPill).color).toBe(kpiColor);
+      expect(window.getComputedStyle(mobileBestLapPill).backgroundColor).not.toBe(
+        "rgba(0, 0, 0, 0)"
+      );
+      expect(mobileHost.querySelector(".split-purple, .split-good")).toBeNull();
+      expect(host.querySelector(".practice-laps-card .split-purple, .practice-laps-card .split-good")).toBeNull();
     } finally {
       document.querySelectorAll(".slaprf-modal-backdrop").forEach((m) => m.remove());
       view.destroy();

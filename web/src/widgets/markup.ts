@@ -1,7 +1,7 @@
 import { esc } from "../core/format";
 import { gateColor, gateLabel, sectionShort } from "../state/selectors";
 import { AppStore } from "../state/store";
-import { FilterReason, SectorBadge } from "../types/models";
+import { FilterReason, LapRecord, SectorBadge } from "../types/models";
 
 /** Short names for why the timing rules set a detection aside. */
 export const FILTER_LABELS: Record<FilterReason, string> = {
@@ -10,13 +10,53 @@ export const FILTER_LABELS: Record<FilterReason, string> = {
   LAP_TOO_LONG: "Lap too long",
 };
 
-/** Colour chip for a section split: track record, own best, normal, well off pace. */
+/** Colour chip for a section split in pilot lap tables: fastest (neon accent), normal, or >10% off best. */
 export const SPLIT_CLASS: Record<SectorBadge, string> = {
-  OVERALL_BEST: "split-purple",
-  PERSONAL_BEST: "split-good",
+  OVERALL_BEST: "split-best",
+  PERSONAL_BEST: "split-best",
   NORMAL: "split-neutral",
   OFF_PACE: "split-bad",
 };
+
+export interface PilotBestMetrics {
+  bestLapBySlot: Map<number, number>;
+  bestSectorBySlotKey: Map<string, number>;
+}
+
+/** Computes each pilot's true current fastest lap and fastest per-section splits across valid laps. */
+export function computePilotBestMetrics(laps: LapRecord[]): PilotBestMetrics {
+  const bestLapBySlot = new Map<number, number>();
+  const bestSectorBySlotKey = new Map<string, number>();
+  for (const l of laps) {
+    if (l.invalidated || !(l.lapTimeSec > 0)) continue;
+    const curLap = bestLapBySlot.get(l.slotIndex);
+    if (curLap === undefined || l.lapTimeSec < curLap) {
+      bestLapBySlot.set(l.slotIndex, l.lapTimeSec);
+    }
+    for (const s of l.sectors ?? []) {
+      if (!(s.splitSeconds > 0)) continue;
+      const sk = `${l.slotIndex}:${s.fromGateId}>${s.toGateId}`;
+      const curSec = bestSectorBySlotKey.get(sk);
+      if (curSec === undefined || s.splitSeconds < curSec) {
+        bestSectorBySlotKey.set(sk, s.splitSeconds);
+      }
+    }
+  }
+  return { bestLapBySlot, bestSectorBySlotKey };
+}
+
+export function resolveSectorSplitClass(
+  metrics: PilotBestMetrics,
+  slotIndex: number,
+  fromGateId: number,
+  toGateId: number,
+  splitSeconds: number
+): string {
+  const pBest = metrics.bestSectorBySlotKey.get(`${slotIndex}:${fromGateId}>${toGateId}`) ?? 0;
+  if (pBest > 0 && splitSeconds <= pBest + 0.0005) return "split-best";
+  if (pBest > 0 && splitSeconds > pBest * 1.1) return "split-bad";
+  return "split-neutral";
+}
 
 export interface StatTile {
   label: string;
