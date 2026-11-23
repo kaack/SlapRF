@@ -1292,6 +1292,9 @@ export class AppStore {
     return this.createScopedView({
       nodes: () => this.raceNodes(getRace()),
       rules: () => this.raceRules(getRace()),
+      laps: () => this._laps,
+      crossings: () => this._crossings,
+      filtered: () => this._filtered,
     });
   }
 

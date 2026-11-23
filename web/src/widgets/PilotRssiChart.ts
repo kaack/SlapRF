@@ -319,6 +319,8 @@ export class PilotRssiChart extends Component {
   private readonly labelWidthCache = new Map<string, number>();
   private cachedLabelSig = "";
   private cachedLabelRows = new Map<string, number>();
+  private crossingLapCacheRev = -1;
+  private readonly crossingLapMeta = new Map<string, { suffix: string; detailPrefix: string }>();
 
   private get hwMode(): TimingHardwareMode {
     return this.store.timingHardwareMode;
@@ -2026,11 +2028,167 @@ export class PilotRssiChart extends Component {
     return lo;
   }
 
+  private static crossingMetaKey(c: GateCrossingEvent): string {
+    return `${c.slotIndex}:${c.gateId}:${c.timestampUs}:${c.eventId ?? 0}`;
+  }
+
+  private syncCrossingLapMeta(): void {
+    const rev = this.store.stateRev ?? 0;
+    if (this.crossingLapCacheRev === rev) return;
+    this.crossingLapCacheRev = rev;
+    this.crossingLapMeta.clear();
+
+    const crossings = this.store.crossings;
+    if (crossings.length === 0) return;
+
+    const sfGateIds = new Set<number>();
+    for (const node of this.store.nodes) {
+      if (node.role === "START_FINISH") {
+        sfGateIds.add(node.gateId);
+      }
+    }
+
+    const lapsBySlot = new Map<
+      number,
+      Array<{
+        lapNumber: number;
+        completedAtUs: number;
+        startAtUs: number;
+        lapTimeSec: number;
+        invalidated: boolean;
+      }>
+    >();
+    for (const lap of this.store.laps) {
+      let list = lapsBySlot.get(lap.slotIndex);
+      if (!list) {
+        list = [];
+        lapsBySlot.set(lap.slotIndex, list);
+      }
+      list.push({
+        lapNumber: lap.lapNumber,
+        completedAtUs: lap.completedAtUs,
+        startAtUs: 0,
+        lapTimeSec: lap.lapTimeSec,
+        invalidated: Boolean(lap.invalidated),
+      });
+    }
+    lapsBySlot.forEach((list) => {
+      list.sort((a, b) => a.completedAtUs - b.completedAtUs);
+      for (let i = 0; i < list.length; i++) {
+        const cur = list[i];
+        cur.startAtUs =
+          cur.lapTimeSec > 0
+            ? Math.max(0, Math.round(cur.completedAtUs - cur.lapTimeSec * 1_000_000))
+            : i > 0
+              ? list[i - 1].completedAtUs
+              : 0;
+      }
+    });
+
+    const crossingsBySlot = new Map<number, GateCrossingEvent[]>();
+    for (let i = 0; i < crossings.length; i++) {
+      const c = crossings[i];
+      let list = crossingsBySlot.get(c.slotIndex);
+      if (!list) {
+        list = [];
+        crossingsBySlot.set(c.slotIndex, list);
+      }
+      list.push(c);
+    }
+
+    const maxLapUs = Math.max(15, this.store.rules.maxLapSec || 120) * 1_000_000;
+
+    crossingsBySlot.forEach((slotCrossings, slotIndex) => {
+      const slotLaps = lapsBySlot.get(slotIndex) ?? [];
+      const sfTimestamps: number[] = [];
+      for (let i = 0; i < slotCrossings.length; i++) {
+        const c = slotCrossings[i];
+        if (c.isStartFinish || sfGateIds.has(c.gateId)) {
+          sfTimestamps.push(c.timestampUs);
+        }
+      }
+
+      let lapCursor = 0;
+      let sfCursor = 0;
+      for (let i = 0; i < slotCrossings.length; i++) {
+        const c = slotCrossings[i];
+        const ts = c.timestampUs;
+        const isSF = Boolean(c.isStartFinish || sfGateIds.has(c.gateId));
+        let suffix = "";
+        let detailPrefix = "Timed";
+
+        while (lapCursor < slotLaps.length && slotLaps[lapCursor].completedAtUs + 10_000 < ts) {
+          lapCursor++;
+        }
+        while (sfCursor + 1 < sfTimestamps.length && sfTimestamps[sfCursor + 1] <= ts) {
+          sfCursor++;
+        }
+
+        if (isSF) {
+          const matchedLap =
+            lapCursor < slotLaps.length &&
+            Math.abs(slotLaps[lapCursor].completedAtUs - ts) <= 10_000
+              ? slotLaps[lapCursor]
+              : undefined;
+          if (matchedLap) {
+            suffix = `Lap ${matchedLap.lapNumber}`;
+            detailPrefix = matchedLap.invalidated
+              ? `Lap ${matchedLap.lapNumber} (scratched)`
+              : `Lap ${matchedLap.lapNumber} (${matchedLap.lapTimeSec.toFixed(2)}s)`;
+          } else if (c.startedLap || slotLaps.length === 0) {
+            suffix = "Start";
+            detailPrefix = "Start";
+          }
+        } else {
+          const candidateLap = lapCursor < slotLaps.length ? slotLaps[lapCursor] : undefined;
+          if (
+            candidateLap &&
+            ts >= candidateLap.startAtUs - 50_000 &&
+            ts <= candidateLap.completedAtUs + 10_000
+          ) {
+            suffix = `Lap ${candidateLap.lapNumber}`;
+            detailPrefix = candidateLap.invalidated
+              ? `Lap ${candidateLap.lapNumber} (scratched)`
+              : `Lap ${candidateLap.lapNumber}`;
+          } else {
+            const lastSfTs =
+              sfTimestamps.length > 0 && sfTimestamps[sfCursor] <= ts
+                ? sfTimestamps[sfCursor]
+                : undefined;
+            const hasLaterSf =
+              sfTimestamps.length > 0 && sfTimestamps[sfTimestamps.length - 1] > ts;
+            const prevCrossTs = i > 0 ? slotCrossings[i - 1].timestampUs : lastSfTs ?? ts;
+            if (lastSfTs !== undefined && !hasLaterSf && ts - prevCrossTs <= maxLapUs) {
+              let prevLapNum = 0;
+              for (let li = slotLaps.length - 1; li >= 0; li--) {
+                if (slotLaps[li].completedAtUs <= lastSfTs + 10_000) {
+                  prevLapNum = slotLaps[li].lapNumber;
+                  break;
+                }
+              }
+              const nextLapNum = prevLapNum + 1;
+              suffix = `Lap ${nextLapNum}`;
+              detailPrefix = `Lap ${nextLapNum} (in progress)`;
+            }
+          }
+        }
+
+        this.crossingLapMeta.set(PilotRssiChart.crossingMetaKey(c), {
+          suffix,
+          detailPrefix,
+        });
+      }
+    });
+  }
+
   /** Selected pilot's (or all seated pilots') passes in [from, to], oldest first. */
   private passes(from: number, to: number, gateFilter: number | null = null): PassMarker[] {
     const crossings = this.store.crossings;
     const filtered = this.store.filtered;
     const out: PassMarker[] = [];
+    if (crossings.length > 0) {
+      this.syncCrossingLapMeta();
+    }
     const cStart = PilotRssiChart.firstEventAtOrAfter(crossings, from);
     const fStart = PilotRssiChart.firstEventAtOrAfter(filtered, from);
 
@@ -2042,12 +2200,15 @@ export class PilotRssiChart extends Component {
         if (gateFilter !== null && c.gateId !== gateFilter) continue;
         if (!slotSet.has(c.slotIndex)) continue;
         const p = this.store.pilot(c.slotIndex);
+        const who = p?.callsign ?? c.callsign ?? `P${c.slotIndex}`;
+        const gateLbl = this.labelOfGate(c.gateId);
+        const meta = this.crossingLapMeta.get(PilotRssiChart.crossingMetaKey(c));
         out.push({
           ts: c.timestampUs,
           gateId: c.gateId,
           counted: true,
-          title: `${p?.callsign ?? c.callsign ?? `P${c.slotIndex}`} · ${this.labelOfGate(c.gateId)}`,
-          detail: `Timed · peak ${c.peakRssiDbm.toFixed(0)}${this.unitSuffix}`,
+          title: meta?.suffix ? `${who} · ${gateLbl} · ${meta.suffix}` : `${who} · ${gateLbl}`,
+          detail: `${meta?.detailPrefix ?? "Timed"} · peak ${c.peakRssiDbm.toFixed(0)}${this.unitSuffix}`,
           color: p?.color,
           slotIndex: c.slotIndex,
         });
@@ -2078,12 +2239,14 @@ export class PilotRssiChart extends Component {
       if (c.timestampUs > to) break;
       if (gateFilter !== null && c.gateId !== gateFilter) continue;
       if (c.slotIndex !== slot) continue;
+      const gateLbl = this.labelOfGate(c.gateId);
+      const meta = this.crossingLapMeta.get(PilotRssiChart.crossingMetaKey(c));
       out.push({
         ts: c.timestampUs,
         gateId: c.gateId,
         counted: true,
-        title: `${this.labelOfGate(c.gateId)} · ${c.estimatedSpeedMph.toFixed(0)} mph`,
-        detail: `Timed · peak ${c.peakRssiDbm.toFixed(0)}${this.unitSuffix}`,
+        title: meta?.suffix ? `${gateLbl} · ${meta.suffix}` : gateLbl,
+        detail: `${meta?.detailPrefix ?? "Timed"} · peak ${c.peakRssiDbm.toFixed(0)}${this.unitSuffix}`,
         slotIndex: c.slotIndex,
       });
     }
@@ -2458,7 +2621,7 @@ export class PilotRssiChart extends Component {
     const firstTs = windowPasses.length > 0 ? windowPasses[0].ts : 0;
     const lastTs = windowPasses.length > 0 ? windowPasses[windowPasses.length - 1].ts : 0;
     const multiSig = this.isMultiPilotMode ? (this.multiPilotSlots ?? []).join(",") : "";
-    const sig = `${windowPasses.length}:${firstTs}:${lastTs}:${Math.round(this.windowUs)}:${Math.round(this.plot.w)}:${this.focus ?? "all"}:${this.activePilotSlot}:${multiSig}`;
+    const sig = `${windowPasses.length}:${firstTs}:${lastTs}:${this.store.laps.length}:${this.store.stateRev ?? 0}:${Math.round(this.windowUs)}:${Math.round(this.plot.w)}:${this.focus ?? "all"}:${this.activePilotSlot}:${multiSig}`;
     if (sig === this.cachedLabelSig) {
       return this.cachedLabelRows;
     }

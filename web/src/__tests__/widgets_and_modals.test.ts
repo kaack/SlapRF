@@ -68,11 +68,13 @@ import {
   flushMicrotasks,
   fn,
   it,
+  makeCrossing,
   makeEventPilot,
   makeFiltered,
   makeGate,
   makeHeat,
   makeMockApiClient,
+  makePilot,
   makeRaceState,
   makeRound,
   makeSeat,
@@ -700,6 +702,139 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       expect(raceDrawer.querySelector('[data-tune-beep-mode="exit"]')).not.toBeNull();
     } finally {
       raceChart.destroy();
+    }
+  });
+
+  it("labels Signals gate crossings with Start and their counted Lap number instead of speed when selecting timers", async () => {
+    const store = makeStore({
+      pilots: [makePilot(1, { callsign: "OneEye", enabled: true, channel: 7 })],
+      gates: [
+        makeGate(1, { role: "START_FINISH", trackOrder: 1, assignedTimerId: 1 }),
+        makeGate(2, { role: "SECTOR_GATE", trackOrder: 2, assignedTimerId: 2 }),
+      ],
+      timers: [
+        {
+          timerId: 1,
+          timerLabel: "H1",
+          isHub: true,
+          online: true,
+          lastSeenAt: "2026-04-20T00:00:00Z",
+          batteryMv: 4100,
+          batteryPct: 90,
+          noiseFloorDbm: -92,
+        },
+        {
+          timerId: 2,
+          timerLabel: "T1",
+          isHub: false,
+          online: true,
+          lastSeenAt: "2026-04-20T00:00:00Z",
+          batteryMv: 4100,
+          batteryPct: 90,
+          noiseFloorDbm: -92,
+        },
+      ],
+    });
+    const { api } = makeMockApiClient(store);
+    const root = mountHtml(`<div style="width: 800px; height: 420px;"></div>`);
+    const drawnTexts: string[] = [];
+    const origFillText = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function (
+      text: string,
+      x: number,
+      y: number,
+      maxWidth?: number
+    ) {
+      drawnTexts.push(String(text));
+      return maxWidth !== undefined
+        ? origFillText.call(this, text, x, y, maxWidth)
+        : origFillText.call(this, text, x, y);
+    };
+
+    const chart = new PilotRssiChart(root.firstElementChild as HTMLElement, store, api, {
+      contextMode: "practice",
+    });
+
+    try {
+      for (let t = 500_000; t <= 14_000_000; t += 100_000) {
+        store.ingestTelemetry({ timerId: 1, seqNum: 1, timestampUs: t, rssi: [-80] });
+        store.ingestTelemetry({ timerId: 2, seqNum: 1, timestampUs: t, rssi: [-80] });
+      }
+      // Holeshot at H1 (1.0s), T1 on Lap 1 (3.5s), Finish Lap 1 at H1 (6.5s)
+      store.ingestCrossing(
+        makeCrossing(1, 1, 1, 1_000_000, {
+          isStartFinish: true,
+          startedLap: true,
+          estimatedSpeedMph: 42,
+        })
+      );
+      store.ingestCrossing(
+        makeCrossing(2, 2, 1, 3_500_000, { isStartFinish: false, estimatedSpeedMph: 39 })
+      );
+      store.ingestCrossing(
+        makeCrossing(3, 1, 1, 6_500_000, { isStartFinish: true, estimatedSpeedMph: 45 })
+      );
+      store.ingestLap(
+        {
+          lapId: 1,
+          slotIndex: 1,
+          callsign: "OneEye",
+          lapNumber: 1,
+          lapTimeSec: 5.5,
+          deltaToBest: 0,
+          sectors: [],
+          completedAtUs: 6_500_000,
+          isBestLap: true,
+        },
+        []
+      );
+      // T1 on Lap 2 (8.8s), Finish Lap 2 at H1 (11.5s), then T1 on in-progress Lap 3 (13.2s)
+      store.ingestCrossing(
+        makeCrossing(4, 2, 1, 8_800_000, { isStartFinish: false, estimatedSpeedMph: 41 })
+      );
+      store.ingestCrossing(
+        makeCrossing(5, 1, 1, 11_500_000, { isStartFinish: true, estimatedSpeedMph: 46 })
+      );
+      store.ingestLap(
+        {
+          lapId: 2,
+          slotIndex: 1,
+          callsign: "OneEye",
+          lapNumber: 2,
+          lapTimeSec: 5.0,
+          deltaToBest: -0.5,
+          sectors: [],
+          completedAtUs: 11_500_000,
+          isBestLap: true,
+        },
+        []
+      );
+      store.ingestCrossing(
+        makeCrossing(6, 2, 1, 13_200_000, { isStartFinish: false, estimatedSpeedMph: 44 })
+      );
+
+      // Select timer H1: shows H1 · Start, H1 · Lap 1, H1 · Lap 2 (never mph)
+      drawnTexts.length = 0;
+      root.querySelector<HTMLButtonElement>('[data-gate-chip="1"]')!.click();
+      await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
+      await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
+      expect(drawnTexts).toContain("H1 · Start");
+      expect(drawnTexts).toContain("H1 · Lap 1");
+      expect(drawnTexts).toContain("H1 · Lap 2");
+      expect(drawnTexts.some((s) => s.includes("mph"))).toBe(false);
+
+      // Select timer T1: shows T1 · Lap 1, T1 · Lap 2, and in-progress T1 · Lap 3 (never mph)
+      drawnTexts.length = 0;
+      root.querySelector<HTMLButtonElement>('[data-gate-chip="2"]')!.click();
+      await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
+      await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
+      expect(drawnTexts).toContain("T1 · Lap 1");
+      expect(drawnTexts).toContain("T1 · Lap 2");
+      expect(drawnTexts).toContain("T1 · Lap 3");
+      expect(drawnTexts.some((s) => s.includes("mph"))).toBe(false);
+    } finally {
+      CanvasRenderingContext2D.prototype.fillText = origFillText;
+      chart.destroy();
     }
   });
 });
