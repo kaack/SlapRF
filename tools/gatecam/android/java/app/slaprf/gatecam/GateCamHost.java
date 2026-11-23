@@ -36,6 +36,7 @@ import org.opencv.android.OpenCVLoader;
  */
 public final class GateCamHost extends Activity {
     private static final int REQ_CAMERA = 4201;
+    private static volatile GateCamHost activeHost;
 
     static {
         try {
@@ -62,6 +63,7 @@ public final class GateCamHost extends Activity {
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        activeHost = this;
 
         Window win = getWindow();
         if (win != null) {
@@ -199,18 +201,23 @@ public final class GateCamHost extends Activity {
 
     @Override
     protected void onPause() {
-        GateCamShim.stopCamera();
+        if (activeHost == this) {
+            GateCamShim.stopCamera();
+        }
         super.onPause();
     }
 
     @Override
     protected void onDestroy() {
-        GateCamShim.stopCamera();
         if (webView != null) {
             webView.destroy();
             webView = null;
         }
-        nativeStopServer();
+        if (activeHost == this && isFinishing()) {
+            GateCamShim.stopCamera();
+            nativeStopServer();
+            activeHost = null;
+        }
         super.onDestroy();
     }
 
