@@ -11,6 +11,7 @@ import android.graphics.YuvImage;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CameraConstrainedHighSpeedCaptureSession;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CameraMetadata;
@@ -53,6 +54,7 @@ import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -65,7 +67,7 @@ public final class GateCamShim {
     private static final int RING_W = 640;
     private static final int RING_H = 360;
     private static final int NV21_BYTES = RING_W * RING_H * 3 / 2;
-    private static final int RING_CAP = 168; // ~58 MB static allocation, zero per-frame GC
+    private static final int RING_CAP = 264; // ~91 MB static allocation: 4.4s @ 60fps, 2.2s @ 120fps, 1.1s @ 240fps
 
     private static Context appCtx;
     private static volatile Activity activeActivity;
@@ -75,13 +77,20 @@ public final class GateCamShim {
     private static volatile int previewHeight = 720;
     private static volatile int capW = 1280;
     private static volatile int capH = 960;
+    private static volatile int hsCapW = 1280;
+    private static volatile int hsCapH = 720;
 
     private static HandlerThread camThread;
     private static Handler camHandler;
-    private static CameraDevice cameraDevice;
-    private static CameraCaptureSession captureSession;
+    private static HandlerThread cbThread;
+    private static Handler cbHandler;
+    private static volatile boolean wantCameraOpen = false;
+    private static volatile CameraDevice cameraDevice;
+    private static volatile CameraCaptureSession captureSession;
     private static ImageReader yuvReader;
     private static Surface previewSurface;
+    private static HighSpeedGlPipe glPipe;
+    private static volatile boolean activeHighSpeedSession = false;
 
     private static String cameraId = "";
     private static int sensorOrientation = 90;
@@ -95,9 +104,13 @@ public final class GateCamShim {
     private static float minZoomRatio = 1.0f;
     private static float maxZoomRatio = 8.0f;
     private static List<Range<Integer>> availableFpsRanges = new ArrayList<>();
+    private static List<Range<Integer>> availableHsFpsRanges = new ArrayList<>();
     private static boolean supports120Fps = false;
+    private static boolean supports240Fps = false;
+    private static boolean characteristicsLoaded = false;
 
     // Requested camera configuration
+    private static volatile int requestedTargetFps = 120;
     private static volatile int targetFps = 120;
     private static volatile int shutterUs = 0; // 0=Auto, 4000=1/250s, 2000=1/500s, 1000=1/1000s, 500=1/2000s, 250=1/4000s
     private static volatile float zoomRatio = 1.0f;
@@ -125,11 +138,11 @@ public final class GateCamShim {
     private static volatile double measuredFps = 60.0;
     private static long prevFrameTsNs = 0;
 
-    // Recent CaptureResult metadata cache (keyed by SENSOR_TIMESTAMP, 32-entry ring)
+    // Recent CaptureResult metadata cache (keyed by SENSOR_TIMESTAMP, 64-entry ring)
     private static final Object metaLock = new Object();
-    private static final long[] metaTsKey = new long[32];
-    private static final long[] metaExpNs = new long[32];
-    private static final long[] metaSkewNs = new long[32];
+    private static final long[] metaTsKey = new long[64];
+    private static final long[] metaExpNs = new long[64];
+    private static final long[] metaSkewNs = new long[64];
     private static int metaHead = 0;
     private static volatile long latestExposureNs = 8_000_000L;
     private static volatile long latestSkewNs = 8_000_000L;
@@ -150,35 +163,50 @@ public final class GateCamShim {
 
     private GateCamShim() {}
 
-    public static synchronized void init(Context ctx, Activity act) {
+    public static void init(Context ctx, Activity act) {
         appCtx = ctx.getApplicationContext();
         activeActivity = act;
-        ensureThread();
+        ensureThreads();
     }
 
     public static void setActivity(Activity act) {
         activeActivity = act;
     }
 
-    private static synchronized void ensureThread() {
+    private static synchronized void ensureThreads() {
         if (camThread == null) {
-            camThread = new HandlerThread("GateCamCamera2");
+            camThread = new HandlerThread("GateCamControl");
             camThread.start();
             camHandler = new Handler(camThread.getLooper());
         }
+        if (cbThread == null) {
+            cbThread = new HandlerThread("GateCamCallbacks");
+            cbThread.start();
+            cbHandler = new Handler(cbThread.getLooper());
+        }
     }
 
-    public static synchronized void onPreviewSurfaceAvailable(TextureView tv, int w, int h) {
-        if (cameraDevice != null && tv != null && tv.getSurfaceTexture() != boundSurfaceTexture) {
-            stopCamera();
-        }
+    // All UI-thread surface callbacks are strictly non-blocking (never wait on Camera2 or GL locks!)
+    public static void onPreviewSurfaceAvailable(final TextureView tv, final int w, final int h) {
         previewTexture = tv;
         previewWidth = w;
         previewHeight = h;
         applyPreviewTransform(tv, w, h);
+        ensureThreads();
+        camHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                if (cameraDevice != null && tv != null && tv.isAvailable() && tv.getSurfaceTexture() != boundSurfaceTexture) {
+                    closeCameraOnControlThread();
+                }
+                if (wantCameraOpen) {
+                    openCameraOnControlThread();
+                }
+            }
+        });
     }
 
-    public static synchronized void onPreviewSurfaceSizeChanged(TextureView tv, int w, int h) {
+    public static void onPreviewSurfaceSizeChanged(TextureView tv, int w, int h) {
         if (previewTexture != null && previewTexture != tv) {
             return;
         }
@@ -188,12 +216,20 @@ public final class GateCamShim {
         applyPreviewTransform(tv, w, h);
     }
 
-    public static synchronized void onPreviewSurfaceDestroyed(TextureView tv) {
+    public static void onPreviewSurfaceDestroyed(final TextureView tv) {
         if (previewTexture != tv) {
             return;
         }
-        stopCamera();
         previewTexture = null;
+        ensureThreads();
+        camHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                if (previewTexture == null) {
+                    closeCameraOnControlThread();
+                }
+            }
+        });
     }
 
     private static int getDisplayRotation() {
@@ -221,20 +257,23 @@ public final class GateCamShim {
 
     private static void applyPreviewTransform(final TextureView tv, final int viewW, final int viewH) {
         if (tv == null || viewW <= 0 || viewH <= 0) return;
+        final boolean isHs = activeHighSpeedSession;
         tv.post(new Runnable() {
             @Override
             public void run() {
-                int rot = getDisplayRotation();
                 Matrix m = new Matrix();
+                if (isHs) {
+                    // HighSpeedGlPipe renders upright 16:9 directly into TextureView's Surface
+                    tv.setTransform(m);
+                    return;
+                }
+                int rot = getDisplayRotation();
                 float cx = viewW * 0.5f;
                 float cy = viewH * 0.5f;
                 if (Surface.ROTATION_90 == rot || Surface.ROTATION_270 == rot) {
                     m.postScale((float) viewH / (float) viewW, (float) viewW / (float) viewH, cx, cy);
                     m.postRotate(90 * (rot - 2), cx, cy);
                 } else {
-                    // Phone is held upright in Portrait (ROTATION_0 / ROTATION_180):
-                    // SurfaceTexture presents upright buffer of aspect (uprightW = capH, uprightH = capW).
-                    // Center-crop vertically to match our full-width 16:9 landscape viewfinder with 1:1 square pixels.
                     float desiredCropH = Math.max(1f, (float) capH * ((float) viewH / (float) viewW));
                     float scaleY = (float) capW / desiredCropH;
                     m.postScale(1.0f, scaleY, cx, cy);
@@ -247,12 +286,36 @@ public final class GateCamShim {
         });
     }
 
+    public static void startCameraIfReady() {
+        wantCameraOpen = true;
+        ensureThreads();
+        camHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                openCameraOnControlThread();
+            }
+        });
+    }
+
+    public static void stopCamera() {
+        wantCameraOpen = false;
+        ensureThreads();
+        camHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                if (!wantCameraOpen) {
+                    closeCameraOnControlThread();
+                }
+            }
+        });
+    }
+
     @SuppressLint("MissingPermission")
-    public static synchronized void startCameraIfReady() {
-        if (appCtx == null || previewTexture == null || !previewTexture.isAvailable() || cameraDevice != null) {
+    private static void openCameraOnControlThread() {
+        TextureView tv = previewTexture;
+        if (!wantCameraOpen || appCtx == null || tv == null || !tv.isAvailable() || cameraDevice != null) {
             return;
         }
-        ensureThread();
         try {
             CameraManager cm = (CameraManager) appCtx.getSystemService(Context.CAMERA_SERVICE);
             if (cm == null) return;
@@ -297,17 +360,17 @@ public final class GateCamShim {
 
             Range<Integer>[] ranges = cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
             availableFpsRanges.clear();
+            availableHsFpsRanges.clear();
             supports120Fps = false;
+            supports240Fps = false;
             if (ranges != null) {
                 availableFpsRanges.addAll(Arrays.asList(ranges));
-                for (Range<Integer> r : ranges) {
-                    if (r.getUpper() >= 120) supports120Fps = true;
-                }
             }
 
-            // Prefer 1280x960 (4:3 full horizontal sensor width when phone is held upright in Portrait!)
             capW = 1280;
             capH = 720;
+            hsCapW = 1280;
+            hsCapH = 720;
             StreamConfigurationMap map = cc.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
             if (map != null) {
                 Size[] sizes = map.getOutputSizes(ImageFormat.YUV_420_888);
@@ -320,85 +383,209 @@ public final class GateCamShim {
                         }
                     }
                 }
-                long minDur = map.getOutputMinFrameDuration(ImageFormat.YUV_420_888, new Size(capW, capH));
-                if (minDur > 0 && minDur <= 9_000_000L) {
-                    supports120Fps = true;
+                Size[] hsSizes = map.getHighSpeedVideoSizes();
+                if (hsSizes != null && hsSizes.length > 0) {
+                    Size chosenHs = hsSizes[0];
+                    for (Size s : hsSizes) {
+                        if (s.getWidth() == 1280 && s.getHeight() == 720) {
+                            chosenHs = s;
+                            break;
+                        }
+                    }
+                    hsCapW = chosenHs.getWidth();
+                    hsCapH = chosenHs.getHeight();
+                    Range<Integer>[] hsRanges = map.getHighSpeedVideoFpsRangesFor(chosenHs);
+                    if (hsRanges != null) {
+                        availableHsFpsRanges.addAll(Arrays.asList(hsRanges));
+                        for (Range<Integer> r : hsRanges) {
+                            if (r.getUpper() >= 120) supports120Fps = true;
+                            if (r.getUpper() >= 240) supports240Fps = true;
+                        }
+                    }
                 }
             }
-
-            applyPreviewTransform(previewTexture, previewWidth, previewHeight);
+            characteristicsLoaded = true;
+            if (requestedTargetFps >= 240 && supports240Fps) {
+                targetFps = 240;
+            } else if (requestedTargetFps >= 120 && supports120Fps) {
+                targetFps = 120;
+            } else {
+                targetFps = 60;
+            }
 
             cm.openCamera(cameraId, new CameraDevice.StateCallback() {
                 @Override
-                public void onOpened(CameraDevice camera) {
-                    synchronized (GateCamShim.class) {
-                        cameraDevice = camera;
-                        lastError = "";
-                        createCapturePipelineLocked();
-                    }
+                public void onOpened(final CameraDevice camera) {
+                    camHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (!wantCameraOpen) {
+                                camera.close();
+                                return;
+                            }
+                            cameraDevice = camera;
+                            lastError = "";
+                            createCapturePipelineOnControlThread();
+                        }
+                    });
                 }
 
                 @Override
-                public void onDisconnected(CameraDevice camera) {
-                    camera.close();
-                    synchronized (GateCamShim.class) {
-                        cameraDevice = null;
-                    }
+                public void onDisconnected(final CameraDevice camera) {
+                    camHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (cameraDevice == camera) {
+                                closeCameraOnControlThread();
+                            } else {
+                                try { camera.close(); } catch (Throwable ignored) {}
+                            }
+                        }
+                    });
                 }
 
                 @Override
-                public void onError(CameraDevice camera, int error) {
-                    camera.close();
-                    synchronized (GateCamShim.class) {
-                        cameraDevice = null;
-                        lastError = "CameraDevice error " + error;
-                    }
+                public void onError(final CameraDevice camera, final int error) {
+                    camHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            lastError = "CameraDevice error " + error;
+                            if (cameraDevice == camera) {
+                                closeCameraOnControlThread();
+                            } else {
+                                try { camera.close(); } catch (Throwable ignored) {}
+                            }
+                            if (wantCameraOpen) {
+                                // Auto-retry (e.g. ERROR_CAMERA_DISABLED=3 while lockscreen is still dismissing)
+                                camHandler.postDelayed(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        if (wantCameraOpen && cameraDevice == null) {
+                                            openCameraOnControlThread();
+                                        }
+                                    }
+                                }, 650);
+                            }
+                        }
+                    });
                 }
-            }, camHandler);
+            }, cbHandler);
         } catch (Throwable t) {
+            activeHighSpeedSession = false;
+            captureSession = null;
             lastError = String.valueOf(t.getMessage());
         }
     }
 
-    public static synchronized void stopCamera() {
-        try {
-            if (captureSession != null) {
-                captureSession.close();
-                captureSession = null;
-            }
-        } catch (Throwable ignored) {}
-        try {
-            if (cameraDevice != null) {
-                cameraDevice.close();
-                cameraDevice = null;
-            }
-        } catch (Throwable ignored) {}
-        try {
-            if (yuvReader != null) {
-                yuvReader.close();
-                yuvReader = null;
-            }
-        } catch (Throwable ignored) {}
-        try {
-            if (previewSurface != null) {
-                previewSurface.release();
-                previewSurface = null;
-            }
-        } catch (Throwable ignored) {}
+    private static void teardownPipelineOnControlThread() {
+        CameraCaptureSession cs = captureSession;
+        captureSession = null;
+        if (cs != null) {
+            try { cs.close(); } catch (Throwable ignored) {}
+        }
+        if (yuvReader != null) {
+            try { yuvReader.close(); } catch (Throwable ignored) {}
+            yuvReader = null;
+        }
+        if (previewSurface != null) {
+            try { previewSurface.release(); } catch (Throwable ignored) {}
+            previewSurface = null;
+        }
+        if (glPipe != null) {
+            try { glPipe.release(); } catch (Throwable ignored) {}
+            glPipe = null;
+        }
+        activeHighSpeedSession = false;
+        synchronized (ringLock) {
+            ringHead = 0;
+            ringCount = 0;
+            prevFrameTsNs = 0;
+        }
+    }
+
+    private static void closeCameraOnControlThread() {
+        teardownPipelineOnControlThread();
+        CameraDevice cd = cameraDevice;
+        cameraDevice = null;
+        if (cd != null) {
+            try { cd.close(); } catch (Throwable ignored) {}
+        }
         boundSurfaceTexture = null;
     }
 
-    private static synchronized void createCapturePipelineLocked() {
-        if (cameraDevice == null || previewTexture == null || !previewTexture.isAvailable()) return;
+    private static void createCapturePipelineOnControlThread() {
+        TextureView tv = previewTexture;
+        final CameraDevice cd = cameraDevice;
+        if (cd == null || tv == null || !tv.isAvailable()) return;
+        teardownPipelineOnControlThread();
         try {
-            SurfaceTexture st = previewTexture.getSurfaceTexture();
+            SurfaceTexture st = tv.getSurfaceTexture();
+            if (st == null) return;
             boundSurfaceTexture = st;
+            boolean wantHighSpeed = (targetFps >= 120 && supports120Fps && !availableHsFpsRanges.isEmpty());
+
+            if (wantHighSpeed) {
+                activeHighSpeedSession = true;
+                applyPreviewTransform(tv, previewWidth, previewHeight);
+                final HighSpeedGlPipe pipe = new HighSpeedGlPipe(hsCapW, hsCapH, RING_W, RING_H, new HighSpeedGlPipe.FrameSink() {
+                    @Override
+                    public int getRotationDegrees() {
+                        int r = computeSensorToDisplayDegrees();
+                        lastRotDeg = r;
+                        return r;
+                    }
+
+                    @Override
+                    public void onHighSpeedFrameReady(ByteBuffer mappedNv21Pbo, long sensorTimestampNs) {
+                        ingestHighSpeedGlFrame(mappedNv21Pbo, sensorTimestampNs);
+                    }
+                });
+                if (!pipe.start(st) || pipe.getCameraInputSurface() == null) {
+                    pipe.release();
+                    activeHighSpeedSession = false;
+                    lastError = "HighSpeedGlPipe init failed; using 60 fps";
+                } else {
+                    glPipe = pipe;
+                    List<Surface> hsTargets = Collections.singletonList(pipe.getCameraInputSurface());
+                    cd.createConstrainedHighSpeedCaptureSession(hsTargets, new CameraCaptureSession.StateCallback() {
+                        @Override
+                        public void onConfigured(final CameraCaptureSession session) {
+                            camHandler.post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if (cameraDevice != cd || glPipe != pipe) {
+                                        try { session.close(); } catch (Throwable ignored) {}
+                                        return;
+                                    }
+                                    captureSession = session;
+                                    lastError = "";
+                                    applyRepeatingRequestOnControlThread();
+                                }
+                            });
+                        }
+
+                        @Override
+                        public void onConfigureFailed(CameraCaptureSession session) {
+                            camHandler.post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    activeHighSpeedSession = false;
+                                    captureSession = null;
+                                    lastError = "High-speed session configure failed";
+                                }
+                            });
+                        }
+                    }, cbHandler);
+                    return;
+                }
+            }
+
+            // Standard 60 fps pipeline (supports 0.5x Ultra-Wide + manual Tv Shutter-Priority Auto-ISO)
+            activeHighSpeedSession = false;
             st.setDefaultBufferSize(capW, capH);
-            applyPreviewTransform(previewTexture, previewWidth, previewHeight);
-            if (previewSurface != null) previewSurface.release();
+            applyPreviewTransform(tv, previewWidth, previewHeight);
             previewSurface = new Surface(st);
 
-            if (yuvReader != null) yuvReader.close();
             yuvReader = ImageReader.newInstance(capW, capH, ImageFormat.YUV_420_888, 6);
             yuvReader.setOnImageAvailableListener(new ImageReader.OnImageAvailableListener() {
                 @Override
@@ -414,24 +601,35 @@ public final class GateCamShim {
                         if (img != null) img.close();
                     }
                 }
-            }, camHandler);
+            }, cbHandler);
 
+            final ImageReader expectedReader = yuvReader;
             List<Surface> targets = Arrays.asList(previewSurface, yuvReader.getSurface());
-            cameraDevice.createCaptureSession(targets, new CameraCaptureSession.StateCallback() {
+            cd.createCaptureSession(targets, new CameraCaptureSession.StateCallback() {
                 @Override
-                public void onConfigured(CameraCaptureSession session) {
-                    synchronized (GateCamShim.class) {
-                        captureSession = session;
-                        applyRepeatingRequestLocked();
-                    }
+                public void onConfigured(final CameraCaptureSession session) {
+                    camHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (cameraDevice != cd || yuvReader != expectedReader) {
+                                try { session.close(); } catch (Throwable ignored) {}
+                                return;
+                            }
+                            captureSession = session;
+                            lastError = "";
+                            applyRepeatingRequestOnControlThread();
+                        }
+                    });
                 }
 
                 @Override
                 public void onConfigureFailed(CameraCaptureSession session) {
                     lastError = "CameraCaptureSession configuration failed";
                 }
-            }, camHandler);
+            }, cbHandler);
         } catch (Throwable t) {
+            activeHighSpeedSession = false;
+            captureSession = null;
             lastError = String.valueOf(t.getMessage());
         }
     }
@@ -483,9 +681,69 @@ public final class GateCamShim {
         }
     }
 
-    private static synchronized void applyRepeatingRequestLocked() {
-        if (cameraDevice == null || captureSession == null || previewSurface == null || yuvReader == null) return;
+    private static Range<Integer> pickBestHsFpsRange(int desiredFps) {
+        Range<Integer> fixedMatch = null;
+        Range<Integer> upperMatch = null;
+        for (Range<Integer> r : availableHsFpsRanges) {
+            if (r.getUpper() == desiredFps && r.getLower() == desiredFps) {
+                fixedMatch = r;
+                break;
+            }
+            if (r.getUpper() == desiredFps) {
+                upperMatch = r;
+            }
+        }
+        if (fixedMatch != null) return fixedMatch;
+        if (upperMatch != null) return upperMatch;
+        for (Range<Integer> r : availableHsFpsRanges) {
+            if (r.getUpper() >= 120 && r.getLower() >= 120) {
+                return r;
+            }
+        }
+        return availableHsFpsRanges.get(0);
+    }
+
+    private static void applyRepeatingRequestOnControlThread() {
+        if (cameraDevice == null || captureSession == null) return;
         try {
+            if (activeHighSpeedSession && captureSession instanceof CameraConstrainedHighSpeedCaptureSession && glPipe != null) {
+                CameraConstrainedHighSpeedCaptureSession hsSession = (CameraConstrainedHighSpeedCaptureSession) captureSession;
+                Surface camSurf = glPipe.getCameraInputSurface();
+                if (camSurf == null) return;
+
+                Range<Integer> hsRange = pickBestHsFpsRange(targetFps);
+                float dist = resolveFixedFocusDiopters();
+                try {
+                    CaptureRequest.Builder b = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
+                    b.addTarget(camSurf);
+                    b.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
+                    b.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON);
+                    b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, hsRange);
+                    if (oneShotAfActive) {
+                        b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_AUTO);
+                        if (activeAfRegions != null) {
+                            b.set(CaptureRequest.CONTROL_AF_REGIONS, activeAfRegions);
+                        }
+                    } else {
+                        b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF);
+                        b.set(CaptureRequest.LENS_FOCUS_DISTANCE, dist);
+                        latestFocusDiopters = dist;
+                    }
+                    List<CaptureRequest> burst = hsSession.createHighSpeedRequestList(b.build());
+                    hsSession.setRepeatingBurst(burst, captureCallback, cbHandler);
+                } catch (IllegalArgumentException iae) {
+                    CaptureRequest.Builder b2 = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
+                    b2.addTarget(camSurf);
+                    b2.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
+                    b2.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON);
+                    b2.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, hsRange);
+                    List<CaptureRequest> burst2 = hsSession.createHighSpeedRequestList(b2.build());
+                    hsSession.setRepeatingBurst(burst2, captureCallback, cbHandler);
+                }
+                return;
+            }
+
+            if (previewSurface == null || yuvReader == null) return;
             CaptureRequest.Builder b = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
             b.addTarget(previewSurface);
             b.addTarget(yuvReader.getSurface());
@@ -499,7 +757,6 @@ public final class GateCamShim {
             }
 
             if (shutterUs > 0) {
-                // Shutter-Priority (Tv) mode: fixed shutter exposure + automatic closed-loop ISO
                 long expNs = Math.max(expRangeNs.getLower(), Math.min(expRangeNs.getUpper(), (long) shutterUs * 1000L));
                 b.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF);
                 b.set(CaptureRequest.SENSOR_EXPOSURE_TIME, expNs);
@@ -519,15 +776,14 @@ public final class GateCamShim {
                     b.set(CaptureRequest.CONTROL_AF_REGIONS, activeAfRegions);
                 }
             } else {
-                // Fixed / Locked focus — never hunt when hands or drones pass in front of the gate!
                 b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF);
                 float dist = resolveFixedFocusDiopters();
                 b.set(CaptureRequest.LENS_FOCUS_DISTANCE, dist);
                 latestFocusDiopters = dist;
             }
 
-            captureSession.setRepeatingRequest(b.build(), captureCallback, camHandler);
-        } catch (CameraAccessException e) {
+            captureSession.setRepeatingRequest(b.build(), captureCallback, cbHandler);
+        } catch (Throwable e) {
             lastError = String.valueOf(e.getMessage());
         }
     }
@@ -563,7 +819,7 @@ public final class GateCamShim {
                     camHandler.post(new Runnable() {
                         @Override
                         public void run() {
-                            applyRepeatingRequestLocked();
+                            applyRepeatingRequestOnControlThread();
                         }
                     });
                 }
@@ -574,7 +830,7 @@ public final class GateCamShim {
                     metaTsKey[metaHead] = ts;
                     metaExpNs[metaHead] = latestExposureNs;
                     metaSkewNs[metaHead] = latestSkewNs;
-                    metaHead = (metaHead + 1) & 31;
+                    metaHead = (metaHead + 1) & 63;
                 }
             }
         }
@@ -584,13 +840,44 @@ public final class GateCamShim {
         outExpAndSkew[0] = latestExposureNs;
         outExpAndSkew[1] = latestSkewNs;
         synchronized (metaLock) {
-            for (int i = 0; i < 32; i++) {
+            for (int i = 0; i < 64; i++) {
                 if (metaTsKey[i] == tsNs) {
                     outExpAndSkew[0] = metaExpNs[i];
                     outExpAndSkew[1] = metaSkewNs[i];
                     return;
                 }
             }
+        }
+    }
+
+    private static void ingestHighSpeedGlFrame(ByteBuffer mappedNv21Pbo, long tsNs) {
+        if (tsNs <= 0 || mappedNv21Pbo == null) return;
+        if (prevFrameTsNs > 0 && tsNs > prevFrameTsNs) {
+            double instFps = 1e9 / (double) (tsNs - prevFrameTsNs);
+            if (instFps >= 15.0 && instFps <= 320.0) {
+                measuredFps = measuredFps * 0.90 + instFps * 0.10;
+            }
+        }
+        prevFrameTsNs = tsNs;
+
+        long[] meta = new long[2];
+        lookupCaptureMeta(tsNs, meta);
+
+        int slot;
+        byte[] dst;
+        synchronized (ringLock) {
+            slot = ringHead;
+            dst = ringNV21[slot];
+        }
+
+        mappedNv21Pbo.get(dst, 0, NV21_BYTES);
+
+        synchronized (ringLock) {
+            ringSensorTsNs[slot] = tsNs;
+            ringExposureNs[slot] = meta[0];
+            ringSkewNs[slot] = meta[1];
+            ringHead = (slot + 1) % RING_CAP;
+            if (ringCount < RING_CAP) ringCount++;
         }
     }
 
@@ -647,18 +934,22 @@ public final class GateCamShim {
                 if (meanY < 92.0 || meanY > 138.0) {
                     double ratio = 112.0 / Math.max(10.0, meanY);
                     double damped = Math.max(0.55, Math.min(2.1, Math.pow(ratio, 0.65)));
-                    synchronized (GateCamShim.class) {
-                        if (shutterUs > 0) {
-                            int prevIso = manualIso;
-                            int prevBoost = manualBoost;
-                            updateManualIsoFromTotal(currentTotalIso * damped);
-                            lastSceneEvNsIso = (double) shutterUs * 1000.0 * currentTotalIso;
-                            if (Math.abs(manualIso - prevIso) >= Math.max(10, prevIso / 12)
-                                    || Math.abs(manualBoost - prevBoost) >= 6) {
-                                applyRepeatingRequestLocked();
+                    final double nextTotalIso = currentTotalIso * damped;
+                    camHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (shutterUs > 0) {
+                                int prevIso = manualIso;
+                                int prevBoost = manualBoost;
+                                updateManualIsoFromTotal(nextTotalIso);
+                                lastSceneEvNsIso = (double) shutterUs * 1000.0 * currentTotalIso;
+                                if (Math.abs(manualIso - prevIso) >= Math.max(10, prevIso / 12)
+                                        || Math.abs(manualBoost - prevBoost) >= 6) {
+                                    applyRepeatingRequestOnControlThread();
+                                }
                             }
                         }
-                    }
+                    });
                 }
             }
         }
@@ -769,6 +1060,7 @@ public final class GateCamShim {
         try {
             int filled;
             double spanMs = 0.0;
+            double fpsVal = measuredFps;
             synchronized (ringLock) {
                 filled = ringCount;
                 if (ringCount >= 2) {
@@ -776,22 +1068,29 @@ public final class GateCamShim {
                     int oldest = (ringHead - ringCount + RING_CAP) % RING_CAP;
                     long dtNs = ringSensorTsNs[newest] - ringSensorTsNs[oldest];
                     if (dtNs > 0) spanMs = dtNs / 1e6;
+                    int win = Math.min(ringCount - 1, 32);
+                    int winOld = (ringHead - 1 - win + RING_CAP) % RING_CAP;
+                    long winDtNs = ringSensorTsNs[newest] - ringSensorTsNs[winOld];
+                    if (winDtNs > 0) {
+                        fpsVal = (win * 1e9) / (double) winDtNs;
+                    }
                 }
             }
             JSONObject o = new JSONObject();
             o.put("active", cameraDevice != null && captureSession != null);
             o.put("frameWidth", RING_W);
             o.put("frameHeight", RING_H);
-            o.put("actualFps", Math.round(measuredFps * 10.0) / 10.0);
+            o.put("actualFps", Math.round(fpsVal * 10.0) / 10.0);
             JSONArray fpsArr = new JSONArray();
             fpsArr.put(60);
             if (supports120Fps) fpsArr.put(120);
+            if (supports240Fps) fpsArr.put(240);
             o.put("supportedFps", fpsArr);
-            o.put("shutterUs", shutterUs);
+            o.put("shutterUs", activeHighSpeedSession ? 0 : shutterUs);
             o.put("exposureUs", (int) Math.max(1L, latestExposureNs / 1000L));
-            o.put("iso", latestIso * Math.max(100, manualBoost) / 100);
-            o.put("zoomRatio", Math.round(zoomRatio * 100.0) / 100.0);
-            o.put("minZoomRatio", Math.round(minZoomRatio * 100.0) / 100.0);
+            o.put("iso", latestIso * Math.max(100, activeHighSpeedSession ? 100 : manualBoost) / 100);
+            o.put("zoomRatio", activeHighSpeedSession ? 1.0 : Math.round(zoomRatio * 100.0) / 100.0);
+            o.put("minZoomRatio", activeHighSpeedSession ? 1.0 : Math.round(minZoomRatio * 100.0) / 100.0);
             o.put("focusMode", focusMode);
             o.put("focusDistDiopters", Math.round(latestFocusDiopters * 100.0) / 100.0);
             o.put("focusLocked", !oneShotAfActive);
@@ -809,12 +1108,21 @@ public final class GateCamShim {
         }
     }
 
-    public static synchronized String configureJson(String cfgJson) {
+    public static String configureJson(String cfgJson) {
         try {
             JSONObject o = new JSONObject(cfgJson);
             if (o.has("targetFps")) {
                 int want = o.optInt("targetFps", 120);
-                targetFps = (want >= 120 && supports120Fps) ? 120 : 60;
+                requestedTargetFps = want;
+                if (!characteristicsLoaded) {
+                    targetFps = want;
+                } else if (want >= 240 && supports240Fps) {
+                    targetFps = 240;
+                } else if (want >= 120 && supports120Fps) {
+                    targetFps = 120;
+                } else {
+                    targetFps = 60;
+                }
             }
             if (o.has("zoomRatio")) {
                 double z = o.optDouble("zoomRatio", 1.0);
@@ -839,77 +1147,110 @@ public final class GateCamShim {
                     oneShotAfActive = false;
                 }
             }
-            applyRepeatingRequestLocked();
+            ensureThreads();
+            camHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    if (cameraDevice == null) return;
+                    boolean wantHs = (targetFps >= 120 && supports120Fps && !availableHsFpsRanges.isEmpty());
+                    if (wantHs != activeHighSpeedSession) {
+                        createCapturePipelineOnControlThread();
+                    } else {
+                        applyRepeatingRequestOnControlThread();
+                    }
+                }
+            });
         } catch (Throwable t) {
             lastError = String.valueOf(t.getMessage());
         }
         return statusJson();
     }
 
-    public static synchronized String triggerFocusLock(double normX, double normY) {
-        if (cameraDevice == null || captureSession == null || previewSurface == null || yuvReader == null) {
+    public static String triggerFocusLock(final double normX, final double normY) {
+        if (cameraDevice == null || captureSession == null) {
             return "Camera is not active";
         }
-        try {
-            // Map upright 16:9 Landscape viewfinder (normX, normY) onto 90 deg CW 4:3 sensor activeArrayRect
-            double cropFrac = Math.min(1.0, ((double) capH * (double) RING_H / (double) RING_W) / (double) Math.max(1, capW));
-            double topFrac = (1.0 - cropFrac) * 0.5;
-            double sxNorm = Math.max(0.0, Math.min(1.0, topFrac + Math.max(0.0, Math.min(1.0, normY)) * cropFrac));
-            double syNorm = Math.max(0.0, Math.min(1.0, 1.0 - normX));
+        ensureThreads();
+        camHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                if (cameraDevice == null || captureSession == null) return;
+                try {
+                    int curW = activeHighSpeedSession ? hsCapW : capW;
+                    int curH = activeHighSpeedSession ? hsCapH : capH;
+                    double cropFrac = Math.min(1.0, ((double) curH * (double) RING_H / (double) RING_W) / (double) Math.max(1, curW));
+                    double topFrac = (1.0 - cropFrac) * 0.5;
+                    double sxNorm = Math.max(0.0, Math.min(1.0, topFrac + Math.max(0.0, Math.min(1.0, normY)) * cropFrac));
+                    double syNorm = Math.max(0.0, Math.min(1.0, 1.0 - normX));
 
-            int cx = activeArrayRect.left + (int) Math.round(sxNorm * activeArrayRect.width());
-            int cy = activeArrayRect.top + (int) Math.round(syNorm * activeArrayRect.height());
-            int half = Math.max(60, activeArrayRect.width() / 16);
-            Rect r = new Rect(
-                    Math.max(activeArrayRect.left, cx - half),
-                    Math.max(activeArrayRect.top, cy - half),
-                    Math.min(activeArrayRect.right, cx + half),
-                    Math.min(activeArrayRect.bottom, cy + half));
-            MeteringRectangle mr = new MeteringRectangle(r, MeteringRectangle.METERING_WEIGHT_MAX - 1);
+                    int cx = activeArrayRect.left + (int) Math.round(sxNorm * activeArrayRect.width());
+                    int cy = activeArrayRect.top + (int) Math.round(syNorm * activeArrayRect.height());
+                    int half = Math.max(60, activeArrayRect.width() / 16);
+                    Rect r = new Rect(
+                            Math.max(activeArrayRect.left, cx - half),
+                            Math.max(activeArrayRect.top, cy - half),
+                            Math.min(activeArrayRect.right, cx + half),
+                            Math.min(activeArrayRect.bottom, cy + half));
+                    MeteringRectangle mr = new MeteringRectangle(r, MeteringRectangle.METERING_WEIGHT_MAX - 1);
 
-            activeAfRegions = new MeteringRectangle[]{mr};
-            focusMode = "tap";
-            oneShotAfActive = true;
-            applyRepeatingRequestLocked();
+                    activeAfRegions = new MeteringRectangle[]{mr};
+                    focusMode = "tap";
+                    oneShotAfActive = true;
+                    applyRepeatingRequestOnControlThread();
 
-            CaptureRequest.Builder trig = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
-            trig.addTarget(previewSurface);
-            trig.addTarget(yuvReader.getSurface());
-            if (Build.VERSION.SDK_INT >= 30) {
-                trig.set(CaptureRequest.CONTROL_ZOOM_RATIO, Math.max(minZoomRatio, Math.min(maxZoomRatio, zoomRatio)));
-            }
-            if (shutterUs > 0) {
-                long expNs = Math.max(expRangeNs.getLower(), Math.min(expRangeNs.getUpper(), (long) shutterUs * 1000L));
-                trig.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF);
-                trig.set(CaptureRequest.SENSOR_EXPOSURE_TIME, expNs);
-                trig.set(CaptureRequest.SENSOR_SENSITIVITY, Math.max(isoRange.getLower(), Math.min(isoRange.getUpper(), manualIso)));
-                trig.set(CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST, Math.max(boostRange.getLower(), Math.min(boostRange.getUpper(), manualBoost)));
-            } else {
-                trig.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON);
-            }
-            trig.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_AUTO);
-            trig.set(CaptureRequest.CONTROL_AF_REGIONS, activeAfRegions);
-            trig.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START);
-            captureSession.capture(trig.build(), captureCallback, camHandler);
-
-            // Safety fallback: lock focus after 700 ms even if HAL skips FOCUSED_LOCKED callback
-            camHandler.postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    synchronized (GateCamShim.class) {
-                        if (oneShotAfActive) {
-                            lockedFocusDist = latestFocusDiopters;
-                            oneShotAfActive = false;
-                            applyRepeatingRequestLocked();
+                    if (activeHighSpeedSession && captureSession instanceof CameraConstrainedHighSpeedCaptureSession
+                            && glPipe != null && glPipe.getCameraInputSurface() != null) {
+                        try {
+                            CameraConstrainedHighSpeedCaptureSession hsSession = (CameraConstrainedHighSpeedCaptureSession) captureSession;
+                            CaptureRequest.Builder trig = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
+                            trig.addTarget(glPipe.getCameraInputSurface());
+                            trig.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
+                            trig.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON);
+                            trig.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, pickBestHsFpsRange(targetFps));
+                            trig.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_AUTO);
+                            trig.set(CaptureRequest.CONTROL_AF_REGIONS, activeAfRegions);
+                            trig.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START);
+                            hsSession.captureBurst(hsSession.createHighSpeedRequestList(trig.build()), captureCallback, cbHandler);
+                        } catch (Throwable ignored) {
                         }
+                    } else if (previewSurface != null && yuvReader != null) {
+                        CaptureRequest.Builder trig = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
+                        trig.addTarget(previewSurface);
+                        trig.addTarget(yuvReader.getSurface());
+                        if (Build.VERSION.SDK_INT >= 30) {
+                            trig.set(CaptureRequest.CONTROL_ZOOM_RATIO, Math.max(minZoomRatio, Math.min(maxZoomRatio, zoomRatio)));
+                        }
+                        if (shutterUs > 0) {
+                            long expNs = Math.max(expRangeNs.getLower(), Math.min(expRangeNs.getUpper(), (long) shutterUs * 1000L));
+                            trig.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF);
+                            trig.set(CaptureRequest.SENSOR_EXPOSURE_TIME, expNs);
+                            trig.set(CaptureRequest.SENSOR_SENSITIVITY, Math.max(isoRange.getLower(), Math.min(isoRange.getUpper(), manualIso)));
+                            trig.set(CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST, Math.max(boostRange.getLower(), Math.min(boostRange.getUpper(), manualBoost)));
+                        } else {
+                            trig.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON);
+                        }
+                        trig.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_AUTO);
+                        trig.set(CaptureRequest.CONTROL_AF_REGIONS, activeAfRegions);
+                        trig.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START);
+                        captureSession.capture(trig.build(), captureCallback, cbHandler);
                     }
+
+                    camHandler.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (oneShotAfActive) {
+                                lockedFocusDist = latestFocusDiopters;
+                                oneShotAfActive = false;
+                                applyRepeatingRequestOnControlThread();
+                            }
+                        }
+                    }, 700);
+                } catch (Throwable ignored) {
+                    oneShotAfActive = false;
                 }
-            }, 700);
-            return "";
-        } catch (Throwable t) {
-            oneShotAfActive = false;
-            return String.valueOf(t.getMessage());
-        }
+            }
+        });
+        return "";
     }
 
     public static byte[] latestPreviewJpeg() {
@@ -983,6 +1324,20 @@ public final class GateCamShim {
                         slicedExp.add(ringExposureNs[idx]);
                         slicedSkew.add(ringSkewNs[idx]);
                     }
+                }
+            }
+
+            // Trim symmetrically to <= 180 frames at 240 fps so full 4.16 ms resolution is kept around t_RF
+            while (slicedNV21.size() > 180) {
+                slicedNV21.remove(slicedNV21.size() - 1);
+                slicedTs.remove(slicedTs.size() - 1);
+                slicedExp.remove(slicedExp.size() - 1);
+                slicedSkew.remove(slicedSkew.size() - 1);
+                if (slicedNV21.size() > 180) {
+                    slicedNV21.remove(0);
+                    slicedTs.remove(0);
+                    slicedExp.remove(0);
+                    slicedSkew.remove(0);
                 }
             }
 

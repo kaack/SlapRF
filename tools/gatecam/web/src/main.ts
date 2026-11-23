@@ -478,6 +478,8 @@ function renderLiveView(): string {
   const hasUltraWide = minZoom > 0.3 && minZoom < 0.9;
   const isUltra = hasUltraWide && curZoom < 0.85;
   const curFocusMode = ci.focusMode || cam.focusMode || "gate";
+  const supFps = ci.supportedFps && ci.supportedFps.length > 0 ? ci.supportedFps : [60, 120];
+  const isHighSpeed = cam.targetFps >= 120 && supFps.includes(120);
 
   return `
     <div class="live-grid">
@@ -498,24 +500,31 @@ function renderLiveView(): string {
           <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
             ${
               hasUltraWide
-                ? `<div class="seg-group" title="Camera Lens Field of View">
+                ? `<div class="seg-group" title="Camera Lens Field of View (60 fps mode)">
                      <button class="${isUltra ? "active" : ""}" data-zoom="${minZoom.toFixed(2)}">0.5x</button>
                      <button class="${!isUltra ? "active" : ""}" data-zoom="1.0">1x</button>
                    </div>`
                 : ""
             }
-            <div class="seg-group">
+            <div class="seg-group" title="Camera Capture Rate">
               <button class="${cam.targetFps === 60 ? "active" : ""}" data-fps="60">60</button>
-              <button class="${cam.targetFps === 120 ? "active" : ""}" data-fps="120">120 fps</button>
+              ${supFps.includes(120) ? `<button class="${cam.targetFps === 120 ? "active" : ""}" data-fps="120">${supFps.includes(240) ? "120" : "120 fps"}</button>` : ""}
+              ${supFps.includes(240) ? `<button class="${cam.targetFps === 240 ? "active" : ""}" data-fps="240">240 fps</button>` : ""}
             </div>
-            <select data-shutter title="Shutter-Priority Exposure (Auto-ISO)">
-              <option value="0" ${cam.shutterUs === 0 ? "selected" : ""}>Shutter: Auto</option>
-              <option value="4000" ${cam.shutterUs === 4000 ? "selected" : ""}>1/250s</option>
-              <option value="2000" ${cam.shutterUs === 2000 ? "selected" : ""}>1/500s</option>
-              <option value="1000" ${cam.shutterUs === 1000 ? "selected" : ""}>1/1000s</option>
-              <option value="500" ${cam.shutterUs === 500 ? "selected" : ""}>1/2000s</option>
-              <option value="250" ${cam.shutterUs === 250 ? "selected" : ""}>1/4000s</option>
-            </select>
+            ${
+              isHighSpeed
+                ? `<select disabled title="Android High-Speed 120/240 fps mode uses automatic exposure">
+                     <option selected>Shutter: Auto (HS)</option>
+                   </select>`
+                : `<select data-shutter title="Shutter-Priority Exposure (Auto-ISO)">
+                     <option value="0" ${cam.shutterUs === 0 ? "selected" : ""}>Shutter: Auto</option>
+                     <option value="4000" ${cam.shutterUs === 4000 ? "selected" : ""}>1/250s</option>
+                     <option value="2000" ${cam.shutterUs === 2000 ? "selected" : ""}>1/500s</option>
+                     <option value="1000" ${cam.shutterUs === 1000 ? "selected" : ""}>1/1000s</option>
+                     <option value="500" ${cam.shutterUs === 500 ? "selected" : ""}>1/2000s</option>
+                     <option value="250" ${cam.shutterUs === 250 ? "selected" : ""}>1/4000s</option>
+                   </select>`
+            }
             <select data-focus-mode title="Fixed/Locked Focus (Prevents Focus Hunting)">
               <option value="gate" ${curFocusMode === "gate" ? "selected" : ""}>Focus: Gate (3m)</option>
               <option value="near" ${curFocusMode === "near" ? "selected" : ""}>Focus: Near (1m)</option>

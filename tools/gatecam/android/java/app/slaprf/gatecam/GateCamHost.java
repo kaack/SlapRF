@@ -102,13 +102,13 @@ public final class GateCamHost extends Activity {
         previewBox.setClipChildren(true);
         previewBox.setClipToPadding(true);
         previewView = new TextureView(this);
-        previewBox.addView(previewView, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT));
+        previewView.setPivotX(0f);
+        previewView.setPivotY(0f);
+        // Keep TextureView's layout size fixed at 1280x720 so TextureView.onSizeChanged never resets
+        // SurfaceTexture's default buffer size away from Camera2's high-speed [1280x720] size!
+        previewBox.addView(previewView, new FrameLayout.LayoutParams(1280, 720, Gravity.TOP | Gravity.START));
         FrameLayout.LayoutParams pvLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                Gravity.TOP | Gravity.START);
+                1, 1, Gravity.TOP | Gravity.START);
         rootLayout.addView(previewBox, pvLp);
 
         previewView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
@@ -261,7 +261,11 @@ public final class GateCamHost extends Activity {
                     lp.leftMargin = x;
                     lp.topMargin = y;
                     previewBox.setLayoutParams(lp);
-                    GateCamShim.onPreviewSurfaceSizeChanged(previewView, w, h);
+                    previewView.setPivotX(0f);
+                    previewView.setPivotY(0f);
+                    previewView.setScaleX((float) w / 1280f);
+                    previewView.setScaleY((float) h / 720f);
+                    GateCamShim.onPreviewSurfaceSizeChanged(previewView, 1280, 720);
                 }
             });
         }

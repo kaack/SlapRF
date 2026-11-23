@@ -75,7 +75,7 @@ func (s *SimCameraProvider) Status() CameraStatus {
 
 func (s *SimCameraProvider) Configure(cfg CameraConfig) (CameraStatus, error) {
 	s.mu.Lock()
-	if cfg.TargetFPS != 60 && cfg.TargetFPS != 120 {
+	if cfg.TargetFPS != 60 && cfg.TargetFPS != 120 && cfg.TargetFPS != 240 {
 		cfg.TargetFPS = 120
 	}
 	if cfg.LookbackHalfMs <= 0 {
