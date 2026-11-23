@@ -173,6 +173,56 @@ func (r TimingRules) ForPilotGate(gateOverrides GateRuleOverrides, pilotOverride
 	return eff
 }
 
+// PrunedAgainst clears any override field whose value already agrees with `parent`, so a child
+// tier is only marked overridden when its effective setting diverges from its parent tier.
+func (o GateRuleOverrides) PrunedAgainst(parent TimingRules) GateRuleOverrides {
+	parent = parent.Normalized()
+	out := o.Normalized()
+	if out.MinLapSec != nil && math.Abs(*out.MinLapSec-parent.MinLapSec) < 1e-6 {
+		out.MinLapSec = nil
+	}
+	effMinLap := parent.MinLapSec
+	if out.MinLapSec != nil {
+		effMinLap = *out.MinLapSec
+	}
+	effParentMax := math.Max(parent.MaxLapSec, effMinLap+5)
+	if out.MaxLapSec != nil && math.Abs(*out.MaxLapSec-effParentMax) < 1e-6 {
+		out.MaxLapSec = nil
+	}
+	if out.MinCrossingSec != nil && math.Abs(*out.MinCrossingSec-parent.MinCrossingSec) < 1e-6 {
+		out.MinCrossingSec = nil
+	}
+	if out.BeepOnCross != nil && *out.BeepOnCross == parent.BeepOnCross {
+		out.BeepOnCross = nil
+	}
+	return out
+}
+
+// PruneTrackGateRuleOverrides collapses any gate-level or per-pilot override fields across `gates`
+// that match their parent tier under `globalRules`.
+func PruneTrackGateRuleOverrides(gates []TrackGate, globalRules TimingRules) {
+	base := globalRules.Normalized()
+	for i := range gates {
+		gates[i].RuleOverrides = gates[i].RuleOverrides.PrunedAgainst(base)
+		if len(gates[i].PilotRuleOverrides) == 0 {
+			continue
+		}
+		gateEff := base.ForGate(gates[i].RuleOverrides)
+		next := make(map[int]GateRuleOverrides, len(gates[i].PilotRuleOverrides))
+		for slot, po := range gates[i].PilotRuleOverrides {
+			pruned := po.PrunedAgainst(gateEff)
+			if !pruned.IsEmpty() {
+				next[slot] = pruned
+			}
+		}
+		if len(next) == 0 {
+			gates[i].PilotRuleOverrides = nil
+		} else {
+			gates[i].PilotRuleOverrides = next
+		}
+	}
+}
+
 // FilterReason explains why a detection did not become a crossing (or a lap did not count).
 type FilterReason string
 

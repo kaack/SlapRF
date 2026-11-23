@@ -92,7 +92,10 @@ export class TimingRulesEditor extends Component {
   private mobileDrawerOpen = false;
   private mobileDrawerClosing = false;
   private mobileDrawerCloseTimer: number | null = null;
+  private lastBodyHtml = "";
   private lastMobileDrawerHtml = "";
+  private bodyPointerDown = false;
+  private deferredRefreshPending = false;
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient, opts: TimingRulesEditorOptions = {}) {
     super(el);
@@ -163,6 +166,14 @@ export class TimingRulesEditor extends Component {
           target.dataset.originalValue = trimmed;
           void this.applyTuneRuleValue(key, raw);
         }
+      } else if (this.el.contains(target) && target.closest("form.rules")) {
+        // Re-sync locked/inherited state if an unlocked gate input was blurred without diverging from All timers.
+        window.setTimeout(() => {
+          const active = document.activeElement;
+          if (!(active instanceof HTMLInputElement && this.el.contains(active))) {
+            this.render();
+          }
+        }, 0);
       }
     });
     this.listen(el, "keydown", (e) => {
@@ -339,8 +350,27 @@ export class TimingRulesEditor extends Component {
         this.render();
       }
     });
-    // Re-render on rule / gate / session / race changes, unless the user is actively typing in an input.
+    // Prevent background status/telemetry refreshes from replacing bodyEl.innerHTML between pointerdown and click.
+    this.listen(this.bodyEl, "pointerdown", () => {
+      this.bodyPointerDown = true;
+    });
+    const releaseBodyPointer = () => {
+      if (!this.bodyPointerDown) return;
+      this.bodyPointerDown = false;
+      if (this.deferredRefreshPending) {
+        this.deferredRefreshPending = false;
+        window.setTimeout(() => refreshIfIdle(), 0);
+      }
+    };
+    this.listen(window as unknown as HTMLElement, "pointerup", releaseBodyPointer);
+    this.listen(window as unknown as HTMLElement, "pointercancel", releaseBodyPointer);
+
+    // Re-render on rule / gate / session / race changes, unless the user is actively typing or pressing a button.
     const refreshIfIdle = () => {
+      if (this.bodyPointerDown) {
+        this.deferredRefreshPending = true;
+        return;
+      }
       if (this.scope !== null && !store.node(this.scope)) {
         this.scope = null;
         if (this.mobileDrawerOpen) {
@@ -393,6 +423,7 @@ export class TimingRulesEditor extends Component {
   private toggleBeepForCurrentScope(): void {
     if (this.scope === null) {
       const nextBeep = !this.store.rules.beepOnCross;
+      this.optimisticallyFlipBeepSwitches(nextBeep);
       if (nextBeep && this.store.nodes[0]) {
         playSyntheticCrossingBeep(this.store, this.store.nodes[0].gateId);
       }
@@ -401,22 +432,38 @@ export class TimingRulesEditor extends Component {
       const curGate = this.store.node(this.scope);
       const curOvr = { ...this.overridesOf(curGate) };
       const globalBeep = Boolean(this.store.rules.beepOnCross);
-      const curEff = curOvr.beepOnCross !== undefined ? curOvr.beepOnCross : globalBeep;
+      const curEff = curOvr.beepOnCross !== undefined ? Boolean(curOvr.beepOnCross) : globalBeep;
       const nextBeep = !curEff;
+      this.optimisticallyFlipBeepSwitches(nextBeep);
       if (nextBeep) {
         playSyntheticCrossingBeep(this.store, this.scope);
       }
-      curOvr.beepOnCross = nextBeep;
+      if (nextBeep === globalBeep) {
+        delete curOvr.beepOnCross;
+      } else {
+        curOvr.beepOnCross = nextBeep;
+      }
       void this.api.setGateRules(this.scope, curOvr);
     }
   }
 
+  private optimisticallyFlipBeepSwitches(nextOn: boolean): void {
+    this.el
+      .querySelectorAll<HTMLButtonElement>('[data-beep-toggle], [data-tune-act="toggle-beep"]')
+      .forEach((sw) => {
+        sw.classList.toggle("is-on", nextOn);
+        sw.setAttribute("aria-checked", String(nextOn));
+      });
+  }
+
   private resetBeepForCurrentScope(): void {
     if (this.scope === null) {
+      this.optimisticallyFlipBeepSwitches(false);
       void this.api.updateRules({ ...this.store.rules, beepOnCross: false });
     } else {
       const nextOvr = { ...this.overridesOf(this.store.node(this.scope)) };
       delete nextOvr.beepOnCross;
+      this.optimisticallyFlipBeepSwitches(Boolean(this.store.rules.beepOnCross));
       void this.api.setGateRules(this.scope, nextOvr);
     }
   }
@@ -432,8 +479,12 @@ export class TimingRulesEditor extends Component {
     }
     const nextOverrides: GateRuleOverrides = {
       ...this.overridesOf(this.store.node(this.scope)),
-      [key]: clamped,
     };
+    if (Math.abs(clamped - this.store.rules[key]) <= 1e-6) {
+      delete nextOverrides[key];
+    } else {
+      nextOverrides[key] = clamped;
+    }
     await this.api.setGateRules(this.scope, nextOverrides);
   }
 
@@ -547,9 +598,12 @@ export class TimingRulesEditor extends Component {
       </button>`,
       ...this.store.nodes.map((p) => {
         const ovr = this.overridesOf(p);
-        let n = ovr.beepOnCross !== undefined ? 1 : 0;
+        let n =
+          ovr.beepOnCross !== undefined && Boolean(ovr.beepOnCross) !== Boolean(r.beepOnCross)
+            ? 1
+            : 0;
         for (const s of RULES) {
-          if (ovr[s.key] !== undefined) n++;
+          if (ovr[s.key] !== undefined && Math.abs(ovr[s.key]! - r[s.key]) > 1e-6) n++;
         }
         const assignedId = p.assignedTimerId ?? 0;
         const tiedTimer = assignedId > 0 ? this.store.detectedTimers.find((d) => d.timerId === assignedId) : undefined;
@@ -615,7 +669,7 @@ export class TimingRulesEditor extends Component {
         : `<p class="note">Applies to new detections on this track.</p>
            <button class="btn btn-ghost btn-sm" type="button" data-action="defaults">Restore defaults</button>`;
 
-    this.bodyEl.innerHTML = `
+    const nextBodyHtml = `
       <div class="rules-scope">
         <div class="channel-legend rules-scope-grid" role="tablist" aria-label="Rules for">${scopes}</div>
       </div>
@@ -626,6 +680,10 @@ export class TimingRulesEditor extends Component {
           <div class="rules-foot">${foot}</div>
         </fieldset>
       </form>`;
+    if (nextBodyHtml !== this.lastBodyHtml) {
+      this.lastBodyHtml = nextBodyHtml;
+      this.bodyEl.innerHTML = nextBodyHtml;
+    }
     this.renderMobileDrawer();
     this.syncScopeLayout();
   }
@@ -650,7 +708,8 @@ export class TimingRulesEditor extends Component {
 
     const beepOverridden = isGlobalScope
       ? Boolean(r.beepOnCross) !== Boolean(DEFAULT_RULES.beepOnCross)
-      : activeOverrides.beepOnCross !== undefined;
+      : activeOverrides.beepOnCross !== undefined &&
+        Boolean(activeOverrides.beepOnCross) !== Boolean(r.beepOnCross);
     const beepEffOn = isGlobalScope
       ? Boolean(r.beepOnCross)
       : activeOverrides.beepOnCross !== undefined
@@ -695,7 +754,8 @@ export class TimingRulesEditor extends Component {
     const cardsHtml = RULES.map((spec) => {
       const isOverridden = isGlobalScope
         ? Math.abs(r[spec.key] - DEFAULT_RULES[spec.key]) > 1e-6
-        : activeOverrides[spec.key] !== undefined;
+        : activeOverrides[spec.key] !== undefined &&
+          Math.abs(activeOverrides[spec.key]! - r[spec.key]) > 1e-6;
       const curVal =
         !isGlobalScope && activeOverrides[spec.key] !== undefined
           ? activeOverrides[spec.key]!
@@ -850,8 +910,11 @@ export class TimingRulesEditor extends Component {
   }
 
   private renderGateBeepRow(r: TimingRules, overrides: GateRuleOverrides): string {
-    const hasOwn = overrides.beepOnCross !== undefined;
-    const effOn = hasOwn ? Boolean(overrides.beepOnCross) : Boolean(r.beepOnCross);
+    const hasOwn =
+      overrides.beepOnCross !== undefined &&
+      Boolean(overrides.beepOnCross) !== Boolean(r.beepOnCross);
+    const effOn =
+      overrides.beepOnCross !== undefined ? Boolean(overrides.beepOnCross) : Boolean(r.beepOnCross);
     return `
       <div class="rule-row ${hasOwn ? "is-overridden" : ""}">
         <div class="rule-text">
@@ -882,7 +945,7 @@ export class TimingRulesEditor extends Component {
   private renderGateRow(spec: RuleSpec, r: TimingRules, overrides: GateRuleOverrides): string {
     const key = spec.key;
     const own = overrides[key];
-    const on = own !== undefined;
+    const on = own !== undefined && Math.abs(own - r[key]) > 1e-6;
     const title = on
       ? `Revert to All timers default (${r[key]} s)`
       : `Edit to override at this timer (inherits ${r[key]} s)`;

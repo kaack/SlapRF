@@ -450,6 +450,15 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       const gateRuleCall = calls.find((c) => c.method === "setGateRules");
       expect(gateRuleCall).toBeDefined();
       expect(gateRuleCall!.args).toEqual([2, { minCrossingSec: 0.12 }]);
+
+      // Background status polls preserve identical DOM button references (no innerHTML thrash or dropped clicks)
+      const allScopeBtnBefore = root.querySelector<HTMLButtonElement>("[data-scope='all']")!;
+      store.applyStatus({
+        serverTimestampUs: 25_000_000,
+        gates: store.nodes,
+        timers: store.timers,
+      });
+      expect(root.querySelector<HTMLButtonElement>("[data-scope='all']")).toBe(allScopeBtnBefore);
     } finally {
       editor.destroy();
     }
@@ -505,7 +514,7 @@ describe("widgets/Toast & TimingRulesEditor", () => {
     }
   });
 
-  it("opens Signals fine-tuning drawer per timer with 3-tier scope toggle, minLapSec, maxLapSec, minCrossingSec, and beepOnCross", async () => {
+  it("opens Signals fine-tuning drawer per timer with 3-tier scope toggle and numeric detection rules (without beepOnCross)", async () => {
     const store = makeStore({
       gates: [
         makeGate(1, { name: "H1", role: "START_FINISH", ruleOverrides: { minLapSec: 8 } }),
@@ -644,19 +653,14 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       expect(gateCall).toBeDefined();
       expect(gateCall!.args).toEqual([1, { minLapSec: 8, minCrossingSec: 0.18 }]);
 
-      // Toggle "Beep on crossing" ON in All pilots scope -> calls setGateRules with beepOnCross: true
-      const beepBtn = drawerEl.querySelector<HTMLButtonElement>('[data-tune-act="toggle-beep"]')!;
-      expect(beepBtn.textContent?.trim()).toBe("");
-      beepBtn.click();
-      await flushMicrotasks();
-      const beepGateCall = calls.filter((c) => c.method === "setGateRules").pop();
-      expect(beepGateCall).toBeDefined();
-      expect(beepGateCall!.args).toEqual([1, { minLapSec: 8, beepOnCross: true }]);
+      // Signals Fine-tune omits Beep on crossing (which lives exclusively in Track -> Detection rules)
+      expect(drawerEl.querySelector('[data-tune-card="beepOnCross"]')).toBeNull();
+      expect(drawerEl.querySelector('[data-tune-act="toggle-beep"]')).toBeNull();
     } finally {
       chart.destroy();
     }
 
-    // Verify Race mode renders the same clean drawer
+    // Verify Race mode renders the same clean drawer without beepOnCross
     const raceRoot = mountHtml(`<div style="width: 640px; height: 420px;"></div>`);
     const raceChart = new PilotRssiChart(raceRoot.firstElementChild as HTMLElement, store, api, {
       contextMode: "race",
@@ -667,7 +671,7 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       const raceDrawer = raceRoot.querySelector<HTMLElement>('[data-slot="tune-drawer"]')!;
       expect(raceDrawer.hidden).toBe(false);
       expect(raceDrawer.querySelector('[data-tune-input="minCrossingSec"]')).not.toBeNull();
-      expect(raceDrawer.querySelector('[data-tune-act="toggle-beep"]')).not.toBeNull();
+      expect(raceDrawer.querySelector('[data-tune-act="toggle-beep"]')).toBeNull();
     } finally {
       raceChart.destroy();
     }

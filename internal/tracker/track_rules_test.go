@@ -192,3 +192,68 @@ func TestThreeTierHierarchyAppliesGoingForward(t *testing.T) {
 		t.Fatalf("expected Pilot 1 to score 2 upcoming laps after lowering minLapSec to 4.0s, got %d", got)
 	}
 }
+
+func TestParentAgreementAutoCollapsesChildRuleOverrides(t *testing.T) {
+	e := NewEngine()
+	ps := e.PracticeSnapshot()
+	sid := ps.Sessions[0].SessionID
+
+	// 1. Set All Timers BeepOnCross = true, MinLapSec = 6.0
+	rOn := domain.DefaultTimingRules()
+	rOn.BeepOnCross = true
+	rOn.MinLapSec = 6.0
+	if _, err := e.SetPracticeRules(sid, rOn); err != nil {
+		t.Fatalf("SetPracticeRules(ON) failed: %v", err)
+	}
+
+	// 2. Override Gate 1 (H1) to BeepOnCross = false and MinLapSec = 8.0
+	ovr, err := e.SetPracticeGateRules(sid, 1, domain.GateRuleOverrides{
+		BeepOnCross: bPtr(false),
+		MinLapSec:   f64(8.0),
+	})
+	if err != nil {
+		t.Fatalf("SetPracticeGateRules failed: %v", err)
+	}
+	if ovr.BeepOnCross == nil || *ovr.BeepOnCross != false || ovr.MinLapSec == nil || *ovr.MinLapSec != 8.0 {
+		t.Fatalf("expected diverging Gate 1 overrides preserved, got %+v", ovr)
+	}
+
+	// 3. Turn All Timers BeepOnCross = false globally -> Gate 1 now agrees with All Timers on BeepOnCross,
+	// so Gate 1's BeepOnCross override MUST auto-collapse to nil (while MinLapSec = 8.0 remains overridden).
+	rOff := rOn
+	rOff.BeepOnCross = false
+	if _, err := e.SetPracticeRules(sid, rOff); err != nil {
+		t.Fatalf("SetPracticeRules(OFF) failed: %v", err)
+	}
+	afterGlobalOff, err := e.PracticeGateRules(sid, 1)
+	if err != nil {
+		t.Fatalf("PracticeGateRules failed: %v", err)
+	}
+	if afterGlobalOff.BeepOnCross != nil {
+		t.Fatalf("expected Gate 1 BeepOnCross override collapsed to nil when All Timers became false, got %v", *afterGlobalOff.BeepOnCross)
+	}
+	if afterGlobalOff.MinLapSec == nil || *afterGlobalOff.MinLapSec != 8.0 {
+		t.Fatalf("expected Gate 1 MinLapSec = 8.0 override retained, got %+v", afterGlobalOff)
+	}
+
+	// 4. Turn All Timers BeepOnCross = true again -> Gate 1 now inherits BeepOnCross = true cleanly!
+	if _, err := e.SetPracticeRules(sid, rOn); err != nil {
+		t.Fatalf("SetPracticeRules(ON again) failed: %v", err)
+	}
+	gates, _, rules, err := e.PracticeTrackSnapshot(sid)
+	if err != nil {
+		t.Fatalf("PracticeTrackSnapshot failed: %v", err)
+	}
+	if !rules.ForGate(gates[0].RuleOverrides).BeepOnCross {
+		t.Fatalf("expected Gate 1 to inherit BeepOnCross = true after prior override auto-collapsed")
+	}
+
+	// 5. Setting Gate 1 MinLapSec back to 6.0 (matching All Timers) collapses Gate 1 overrides to IsEmpty()
+	collapsed, err := e.SetPracticeGateRules(sid, 1, domain.GateRuleOverrides{MinLapSec: f64(6.0)})
+	if err != nil {
+		t.Fatalf("SetPracticeGateRules(matching parent) failed: %v", err)
+	}
+	if !collapsed.IsEmpty() {
+		t.Fatalf("expected Gate 1 overrides completely empty when matching parent, got %+v", collapsed)
+	}
+}

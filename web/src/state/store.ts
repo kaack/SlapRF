@@ -1751,6 +1751,9 @@ export class AppStore {
     }
     if (status.practiceState) {
       this._practiceState = normalizePracticeState(status.practiceState);
+      if (!this.isLiveRaceHeatRunning && this.activePracticeSession?.rules) {
+        this._rules = { ...DEFAULT_RULES, ...this.activePracticeSession.rules };
+      }
     }
 
     const gatesChanged = before !== this._nodes.map((n) => n.gateId).join(",");
@@ -1765,7 +1768,7 @@ export class AppStore {
     }
     if (hadPractice) {
       this.ensureValidSelection();
-      topics.push("practice");
+      topics.push("practice", "rules");
     }
     this.emit(...topics);
   }
@@ -1779,10 +1782,13 @@ export class AppStore {
         this._crossings = [...activeSess.crossings];
         this._filtered = [...activeSess.filtered];
         this._summaries = [...activeSess.summaries];
+        if (activeSess.rules) {
+          this._rules = { ...DEFAULT_RULES, ...activeSess.rules };
+        }
       }
     }
     this.ensureValidSelection();
-    this.emit("practice", "config", "laps", "crossings", "selection");
+    this.emit("practice", "config", "laps", "crossings", "selection", "rules");
   }
 
   private recomputePracticeLapList(list: LapRecord[]): void {

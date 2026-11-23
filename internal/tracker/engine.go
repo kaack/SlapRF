@@ -339,21 +339,25 @@ func (e *Engine) SetRules(r domain.TimingRules) domain.TimingRules {
 	r = r.Normalized()
 	e.mu.Lock()
 	e.rules = r
+	domain.PruneTrackGateRuleOverrides(e.gates, r)
 	hasActivePractice := false
 	if !e.isLiveRaceHeatActiveLocked() && e.practiceState.ActiveSessionID != "" {
 		if sess := e.findPracticeSessionLocked(e.practiceState.ActiveSessionID); sess != nil {
 			cp := r
 			sess.Rules = &cp
+			domain.PruneTrackGateRuleOverrides(sess.TrackSnapshot, r)
 			hasActivePractice = true
 		}
 	}
 	if isRaceOngoing(&e.raceState) || (!hasActivePractice && isRaceTrackEditable(&e.raceState)) {
 		cp := r
 		e.raceState.Rules = &cp
+		domain.PruneTrackGateRuleOverrides(e.raceState.TrackSnapshot, r)
 		for i := range e.eventState.Races {
 			if e.eventState.Races[i].RaceID == e.raceState.RaceID && isRaceTrackEditable(&e.eventState.Races[i]) {
 				cp2 := r
 				e.eventState.Races[i].Rules = &cp2
+				domain.PruneTrackGateRuleOverrides(e.eventState.Races[i].TrackSnapshot, r)
 			}
 		}
 	}

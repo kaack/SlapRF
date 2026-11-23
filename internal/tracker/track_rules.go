@@ -19,6 +19,8 @@ func (e *Engine) SetGateRules(gateID uint8, overrides domain.GateRuleOverrides) 
 		return domain.GateRuleOverrides{}, ErrUnknownGate
 	}
 	e.gates[idx].RuleOverrides = overrides
+	domain.PruneTrackGateRuleOverrides(e.gates[idx:idx+1], e.rules)
+	overrides = e.gates[idx].RuleOverrides
 	if !e.isLiveRaceHeatActiveLocked() && e.practiceState.ActiveSessionID != "" {
 		if sess := e.findPracticeSessionLocked(e.practiceState.ActiveSessionID); sess != nil {
 			sess.TrackSnapshot = e.snapshotOrderedGatesLocked()
@@ -73,6 +75,8 @@ func (e *Engine) SetPilotGateRules(gateID uint8, slotIndex int, overrides domain
 	} else {
 		e.gates[idx].PilotRuleOverrides = next
 	}
+	domain.PruneTrackGateRuleOverrides(e.gates[idx:idx+1], e.rules)
+	overrides = e.gates[idx].PilotRuleOverrides[slotIndex]
 
 	if !e.isLiveRaceHeatActiveLocked() && e.practiceState.ActiveSessionID != "" {
 		if sess := e.findPracticeSessionLocked(e.practiceState.ActiveSessionID); sess != nil {

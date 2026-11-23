@@ -765,35 +765,6 @@ export class PracticeView extends Component {
       return;
     }
 
-    const clearPilotLapsBtn = target.closest<HTMLButtonElement>("[data-practice-clear-pilot-laps]");
-    if (clearPilotLapsBtn && !clearPilotLapsBtn.disabled) {
-      const slotIndex = Number(clearPilotLapsBtn.dataset.practiceClearPilotLaps ?? "0");
-      const pilot = slotIndex > 0 ? this.workspaceStore.pilot(slotIndex) : undefined;
-      if (pilot) {
-        const lapCount = allLapsFor(this.workspaceStore, pilot.slotIndex).length;
-        const sess = this.store.selectedPracticeSession;
-        const sessLabel = sess ? `<strong>${esc(sess.name)}</strong>` : "this practice session";
-        openConfirmModal({
-          title: "Clear Pilot Laps?",
-          messageHtml: `<p>Delete all ${lapCount > 0 ? `${lapCount} ` : ""}recorded lap${lapCount === 1 ? "" : "s"} for <strong>${esc(pilot.callsign)}</strong> in ${sessLabel}?</p>`,
-          confirmLabel: "Clear Laps",
-          danger: true,
-          onConfirm: async () => {
-            const curSess = this.store.selectedPracticeSession;
-            this.store.clearPracticePilotLaps(pilot.slotIndex);
-            await this.api
-              .practiceAction({
-                action: "clear_pilot_laps",
-                sessionId: curSess?.sessionId,
-                slotIndex: pilot.slotIndex,
-              })
-              .catch(this.reportErr);
-          },
-        });
-      }
-      return;
-    }
-
     const lapToggleEl = target.closest<HTMLElement>("[data-practice-toggle-lap]");
     if (lapToggleEl) {
       const lapId = Number(lapToggleEl.dataset.practiceToggleLap ?? "0");
@@ -2881,22 +2852,18 @@ export class PracticeView extends Component {
               : "Select a pilot to view their laps."
           )
         : `<div class="table-scroll">
-            <table class="table table-compact practice-sectors-table">
+            <table class="table table-compact practice-sectors-table" style="--mobile-sector-cols:${checkedCols.length}">
               <thead>
                 <tr>
-                  ${
-                    pilot
-                      ? `<th class="col-lap-head"><span class="th-lap-head"><span>Lap</span><button type="button" class="lap-clear-all-btn" data-practice-clear-pilot-laps="${pilot.slotIndex}" title="Clear all laps for ${esc(pilot.callsign)}" aria-label="Clear all laps for ${esc(pilot.callsign)}">${icons.trash(12)}</button></span></th>`
-                      : `<th>Lap</th>`
-                  }
+                  <th class="col-mobile-lap-num">Lap</th>
                   ${checkedCols
                     .map(
                       (c) =>
-                        `<th class="num" title="${esc(sectionLabel(this.workspaceStore, c.from, c.to))}"><span class="th-pilot"><span class="dot" style="--c:${gateColor(this.workspaceStore, c.from)}"></span>${sectionShort(this.workspaceStore, c.from)}</span></th>`
+                        `<th class="num col-mobile-sector" title="${esc(sectionLabel(this.workspaceStore, c.from, c.to))}"><span class="th-pilot"><span class="dot" style="--c:${gateColor(this.workspaceStore, c.from)}"></span>${sectionShort(this.workspaceStore, c.from)}</span></th>`
                     )
                     .join("")}
-                  <th class="num">Lap time</th>
-                  <th class="num">vs best</th>
+                  <th class="num col-lap-time">Lap time</th>
+                  <th class="num col-vs-best">vs best</th>
                 </tr>
               </thead>
               <tbody>
@@ -2912,8 +2879,8 @@ export class PracticeView extends Component {
                       .map((c) => {
                         const s = byKey.get(c.key);
                         return s
-                          ? `<td class="num"><span class="split ${isInvalid ? "" : SPLIT_CLASS[s.badge]}">${s.splitSeconds.toFixed(3)}</span></td>`
-                          : `<td class="num muted" title="Timer missed">—</td>`;
+                          ? `<td class="num col-mobile-sector"><span class="split ${isInvalid ? "" : SPLIT_CLASS[s.badge]}">${s.splitSeconds.toFixed(3)}</span></td>`
+                          : `<td class="num muted col-mobile-sector" title="Timer missed">—</td>`;
                       })
                       .join("");
                     const vs = isInvalid
@@ -2956,8 +2923,8 @@ export class PracticeView extends Component {
                         ${lapNumContent}
                       </td>
                       ${cells}
-                      <td class="num mono strong ${!isInvalid && lap.isBestLap ? "tone-good" : ""}">${fmtTime(lap.lapTimeSec)}</td>
-                      <td class="num mono muted">${vs}</td>
+                      <td class="num mono strong col-lap-time ${!isInvalid && lap.isBestLap ? "tone-good" : ""}">${fmtTime(lap.lapTimeSec)}</td>
+                      <td class="num mono muted col-vs-best">${vs}</td>
                     </tr>`;
                   })
                   .join("")}

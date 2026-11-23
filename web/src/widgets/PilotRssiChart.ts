@@ -5,7 +5,6 @@ import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { adaptColorForTheme, font, inkOnColor, theme, withAlpha } from "../core/theme";
 import { ApiClient } from "../services/api_client";
-import { playSyntheticCrossingBeep } from "../services/crossing_beep";
 import { suggestThreshold } from "../state/calibration";
 import {
   enterThresholdAt,
@@ -51,7 +50,6 @@ const OVERRIDE_KEYS: ReadonlyArray<keyof GateRuleOverrides> = [
   "minLapSec",
   "maxLapSec",
   "minCrossingSec",
-  "beepOnCross",
 ];
 
 const DEFAULT_TUNE_RULES: TimingRules = {
@@ -76,9 +74,6 @@ function countGlobalOverrides(rules: TimingRules): number {
     if (Math.abs(rules[spec.key] - DEFAULT_TUNE_RULES[spec.key]) > 1e-6) {
       n++;
     }
-  }
-  if (Boolean(rules.beepOnCross) !== Boolean(DEFAULT_TUNE_RULES.beepOnCross)) {
-    n++;
   }
   return n;
 }
@@ -482,14 +477,6 @@ export class PilotRssiChart extends Component {
       }
       if (btn.dataset.tuneAct === "restore-defaults") {
         void this.restoreScopeTuneDefaults();
-        return;
-      }
-      if (btn.dataset.tuneAct === "toggle-beep") {
-        void this.toggleTuneBeep();
-        return;
-      }
-      if (btn.dataset.tuneAct === "reset-beep") {
-        void this.resetTuneBeep();
         return;
       }
       if (btn.dataset.tuneOverrideToggle) {
@@ -3032,65 +3019,25 @@ export class PilotRssiChart extends Component {
     }
   }
 
-  private async toggleTuneBeep(): Promise<void> {
-    if (this.store.isHistoricalTrack) return;
-    const targetGateId = this.activeTuneGateId;
-    if (targetGateId === null) {
-      const nextOn = !this.store.rules.beepOnCross;
-      if (nextOn && this.store.nodes[0]) {
-        playSyntheticCrossingBeep(this.store, this.store.nodes[0].gateId);
-      }
-      await this.api.updateRules({ ...this.store.rules, beepOnCross: nextOn }).catch(() => undefined);
-      return;
-    }
-    const slotIndex = this.activePilotSlot;
-    const eff = this.effectiveRulesForScope(targetGateId, slotIndex);
-    const nextOn = !eff.beepOnCross;
-    if (nextOn) {
-      playSyntheticCrossingBeep(this.store, targetGateId);
-    }
-    const nextOverrides: GateRuleOverrides = {
-      ...this.currentScopeOverrides(targetGateId, slotIndex),
-      beepOnCross: nextOn,
-    };
-    if (this.tuningScope === "pilot") {
-      await this.api.setPilotGateRules(targetGateId, slotIndex, nextOverrides).catch(() => undefined);
-    } else {
-      await this.api.setGateRules(targetGateId, nextOverrides).catch(() => undefined);
-    }
-  }
-
   private async restoreScopeTuneDefaults(): Promise<void> {
     if (this.store.isHistoricalTrack) return;
     const targetGateId = this.activeTuneGateId;
     if (targetGateId === null) {
-      await this.api.updateRules(DEFAULT_TUNE_RULES).catch(() => undefined);
+      await this.api
+        .updateRules({ ...DEFAULT_TUNE_RULES, beepOnCross: Boolean(this.store.rules.beepOnCross) })
+        .catch(() => undefined);
       return;
     }
     const slotIndex = this.activePilotSlot;
     if (this.tuningScope === "pilot") {
       await this.api.setPilotGateRules(targetGateId, slotIndex, {}).catch(() => undefined);
     } else {
-      await this.api.setGateRules(targetGateId, {}).catch(() => undefined);
-    }
-  }
-
-  private async resetTuneBeep(): Promise<void> {
-    if (this.store.isHistoricalTrack) return;
-    const targetGateId = this.activeTuneGateId;
-    if (targetGateId === null) {
-      await this.api.updateRules({ ...this.store.rules, beepOnCross: Boolean(DEFAULT_TUNE_RULES.beepOnCross) }).catch(() => undefined);
-      return;
-    }
-    const slotIndex = this.activePilotSlot;
-    const nextOverrides: GateRuleOverrides = {
-      ...this.currentScopeOverrides(targetGateId, slotIndex),
-    };
-    delete nextOverrides.beepOnCross;
-    if (this.tuningScope === "pilot") {
-      await this.api.setPilotGateRules(targetGateId, slotIndex, nextOverrides).catch(() => undefined);
-    } else {
-      await this.api.setGateRules(targetGateId, nextOverrides).catch(() => undefined);
+      const curOvr = this.store.node(targetGateId)?.ruleOverrides;
+      const preserved: GateRuleOverrides = {};
+      if (curOvr?.beepOnCross !== undefined) {
+        preserved.beepOnCross = curOvr.beepOnCross;
+      }
+      await this.api.setGateRules(targetGateId, preserved).catch(() => undefined);
     }
   }
 
@@ -3181,46 +3128,6 @@ export class PilotRssiChart extends Component {
         ? pilotGateRulesAt(this.store, gate.gateId, pilot.slotIndex)
         : gateRulesAt(this.store, gate.gateId)
       : this.store.rules;
-
-    const beepOverridden = isGlobalScope
-      ? Boolean(effRules.beepOnCross) !== Boolean(DEFAULT_TUNE_RULES.beepOnCross)
-      : activeOverrides.beepOnCross !== undefined;
-    const beepEffOn = Boolean(effRules.beepOnCross);
-    const beepHelpText = `Plays an instant high-priority synthetic tone when a crossing is detected ${isGlobalScope ? "for all timers" : "at this timer"}.`;
-
-    const beepCardHtml = `
-      <div class="scope-tune-card is-beep-card ${beepOverridden ? "is-overridden" : ""}" data-tune-card="beepOnCross">
-        <div class="scope-tune-card-info">
-          <div class="scope-tune-card-title-row">
-            <span class="scope-tune-card-label">Beep on crossing</span>
-            ${
-              beepOverridden
-                ? `<span class="scope-tune-custom-icon" title="Customized" aria-label="Customized">${icons.pencil(12)}</span>`
-                : ""
-            }
-          </div>
-          <div class="scope-tune-card-help">${beepHelpText}</div>
-        </div>
-        <div class="scope-tune-card-controls">
-          <div class="scope-tune-switch-slot">
-            <button
-              type="button"
-              role="switch"
-              aria-checked="${beepEffOn}"
-              class="scope-tune-switch ${beepEffOn ? "is-on" : ""}"
-              data-tune-act="toggle-beep"
-              aria-label="Beep on crossing"
-            >
-              <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
-            </button>
-          </div>
-          ${
-            beepOverridden
-              ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-tune-act="reset-beep" title="Restore default Beep on crossing" aria-label="Restore default Beep on crossing">${icons.reset(13)}</button>`
-              : `<span class="scope-tune-reset-spacer" aria-hidden="true"></span>`
-          }
-        </div>
-      </div>`;
 
     const cardsHtml = TUNE_RULES.map((spec) => {
       const isOverridden = isGlobalScope
@@ -3344,31 +3251,6 @@ export class PilotRssiChart extends Component {
         </div>`;
     }).join("");
 
-    const desktopBeepRowHtml = `
-      <div class="rule-row ${beepOverridden ? "is-overridden" : ""}" data-tune-card="beepOnCross">
-        <div class="rule-text">
-          <div class="rule-label">Beep on crossing</div>
-          <div class="rule-help">${beepHelpText}</div>
-        </div>
-        <div class="rule-input rule-switch-wrap">
-          <button
-            type="button"
-            role="switch"
-            aria-checked="${beepEffOn}"
-            class="scope-tune-switch ${beepEffOn ? "is-on" : ""}"
-            data-tune-act="toggle-beep"
-            aria-label="Beep on crossing"
-          >
-            <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
-          </button>
-          ${
-            beepOverridden
-              ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-tune-act="reset-beep" title="Restore default Beep on crossing" aria-label="Restore default Beep on crossing">${icons.reset(13)}</button>`
-              : `<span class="scope-tune-reset-spacer" aria-hidden="true"></span>`
-          }
-        </div>
-      </div>`;
-
     const desktopFootNote = isGlobalScope
       ? "Applies to new detections on this track."
       : isPilotScope
@@ -3408,11 +3290,9 @@ export class PilotRssiChart extends Component {
     const bodyContentHtml = this.isMobileLayout
       ? `<div class="scope-tune-grid">
           ${cardsHtml}
-          ${beepCardHtml}
         </div>`
       : `<div class="rules scope-tune-desktop-rules">
           ${desktopRowsHtml}
-          ${desktopBeepRowHtml}
           <div class="rules-foot">
             <p class="note">${desktopFootNote}</p>
             <button class="btn btn-ghost btn-sm" type="button" data-tune-act="restore-defaults">Restore defaults</button>

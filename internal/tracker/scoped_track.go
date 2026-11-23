@@ -701,6 +701,7 @@ func (e *Engine) SetPracticeRules(sessionID string, r domain.TimingRules) (domai
 	e.ensurePracticeTrackInitializedLocked(sess)
 	cp := norm
 	sess.Rules = &cp
+	domain.PruneTrackGateRuleOverrides(sess.TrackSnapshot, norm)
 	pSnap, cfgChanged, pilots, liveGates, subs := e.commitScopedPracticeTrackMutationLocked(sess)
 	e.mu.Unlock()
 
@@ -746,6 +747,12 @@ func (e *Engine) SetPracticeGateRules(sessionID string, gateID uint8, overrides 
 		return domain.GateRuleOverrides{}, ErrUnknownGate
 	}
 	sess.TrackSnapshot[idx].RuleOverrides = overrides
+	baseRules := e.rules
+	if sess.Rules != nil {
+		baseRules = *sess.Rules
+	}
+	domain.PruneTrackGateRuleOverrides(sess.TrackSnapshot[idx:idx+1], baseRules)
+	overrides = sess.TrackSnapshot[idx].RuleOverrides
 	pSnap, cfgChanged, pilots, liveGates, subs := e.commitScopedPracticeTrackMutationLocked(sess)
 	e.mu.Unlock()
 
@@ -812,6 +819,12 @@ func (e *Engine) SetPracticePilotGateRules(sessionID string, gateID uint8, slotI
 	} else {
 		sess.TrackSnapshot[idx].PilotRuleOverrides = next
 	}
+	baseRules := e.rules
+	if sess.Rules != nil {
+		baseRules = *sess.Rules
+	}
+	domain.PruneTrackGateRuleOverrides(sess.TrackSnapshot[idx:idx+1], baseRules)
+	overrides = sess.TrackSnapshot[idx].PilotRuleOverrides[slotIndex]
 	pSnap, cfgChanged, pilots, liveGates, subs := e.commitScopedPracticeTrackMutationLocked(sess)
 	e.mu.Unlock()
 
@@ -1039,6 +1052,7 @@ func (e *Engine) SetRaceRules(raceID string, rules domain.TimingRules) (domain.T
 	e.ensureRaceTrackInitializedLocked(r)
 	cp := norm
 	r.Rules = &cp
+	domain.PruneTrackGateRuleOverrides(r.TrackSnapshot, norm)
 	rSnap, cfgChanged, pilots, liveGates, subs := e.commitScopedRaceTrackMutationLocked(r)
 	e.mu.Unlock()
 
@@ -1088,6 +1102,12 @@ func (e *Engine) SetRaceGateRules(raceID string, gateID uint8, overrides domain.
 		return domain.GateRuleOverrides{}, ErrUnknownGate
 	}
 	r.TrackSnapshot[idx].RuleOverrides = overrides
+	baseRaceRules := e.rules
+	if r.Rules != nil {
+		baseRaceRules = *r.Rules
+	}
+	domain.PruneTrackGateRuleOverrides(r.TrackSnapshot[idx:idx+1], baseRaceRules)
+	overrides = r.TrackSnapshot[idx].RuleOverrides
 	rSnap, cfgChanged, pilots, liveGates, subs := e.commitScopedRaceTrackMutationLocked(r)
 	e.mu.Unlock()
 
@@ -1158,6 +1178,12 @@ func (e *Engine) SetRacePilotGateRules(raceID string, gateID uint8, slotIndex in
 	} else {
 		r.TrackSnapshot[idx].PilotRuleOverrides = next
 	}
+	baseRaceRules := e.rules
+	if r.Rules != nil {
+		baseRaceRules = *r.Rules
+	}
+	domain.PruneTrackGateRuleOverrides(r.TrackSnapshot[idx:idx+1], baseRaceRules)
+	overrides = r.TrackSnapshot[idx].PilotRuleOverrides[slotIndex]
 	rSnap, cfgChanged, pilots, liveGates, subs := e.commitScopedRaceTrackMutationLocked(r)
 	e.mu.Unlock()
 

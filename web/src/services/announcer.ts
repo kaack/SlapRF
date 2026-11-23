@@ -733,12 +733,29 @@ export class Announcer {
   }
 
   /**
+   * Resolves the active scoped `AppStore` view (running race heat or active practice session)
+   * so `beepOnCross` inheritance and gate Start/Finish vs Sector tones always match the active track.
+   */
+  private getActiveCrossingScopeStore(): AppStore {
+    const liveHit = this.getLiveRunningRaceHeatContext();
+    if (liveHit) {
+      return this.store.forRaceWorkspace(() => liveHit.race);
+    }
+    const activeSess = this.store.activePracticeSession;
+    if (activeSess) {
+      return this.store.forPracticeTrackEditor(() => activeSess);
+    }
+    return this.store;
+  }
+
+  /**
    * High-priority synthetic WebAudio crossing beep: plays immediately on the hardware audio thread
-   * whenever `beepOnCross` is enabled for `(gateId, slotIndex)` (global, timer, or per-pilot),
+   * whenever `beepOnCross` is enabled for `gateId` (All timers or per-timer override on Track),
    * independent of TTS speech synthesis or whether the Voice Announcer is enabled.
    */
   private onCrossingBeep(ev: GateCrossingEvent): void {
-    const eff = pilotGateRulesAt(this.store, ev.gateId, ev.slotIndex);
+    const scopedStore = this.getActiveCrossingScopeStore();
+    const eff = pilotGateRulesAt(scopedStore, ev.gateId, ev.slotIndex);
     if (!eff.beepOnCross) return;
     const liveHit = this.getLiveRunningRaceHeatContext();
     if (liveHit) {
@@ -748,7 +765,7 @@ export class Announcer {
       if (!inHeat) return;
     }
     const vol = this.prefs.volume > 0 ? this.prefs.volume : 0.9;
-    playSyntheticCrossingBeep(this.store, ev.gateId, vol);
+    playSyntheticCrossingBeep(scopedStore, ev.gateId, vol);
   }
 
   /**
@@ -761,7 +778,8 @@ export class Announcer {
     if (liveHit) {
       if (!this.prefs.enabled) return;
       // Avoid double-beeping if `beepOnCross` already played the high-priority synthetic beep.
-      if (pilotGateRulesAt(this.store, ev.gateId, ev.slotIndex).beepOnCross) return;
+      const scopedStore = this.store.forRaceWorkspace(() => liveHit.race);
+      if (pilotGateRulesAt(scopedStore, ev.gateId, ev.slotIndex).beepOnCross) return;
       const inHeat = liveHit.heat.seats.some(
         (s) => s.pilotSlotIndex === ev.slotIndex && s.status !== "dns" && s.status !== "dq"
       );

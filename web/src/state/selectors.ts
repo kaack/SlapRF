@@ -324,7 +324,7 @@ export function gateRulesAt(store: AppStore, gateId: number): TimingRules {
   };
 }
 
-/** Resolves Tier 3 rules for `(gateId, slotIndex)`: Global -> Gate-wide -> Pilot-at-Gate overrides. */
+/** Resolves Tier 3 rules for `(gateId, slotIndex)`: Global -> Gate-wide -> Pilot-at-Gate overrides (beepOnCross inherits strictly from Track: All timers -> Gate-wide). */
 export function pilotGateRulesAt(store: AppStore, gateId: number, slotIndex: number): TimingRules {
   const gateEff = gateRulesAt(store, gateId);
   const po = pilotGateOverridesAt(store.node(gateId), slotIndex);
@@ -334,20 +334,15 @@ export function pilotGateRulesAt(store: AppStore, gateId: number, slotIndex: num
     minLapSec,
     maxLapSec: Math.max(rawMax, minLapSec + 5),
     minCrossingSec: po.minCrossingSec ?? gateEff.minCrossingSec,
-    beepOnCross: po.beepOnCross !== undefined ? po.beepOnCross : Boolean(gateEff.beepOnCross),
+    beepOnCross: Boolean(gateEff.beepOnCross),
   };
 }
 
-/** Reports whether any global, gate-wide, or per-pilot rule currently has `beepOnCross` enabled. */
+/** Reports whether any global or gate-wide rule currently has `beepOnCross` enabled. */
 export function hasAnyBeepOnCrossConfigured(store: AppStore): boolean {
   if (store.rules.beepOnCross) return true;
   for (const n of store.nodes) {
     if (n.ruleOverrides?.beepOnCross === true) return true;
-    if (n.pilotRuleOverrides) {
-      for (const po of Object.values(n.pilotRuleOverrides)) {
-        if (po?.beepOnCross === true) return true;
-      }
-    }
   }
   return false;
 }

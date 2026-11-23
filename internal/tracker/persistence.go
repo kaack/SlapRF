@@ -604,6 +604,27 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 		e.raceArmed = s.RaceArmed
 		e.ensurePracticeStateInitializedLocked()
 	}
+
+	domain.PruneTrackGateRuleOverrides(e.gates, e.rules)
+	for si := range e.practiceState.Sessions {
+		base := e.rules
+		if e.practiceState.Sessions[si].Rules != nil {
+			base = *e.practiceState.Sessions[si].Rules
+		}
+		domain.PruneTrackGateRuleOverrides(e.practiceState.Sessions[si].TrackSnapshot, base)
+	}
+	raceBase := e.rules
+	if e.raceState.Rules != nil {
+		raceBase = *e.raceState.Rules
+	}
+	domain.PruneTrackGateRuleOverrides(e.raceState.TrackSnapshot, raceBase)
+	for ri := range e.eventState.Races {
+		rBase := e.rules
+		if e.eventState.Races[ri].Rules != nil {
+			rBase = *e.eventState.Races[ri].Rules
+		}
+		domain.PruneTrackGateRuleOverrides(e.eventState.Races[ri].TrackSnapshot, rBase)
+	}
 }
 
 // ResetToFactoryDefaults wipes all user data (pilots, track gates, detected timers, races,

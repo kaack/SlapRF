@@ -1926,10 +1926,13 @@ describe("PracticeView two-step lap deletion and per-pilot lap clearing", () => 
       host.querySelector<HTMLButtonElement>("[data-practice-mobile-tab='laps']")!.click();
       await flushMicrotasks();
 
-      // 1. Desktop PilotLaps: normal valid rows do NOT render [data-practice-delete-lap], while Lap <th> has [data-practice-clear-pilot-laps='1']
+      // 1. Desktop PilotLaps: fixed-width columns, no clear-all icon in Lap <th>, and normal valid rows hide [data-practice-delete-lap]
       const desktopTable = host.querySelector<HTMLElement>(".practice-laps-table")!;
       expect(desktopTable).not.toBeNull();
-      expect(desktopTable.querySelector("[data-practice-clear-pilot-laps='1']")).not.toBeNull();
+      expect(desktopTable.querySelector("[data-practice-clear-pilot-laps]")).toBeNull();
+      expect(desktopTable.querySelector("th.col-lap-num")).not.toBeNull();
+      expect(desktopTable.querySelector("th.col-lap-time")).not.toBeNull();
+      expect(desktopTable.querySelector("th.col-vs-best")).not.toBeNull();
       expect(desktopTable.querySelector("[data-practice-delete-lap]")).toBeNull();
 
       // 2. Step 1 of two-step delete: click Lap 2 (lapId 102) -> scratches it AND reveals inline delete button
@@ -1997,33 +2000,12 @@ describe("PracticeView two-step lap deletion and per-pilot lap clearing", () => 
       expect(
         host.querySelector(".practice-sectors-table [data-practice-delete-lap='101']")
       ).toBeNull();
-
-      // 5. Click Lap header trash button [data-practice-clear-pilot-laps='1'] -> opens ConfirmModal and clears only Pilot 1's laps
-      const mobileClearAllBtn = host.querySelector<HTMLButtonElement>(
-        ".practice-sectors-table [data-practice-clear-pilot-laps='1']"
-      )!;
-      expect(mobileClearAllBtn).not.toBeNull();
-      mobileClearAllBtn.click();
-      await flushMicrotasks();
-
-      const modal = document.querySelector<HTMLElement>(".slaprf-modal-backdrop");
-      expect(modal).not.toBeNull();
-      expect(modal!.textContent).toContain("Clear Pilot Laps?");
-      expect(modal!.textContent).toContain("FAERRY");
-
-      const confirmBtn = modal!.querySelector<HTMLButtonElement>("[data-modal-confirm]")!;
-      confirmBtn.click();
-      await flushMicrotasks();
-
-      expect(store.selectedPracticeSession!.laps.map((l) => l.slotIndex)).toEqual([2]);
       expect(
-        calls.some(
-          (c) =>
-            c.method === "practiceAction" &&
-            (c.args[0] as { action?: string; slotIndex?: number })?.action === "clear_pilot_laps" &&
-            (c.args[0] as { slotIndex?: number })?.slotIndex === 1
-        )
-      ).toBe(true);
+        host.querySelector(".practice-sectors-table [data-practice-clear-pilot-laps]")
+      ).toBeNull();
+      expect(host.querySelector(".practice-sectors-table th.col-mobile-lap-num")).not.toBeNull();
+      expect(host.querySelector(".practice-sectors-table th.col-lap-time")).not.toBeNull();
+      expect(host.querySelector(".practice-sectors-table th.col-vs-best")).not.toBeNull();
     } finally {
       document.querySelectorAll(".slaprf-modal-backdrop").forEach((m) => m.remove());
       view.destroy();

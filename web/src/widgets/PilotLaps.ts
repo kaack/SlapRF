@@ -45,7 +45,6 @@ function formatLapWallClock(store: AppStore, lap: LapRecord): string {
 export interface PilotLapsCallbacks {
   onToggleLap?: (lapId: number) => void;
   onDeleteLap?: (lapId: number) => void;
-  onClearPilotLaps?: (slotIndex: number) => void;
 }
 
 /** The selected pilot's completed laps, newest first, with every section split. */
@@ -53,7 +52,6 @@ export class PilotLaps extends Component {
   private readonly store: AppStore;
   private readonly onToggleLap?: (lapId: number) => void;
   private readonly onDeleteLap?: (lapId: number) => void;
-  private readonly onClearPilotLaps?: (slotIndex: number) => void;
 
   constructor(
     el: HTMLElement,
@@ -67,7 +65,6 @@ export class PilotLaps extends Component {
     } else if (callbacks) {
       this.onToggleLap = callbacks.onToggleLap;
       this.onDeleteLap = callbacks.onDeleteLap;
-      this.onClearPilotLaps = callbacks.onClearPilotLaps;
     }
     this.listen(el, "click", (e) => {
       const target = e.target as HTMLElement;
@@ -78,14 +75,6 @@ export class PilotLaps extends Component {
         if (!(lapId > 0)) return;
         this.store.deletePracticeLap(lapId);
         this.onDeleteLap?.(lapId);
-        return;
-      }
-      const clearBtn = target.closest<HTMLButtonElement>("[data-practice-clear-pilot-laps]");
-      if (clearBtn) {
-        e.stopPropagation();
-        const slotIndex = Number(clearBtn.dataset.practiceClearPilotLaps);
-        if (!(slotIndex > 0)) return;
-        this.onClearPilotLaps?.(slotIndex);
         return;
       }
       const btn = target.closest<HTMLElement>("[data-practice-toggle-lap]");
@@ -127,24 +116,22 @@ export class PilotLaps extends Component {
       .map((lap) => this.renderLap(lap, cols, isAllMode))
       .join("");
 
-    const pilotTh = isAllMode ? `<th>Pilot</th>` : "";
-    const lapTh =
-      !isAllMode && pilot
-        ? `<th class="col-lap-head"><span class="th-lap-head"><span>Lap</span><button type="button" class="lap-clear-all-btn" data-practice-clear-pilot-laps="${pilot.slotIndex}" title="Clear all laps for ${esc(pilot.callsign)}" aria-label="Clear all laps for ${esc(pilot.callsign)}">${icons.trash(12)}</button></span></th>`
-        : `<th>Lap</th>`;
+    const pilotTh = isAllMode ? `<th class="col-pilot">Pilot</th>` : "";
     const tableInnerHtml = `
-          <thead><tr>${pilotTh}${lapTh}<th class="col-lap-clock">Time</th>${head}<th class="num">Lap time</th><th class="num">vs best</th></tr></thead>
+          <thead><tr>${pilotTh}<th class="col-lap-num">Lap</th><th class="col-lap-clock">Time</th>${head}<th class="num col-lap-time">Lap time</th><th class="num col-vs-best">vs best</th></tr></thead>
           <tbody>${rows}</tbody>`;
 
     const existingTable = this.el.querySelector<HTMLElement>("table.table-compact");
     if (existingTable) {
+      existingTable.style.setProperty("--sector-cols", String(cols.length));
+      existingTable.style.setProperty("--pilot-col-extra", isAllMode ? "136px" : "0px");
       existingTable.innerHTML = tableInnerHtml;
       return;
     }
 
     this.el.innerHTML = `
       <div class="table-scroll table-scroll-y">
-        <table class="table table-compact practice-laps-table">${tableInnerHtml}
+        <table class="table table-compact practice-laps-table" style="--sector-cols:${cols.length};--pilot-col-extra:${isAllMode ? "136px" : "0px"}">${tableInnerHtml}
         </table>
       </div>
       <div class="legend-row">
@@ -175,7 +162,7 @@ export class PilotLaps extends Component {
     const pObj = showPilot ? this.store.pilot(lap.slotIndex) : undefined;
     const pColor = pObj?.color || "#38bdf8";
     const pilotTd = showPilot
-      ? `<td><div class="pilot-cell"><span class="pilot-swatch" style="--c:${esc(pColor)}"></span><div class="pilot-name"><span>${esc(lap.callsign)}</span></div></div></td>`
+      ? `<td class="col-pilot"><div class="pilot-cell"><span class="pilot-swatch" style="--c:${esc(pColor)}"></span><div class="pilot-name"><span>${esc(lap.callsign)}</span></div></div></td>`
       : "";
     const clockText = formatLapWallClock(this.store, lap);
     const toggleTitle = isInvalid
@@ -214,8 +201,8 @@ export class PilotLaps extends Component {
         </td>
         <td class="mono muted col-lap-clock">${esc(clockText)}</td>
         ${cells}
-        <td class="num mono strong ${!isInvalid && lap.isBestLap ? "tone-good" : ""}">${fmtTime(lap.lapTimeSec)}</td>
-        <td class="num mono muted">${vs}</td>
+        <td class="num mono strong col-lap-time ${!isInvalid && lap.isBestLap ? "tone-good" : ""}">${fmtTime(lap.lapTimeSec)}</td>
+        <td class="num mono muted col-vs-best">${vs}</td>
       </tr>`;
   }
 }

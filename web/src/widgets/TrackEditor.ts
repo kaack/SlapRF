@@ -18,6 +18,9 @@ import { renderSectionCapsuleIcon } from "./markup";
  *     start timer, muted on intermediate timers); clicking it sets that timer as the start timer.
  */
 export function isTrackTimerActive(store: AppStore, d?: DetectedTimer, node?: TrackNode): boolean {
+  if (Boolean(d ? d.online : node?.online)) {
+    return true;
+  }
   if (
     isLapRFMode(store.timingHardwareMode) ||
     isRotorHazardMode(store.timingHardwareMode) ||
@@ -26,7 +29,7 @@ export function isTrackTimerActive(store: AppStore, d?: DetectedTimer, node?: Tr
     d?.firmwareVersion === "RotorHazard" ||
     node?.firmwareVersion === "RotorHazard"
   ) {
-    return Boolean(d ? d.online : node?.online);
+    return false;
   }
   const connected = usbPool.connectedConsoles();
   if (connected.length === 0) {

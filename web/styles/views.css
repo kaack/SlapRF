@@ -1979,16 +1979,72 @@ html[data-theme="light"] .practice-sector-checkbox.is-checked::after {
   border-color: #181d27;
 }
 
+.practice-laps-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: calc(348px + var(--pilot-col-extra, 0px) + var(--sector-cols, 3) * 72px);
+  font-variant-numeric: tabular-nums;
+}
+
+.practice-laps-table th.col-pilot,
+.practice-laps-table td.col-pilot {
+  width: 136px;
+}
+
+.practice-laps-table th.col-lap-num,
+.practice-laps-table td.col-lap-num {
+  width: 72px;
+  white-space: nowrap;
+}
+
 .practice-laps-table th.col-lap-clock,
 .practice-laps-table td.col-lap-clock {
+  width: 98px;
   white-space: nowrap;
   font-size: 12px;
+}
+
+.practice-laps-table th.col-lap-time,
+.practice-laps-table td.col-lap-time {
+  width: 88px;
+  white-space: nowrap;
+}
+
+.practice-laps-table th.col-vs-best,
+.practice-laps-table td.col-vs-best {
+  width: 86px;
+  white-space: nowrap;
+}
+
+.practice-sectors-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: calc(208px + var(--mobile-sector-cols, 3) * 52px);
+  font-variant-numeric: tabular-nums;
+}
+
+.practice-sectors-table th.col-mobile-lap-num,
+.practice-sectors-table td.col-mobile-lap-num {
+  width: 62px;
+  white-space: nowrap;
+}
+
+.practice-sectors-table th.col-lap-time,
+.practice-sectors-table td.col-lap-time {
+  width: 76px;
+  white-space: nowrap;
+}
+
+.practice-sectors-table th.col-vs-best,
+.practice-sectors-table td.col-vs-best {
+  width: 70px;
+  white-space: nowrap;
 }
 
 .lap-num-cell {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   white-space: nowrap;
 }
 
@@ -2008,58 +2064,28 @@ html[data-theme="light"] .practice-sector-checkbox.is-checked::after {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 21px;
+  height: 21px;
   margin: -3px 0;
   padding: 0;
   border-radius: 5px;
-  border: 1px solid rgba(239, 68, 68, 0.28);
-  background: rgba(239, 68, 68, 0.12);
-  color: var(--bad);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--icon-muted);
   cursor: pointer;
   flex-shrink: 0;
-  transition: background-color 0.12s ease, border-color 0.12s ease, transform 0.1s ease;
+  transition: color 0.12s ease, background-color 0.12s ease, border-color 0.12s ease, transform 0.1s ease;
 }
 
 .lap-delete-btn:hover,
 .lap-delete-btn:focus-visible {
-  background: rgba(239, 68, 68, 0.24);
-  border-color: rgba(239, 68, 68, 0.55);
+  background: var(--surface-3);
+  border-color: var(--btn-hover-border);
+  color: var(--icon-hover);
 }
 
 .lap-delete-btn:active {
   transform: scale(0.94);
-}
-
-.th-lap-head {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  white-space: nowrap;
-}
-
-.lap-clear-all-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  margin: -2px 0;
-  padding: 0;
-  border-radius: 4px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--text-3);
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: color 0.12s ease, background-color 0.12s ease, border-color 0.12s ease;
-}
-
-.lap-clear-all-btn:hover,
-.lap-clear-all-btn:focus-visible {
-  color: var(--bad);
-  background: rgba(239, 68, 68, 0.12);
-  border-color: rgba(239, 68, 68, 0.28);
 }
 
 .practice-laps-table tbody tr[data-practice-toggle-lap],
