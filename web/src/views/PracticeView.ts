@@ -2,6 +2,11 @@ import { Component } from "../core/component";
 import { isCustomSelectOpenWithin } from "../core/custom_select";
 import { esc, fmtDelta, fmtTime } from "../core/format";
 import { icons } from "../core/icons";
+import {
+  bindLapsInnerScroll,
+  refreshLapsInnerScroll,
+  renderLapsInnerScrollShell,
+} from "../core/laps_inner_scroll";
 import { fitScheduleLineups } from "../core/table_scroll";
 import {
   BAND_RACEBAND,
@@ -137,7 +142,10 @@ export class PracticeView extends Component {
   private lastWsLineupFitSig = "";
   private mobilePracticeTab: MobilePracticeTab = "overview";
   private selectedMobileSectorKeys = new Set<string>();
+  private knownMobileSectorKeys = new Set<string>();
+  private lastMobileSectorSessionId = "";
   private lastMobileSectorCourseSig = "";
+  private mobileSectorsScrollLeft = 0;
   private practiceSignalsSlot: number | null = null;
   private lastFocusedPracticePilotSlot: number | null = null;
   private trendsExplicitAll = false;
@@ -674,6 +682,7 @@ export class PracticeView extends Component {
     } else if (nextTab === "laps") {
       this.showPanel();
       this.renderMobileSectorsPanel();
+      refreshLapsInnerScroll(this.slot("mobile-sectors"));
     } else if (nextTab === "signals") {
       if (this.panel) {
         this.panel.destroy();
@@ -743,7 +752,7 @@ export class PracticeView extends Component {
       if (key) {
         if (this.selectedMobileSectorKeys.has(key)) {
           this.selectedMobileSectorKeys.delete(key);
-        } else if (this.selectedMobileSectorKeys.size < 3) {
+        } else {
           this.selectedMobileSectorKeys.add(key);
         }
         this.lastMobileSectorsSig = "";
@@ -2801,16 +2810,38 @@ export class PracticeView extends Component {
           this.selectedMobileSectorKeys.delete(k);
         }
       }
-      if (courseSig !== this.lastMobileSectorCourseSig) {
+      for (const k of Array.from(this.knownMobileSectorKeys)) {
+        if (!validKeys.has(k)) {
+          this.knownMobileSectorKeys.delete(k);
+        }
+      }
+      if (sess.sessionId !== this.lastMobileSectorSessionId) {
+        this.lastMobileSectorSessionId = sess.sessionId;
         this.lastMobileSectorCourseSig = courseSig;
+        this.mobileSectorsScrollLeft = 0;
         this.selectedMobileSectorKeys.clear();
-        for (const c of cols.slice(0, 3)) {
+        this.knownMobileSectorKeys.clear();
+        for (const c of cols) {
           this.selectedMobileSectorKeys.add(c.key);
+          this.knownMobileSectorKeys.add(c.key);
+        }
+      } else if (courseSig !== this.lastMobileSectorCourseSig) {
+        this.lastMobileSectorCourseSig = courseSig;
+        for (const c of cols) {
+          if (!this.knownMobileSectorKeys.has(c.key)) {
+            this.knownMobileSectorKeys.add(c.key);
+            this.selectedMobileSectorKeys.add(c.key);
+          }
+        }
+        if (this.selectedMobileSectorKeys.size === 0) {
+          for (const c of cols) {
+            this.selectedMobileSectorKeys.add(c.key);
+          }
         }
       }
     }
 
-    const checkedCols = cols.filter((c) => this.selectedMobileSectorKeys.has(c.key)).slice(0, 3);
+    const checkedCols = cols.filter((c) => this.selectedMobileSectorKeys.has(c.key));
     const enabled = this.workspaceStore.enabledPilots;
     const focusSlot =
       this.store.liveFocus !== null && enabled.some((p) => p.slotIndex === this.store.liveFocus)
@@ -2839,7 +2870,11 @@ export class PracticeView extends Component {
     }
     this.lastMobileSectorsSig = fullSig;
 
-    const prevTableScroll = host.querySelector<HTMLElement>(".table-scroll")?.scrollTop ?? 0;
+    const prevViewport = host.querySelector<HTMLElement>(".laps-inner-scroll-viewport");
+    const prevTableScroll = prevViewport?.scrollTop ?? 0;
+    if (prevViewport) {
+      this.mobileSectorsScrollLeft = prevViewport.scrollLeft;
+    }
     const prevPickerScroll =
       host.querySelector<HTMLElement>(".practice-sectors-picker-list")?.scrollTop ?? 0;
 
@@ -2851,19 +2886,19 @@ export class PracticeView extends Component {
               ? `${pilot.callsign}'s laps appear here as they complete them.`
               : "Select a pilot to view their laps."
           )
-        : `<div class="table-scroll">
-            <table class="table table-compact practice-sectors-table" style="--mobile-sector-cols:${checkedCols.length}">
+        : renderLapsInnerScrollShell(
+            `<table class="table table-compact practice-sectors-table" style="--mobile-sector-cols:${checkedCols.length}">
               <thead>
                 <tr>
-                  <th class="col-mobile-lap-num">Lap</th>
+                  <th class="col-mobile-lap-num is-sticky-col">Lap</th>
                   ${checkedCols
                     .map(
                       (c) =>
                         `<th class="num col-mobile-sector" title="${esc(sectionLabel(this.workspaceStore, c.from, c.to))}"><span class="th-pilot"><span class="dot" style="--c:${gateColor(this.workspaceStore, c.from)}"></span>${sectionShort(this.workspaceStore, c.from)}</span></th>`
                     )
                     .join("")}
-                  <th class="num col-lap-time">Lap time</th>
-                  <th class="num col-vs-best">vs best</th>
+                  <th class="num col-lap-time is-sticky-col">Lap time</th>
+                  <th class="num col-vs-best is-sticky-col">vs best</th>
                 </tr>
               </thead>
               <tbody>
@@ -2919,27 +2954,28 @@ export class PracticeView extends Component {
                           aria-label="${esc(toggleTitle)}"
                         >${lap.lapNumber}</button>`;
                     return `<tr class="${isInvalid ? "is-invalidated" : ""}" data-lap-row="${lap.lapId}" data-practice-toggle-lap="${lap.lapId}" title="${esc(toggleTitle)}">
-                      <td class="mono col-mobile-lap-num">
+                      <td class="mono col-mobile-lap-num is-sticky-col">
                         ${lapNumContent}
                       </td>
                       ${cells}
-                      <td class="num mono strong col-lap-time ${!isInvalid && lap.isBestLap ? "tone-good" : ""}">${fmtTime(lap.lapTimeSec)}</td>
-                      <td class="num mono muted col-vs-best">${vs}</td>
+                      <td class="num mono strong col-lap-time is-sticky-col ${!isInvalid && lap.isBestLap ? "tone-good" : ""}"><span class="lap-sticky-inner">${fmtTime(lap.lapTimeSec)}</span></td>
+                      <td class="num mono muted col-vs-best is-sticky-col"><span class="lap-sticky-inner">${vs}</span></td>
                     </tr>`;
                   })
                   .join("")}
               </tbody>
-            </table>
-          </div>`;
+            </table>`,
+            62,
+            146
+          );
 
     const pickerMarkup =
       cols.length === 0
         ? `<div class="note" style="padding:12px">No gates configured for this session.</div>`
-        : `<div class="channel-legend practice-sectors-picker-list" role="group" aria-label="Select up to 3 sectors to display">
+        : `<div class="channel-legend practice-sectors-picker-list" role="group" aria-label="Select sections to display">
             ${cols
               .map((c) => {
                 const checked = this.selectedMobileSectorKeys.has(c.key);
-                const atMax = !checked && this.selectedMobileSectorKeys.size >= 3;
                 const route = sectionLabel(this.workspaceStore, c.from, c.to);
                 return `
                   <button
@@ -2948,8 +2984,7 @@ export class PracticeView extends Component {
                     aria-checked="${checked ? "true" : "false"}"
                     class="channel practice-sector-check-row ${checked ? "is-checked" : "is-dim"}"
                     data-practice-sector-toggle="${esc(c.key)}"
-                    ${atMax ? "disabled" : ""}
-                    title="${atMax ? "Select up to 3 sectors at a time" : esc(route)}"
+                    title="${esc(route)}"
                   >
                     <span class="practice-sector-checkbox ${checked ? "is-checked" : ""}" aria-hidden="true"></span>
                     ${renderSectionCapsuleIcon(
@@ -2969,7 +3004,21 @@ export class PracticeView extends Component {
       </section>
       ${pickerMarkup}`;
 
-    const nextTableScroll = host.querySelector<HTMLElement>(".table-scroll");
+    const nextShell = host.querySelector<HTMLElement>(".laps-inner-scroll-shell");
+    if (nextShell) {
+      bindLapsInnerScroll(nextShell, {
+        fixedLeftPx: 62,
+        fixedRightPx: 146,
+        sectorCount: checkedCols.length,
+        maxVisibleSectors: 3,
+        minSectorWidthPx: 50,
+        initialScrollLeft: this.mobileSectorsScrollLeft,
+        onScrollLeftChange: (left) => {
+          this.mobileSectorsScrollLeft = left;
+        },
+      });
+    }
+    const nextTableScroll = host.querySelector<HTMLElement>(".laps-inner-scroll-viewport");
     if (nextTableScroll && prevTableScroll > 0) {
       nextTableScroll.scrollTop = prevTableScroll;
     }

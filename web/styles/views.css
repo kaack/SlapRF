@@ -1979,27 +1979,150 @@ html[data-theme="light"] .practice-sector-checkbox.is-checked::after {
   border-color: #181d27;
 }
 
+.laps-inner-scroll-shell {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  --laps-sticky-bg: var(--surface);
+}
+
+.laps-inner-scroll-viewport {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x pan-y;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.laps-inner-scroll-viewport::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.laps-inner-scroll-viewport thead th {
+  position: sticky;
+  top: 0;
+  background: var(--laps-sticky-bg, var(--surface));
+  z-index: 3;
+}
+
+.laps-inner-scroll-viewport thead th.is-sticky-col {
+  z-index: 5;
+  background: var(--laps-sticky-bg, var(--surface));
+  box-shadow:
+    1px 0 0 var(--laps-sticky-bg, var(--surface)),
+    -1px 0 0 var(--laps-sticky-bg, var(--surface));
+}
+
+.laps-inner-scroll-viewport tbody td.is-sticky-col {
+  position: sticky;
+  z-index: 2;
+  background: var(--row-sticky-bg, var(--laps-sticky-bg, var(--surface)));
+  box-shadow:
+    1px 0 0 var(--row-sticky-bg, var(--laps-sticky-bg, var(--surface))),
+    -1px 0 0 var(--row-sticky-bg, var(--laps-sticky-bg, var(--surface)));
+}
+
+.laps-inner-scroll-shell.has-sector-overflow .laps-inner-scroll-viewport {
+  cursor: grab;
+}
+
+.laps-inner-scroll-shell.is-dragging .laps-inner-scroll-viewport,
+.laps-inner-scroll-shell.is-dragging .laps-inner-scroll-viewport * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+.laps-sec-cue {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 20px;
+  padding: 0;
+  border: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--icon-muted);
+  cursor: pointer;
+  z-index: 6;
+  transition: color 0.14s ease, background-color 0.14s ease;
+}
+
+.laps-sec-cue[hidden] {
+  display: none !important;
+}
+
+.laps-sec-cue.is-left {
+  left: var(--laps-fixed-left, 62px);
+  border-left: 1px solid var(--border);
+  background: linear-gradient(
+    90deg,
+    var(--laps-sticky-bg, var(--surface)) 32%,
+    color-mix(in srgb, var(--laps-sticky-bg, var(--surface)) 76%, transparent) 72%,
+    transparent 100%
+  );
+}
+
+.laps-sec-cue.is-right {
+  right: var(--laps-fixed-right, 146px);
+  border-right: 1px solid var(--border);
+  background: linear-gradient(
+    270deg,
+    var(--laps-sticky-bg, var(--surface)) 32%,
+    color-mix(in srgb, var(--laps-sticky-bg, var(--surface)) 76%, transparent) 72%,
+    transparent 100%
+  );
+}
+
+.laps-sec-cue:hover,
+.laps-sec-cue:focus-visible {
+  color: var(--icon-hover);
+}
+
+.laps-sec-cue-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 28px;
+  border-radius: 999px;
+}
+
 .practice-laps-table {
+  border-collapse: separate;
+  border-spacing: 0;
   table-layout: fixed;
   width: 100%;
-  min-width: calc(348px + var(--pilot-col-extra, 0px) + var(--sector-cols, 3) * 72px);
+  min-width: 100%;
   font-variant-numeric: tabular-nums;
+}
+
+.practice-laps-table.is-scrollable-sectors th.col-sector,
+.practice-laps-table.is-scrollable-sectors td.col-sector {
+  width: var(--sector-col-w, 92px);
 }
 
 .practice-laps-table th.col-pilot,
 .practice-laps-table td.col-pilot {
   width: 136px;
+  left: 0;
 }
 
 .practice-laps-table th.col-lap-num,
 .practice-laps-table td.col-lap-num {
   width: 72px;
+  left: var(--pilot-col-extra, 0px);
   white-space: nowrap;
 }
 
 .practice-laps-table th.col-lap-clock,
 .practice-laps-table td.col-lap-clock {
   width: 98px;
+  left: calc(var(--pilot-col-extra, 0px) + 72px);
   white-space: nowrap;
   font-size: 12px;
 }
@@ -2007,38 +2130,54 @@ html[data-theme="light"] .practice-sector-checkbox.is-checked::after {
 .practice-laps-table th.col-lap-time,
 .practice-laps-table td.col-lap-time {
   width: 88px;
+  right: 86px;
   white-space: nowrap;
 }
 
 .practice-laps-table th.col-vs-best,
 .practice-laps-table td.col-vs-best {
   width: 86px;
+  right: 0;
   white-space: nowrap;
 }
 
 .practice-sectors-table {
+  border-collapse: separate;
+  border-spacing: 0;
   table-layout: fixed;
   width: 100%;
-  min-width: calc(208px + var(--mobile-sector-cols, 3) * 52px);
+  min-width: 100%;
   font-variant-numeric: tabular-nums;
+}
+
+.practice-sectors-table.is-scrollable-sectors th.col-mobile-sector,
+.practice-sectors-table.is-scrollable-sectors td.col-mobile-sector {
+  width: var(--sector-col-w, 54px);
 }
 
 .practice-sectors-table th.col-mobile-lap-num,
 .practice-sectors-table td.col-mobile-lap-num {
   width: 62px;
+  left: 0;
   white-space: nowrap;
 }
 
 .practice-sectors-table th.col-lap-time,
 .practice-sectors-table td.col-lap-time {
   width: 76px;
+  right: 70px;
   white-space: nowrap;
 }
 
 .practice-sectors-table th.col-vs-best,
 .practice-sectors-table td.col-vs-best {
   width: 70px;
+  right: 0;
   white-space: nowrap;
+}
+
+.lap-sticky-inner {
+  display: inline-block;
 }
 
 .lap-num-cell {
@@ -2093,18 +2232,24 @@ html[data-theme="light"] .practice-sector-checkbox.is-checked::after {
   cursor: pointer;
 }
 
-.practice-laps-table tr.is-invalidated td:not(.col-lap-num),
-.practice-laps-table tr.is-invalidated td:not(.col-lap-num) *,
-.practice-sectors-table tr.is-invalidated td:not(.col-mobile-lap-num),
-.practice-sectors-table tr.is-invalidated td:not(.col-mobile-lap-num) *,
+.practice-laps-table tr.is-invalidated td:not(.is-sticky-col),
+.practice-laps-table tr.is-invalidated td:not(.is-sticky-col) *,
+.practice-sectors-table tr.is-invalidated td:not(.is-sticky-col),
+.practice-sectors-table tr.is-invalidated td:not(.is-sticky-col) *,
+.practice-laps-table tr.is-invalidated .lap-sticky-inner,
+.practice-laps-table tr.is-invalidated .lap-sticky-inner *,
+.practice-sectors-table tr.is-invalidated .lap-sticky-inner,
+.practice-sectors-table tr.is-invalidated .lap-sticky-inner *,
 .practice-laps-table tr.is-invalidated .lap-num-toggle,
 .practice-sectors-table tr.is-invalidated .lap-num-toggle {
   text-decoration: line-through;
   text-decoration-thickness: 1.5px;
 }
 
-.practice-laps-table tr.is-invalidated td:not(.col-lap-num),
-.practice-sectors-table tr.is-invalidated td:not(.col-mobile-lap-num),
+.practice-laps-table tr.is-invalidated td:not(.is-sticky-col),
+.practice-sectors-table tr.is-invalidated td:not(.is-sticky-col),
+.practice-laps-table tr.is-invalidated .lap-sticky-inner,
+.practice-sectors-table tr.is-invalidated .lap-sticky-inner,
 .practice-laps-table tr.is-invalidated .lap-num-toggle,
 .practice-sectors-table tr.is-invalidated .lap-num-toggle {
   opacity: 0.45;
@@ -22989,14 +23134,23 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
   }
 
   .practice-workspace-page .practice-sectors-table-card .table-scroll-shell,
-  .practice-workspace-page .practice-sectors-table-card .table-scroll {
+  .practice-workspace-page .practice-sectors-table-card .laps-inner-scroll-shell {
     flex: 0 1 auto;
     min-height: 0;
     max-height: none;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+  }
+
+  .practice-workspace-page .practice-sectors-table-card .table-scroll,
+  .practice-workspace-page .practice-sectors-table-card .laps-inner-scroll-viewport {
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: none;
+    overflow-x: auto;
     overflow-y: auto;
-    overscroll-behavior-y: contain;
+    overscroll-behavior: contain;
   }
 
   .practice-workspace-page .practice-sectors-picker-list {
@@ -23117,6 +23271,7 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
 
   .practice-workspace-page .practice-standings-card .table-scroll-shell,
   .practice-workspace-page .practice-laps-card .table-scroll-shell,
+  .practice-workspace-page .practice-laps-card .laps-inner-scroll-shell,
   .practice-workspace-page .practice-sections-card .table-scroll-shell {
     flex: 0 1 auto;
     min-height: 0;
@@ -23127,6 +23282,7 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
 
   .practice-workspace-page .practice-standings-card .table-scroll,
   .practice-workspace-page .practice-laps-card .table-scroll,
+  .practice-workspace-page .practice-laps-card .laps-inner-scroll-viewport,
   .practice-workspace-page .practice-sections-card .table-scroll {
     flex: 0 1 auto;
     min-height: 0;
@@ -25409,6 +25565,7 @@ html[data-theme="light"] .mre-sheet-check-toggle input[type="checkbox"]:checked:
   html[data-theme="light"] .practice-workspace-page .practice-laps-card,
   html[data-theme="light"] .practice-workspace-page .stat-row {
     background: var(--node-surface);
+    --laps-sticky-bg: var(--node-surface);
     border-color: var(--node-border);
     box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
   }

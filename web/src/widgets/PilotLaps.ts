@@ -1,6 +1,7 @@
 import { Component } from "../core/component";
 import { esc, fmtDelta, fmtTime } from "../core/format";
 import { icons } from "../core/icons";
+import { bindLapsInnerScroll, renderLapsInnerScrollShell } from "../core/laps_inner_scroll";
 import { sectionKey } from "../state/analysis";
 import { allLapsFor, gateColor, sectionLabel, sectionShort } from "../state/selectors";
 import { AppStore } from "../state/store";
@@ -52,6 +53,7 @@ export class PilotLaps extends Component {
   private readonly store: AppStore;
   private readonly onToggleLap?: (lapId: number) => void;
   private readonly onDeleteLap?: (lapId: number) => void;
+  private savedScrollLeft = 0;
 
   constructor(
     el: HTMLElement,
@@ -116,29 +118,61 @@ export class PilotLaps extends Component {
       .map((lap) => this.renderLap(lap, cols, isAllMode))
       .join("");
 
-    const pilotTh = isAllMode ? `<th class="col-pilot">Pilot</th>` : "";
+    const pilotTh = isAllMode ? `<th class="col-pilot is-sticky-col">Pilot</th>` : "";
+    const fixedLeftPx = isAllMode ? 306 : 170;
+    const fixedRightPx = 174;
     const tableInnerHtml = `
-          <thead><tr>${pilotTh}<th class="col-lap-num">Lap</th><th class="col-lap-clock">Time</th>${head}<th class="num col-lap-time">Lap time</th><th class="num col-vs-best">vs best</th></tr></thead>
+          <thead><tr>${pilotTh}<th class="col-lap-num is-sticky-col">Lap</th><th class="col-lap-clock is-sticky-col">Time</th>${head}<th class="num col-lap-time is-sticky-col">Lap time</th><th class="num col-vs-best is-sticky-col">vs best</th></tr></thead>
           <tbody>${rows}</tbody>`;
 
     const existingTable = this.el.querySelector<HTMLElement>("table.table-compact");
-    if (existingTable) {
+    const existingShell = this.el.querySelector<HTMLElement>(".laps-inner-scroll-shell");
+    if (existingTable && existingShell) {
       existingTable.style.setProperty("--sector-cols", String(cols.length));
       existingTable.style.setProperty("--pilot-col-extra", isAllMode ? "136px" : "0px");
       existingTable.innerHTML = tableInnerHtml;
+      bindLapsInnerScroll(existingShell, {
+        fixedLeftPx,
+        fixedRightPx,
+        sectorCount: cols.length,
+        maxVisibleSectors: 3,
+        minSectorWidthPx: 88,
+        initialScrollLeft: this.savedScrollLeft,
+        onScrollLeftChange: (left) => {
+          this.savedScrollLeft = left;
+        },
+      });
       return;
     }
 
     this.el.innerHTML = `
-      <div class="table-scroll table-scroll-y">
-        <table class="table table-compact practice-laps-table" style="--sector-cols:${cols.length};--pilot-col-extra:${isAllMode ? "136px" : "0px"}">${tableInnerHtml}
-        </table>
-      </div>
+      ${renderLapsInnerScrollShell(
+        `<table class="table table-compact practice-laps-table" style="--sector-cols:${cols.length};--pilot-col-extra:${isAllMode ? "136px" : "0px"}">${tableInnerHtml}
+        </table>`,
+        fixedLeftPx,
+        fixedRightPx,
+        "table-scroll-y"
+      )}
       <div class="legend-row">
         <span><i class="split-purple"></i>Track record</span>
         <span><i class="split-good"></i>Own best</span>
         <span><i class="split-bad"></i>&gt;10% off own best</span>
       </div>`;
+
+    const shell = this.el.querySelector<HTMLElement>(".laps-inner-scroll-shell");
+    if (shell) {
+      bindLapsInnerScroll(shell, {
+        fixedLeftPx,
+        fixedRightPx,
+        sectorCount: cols.length,
+        maxVisibleSectors: 3,
+        minSectorWidthPx: 88,
+        initialScrollLeft: this.savedScrollLeft,
+        onScrollLeftChange: (left) => {
+          this.savedScrollLeft = left;
+        },
+      });
+    }
   }
 
   private renderLap(lap: LapRecord, cols: Column[], showPilot = false): string {
@@ -162,7 +196,7 @@ export class PilotLaps extends Component {
     const pObj = showPilot ? this.store.pilot(lap.slotIndex) : undefined;
     const pColor = pObj?.color || "#38bdf8";
     const pilotTd = showPilot
-      ? `<td class="col-pilot"><div class="pilot-cell"><span class="pilot-swatch" style="--c:${esc(pColor)}"></span><div class="pilot-name"><span>${esc(lap.callsign)}</span></div></div></td>`
+      ? `<td class="col-pilot is-sticky-col"><span class="lap-sticky-inner"><div class="pilot-cell"><span class="pilot-swatch" style="--c:${esc(pColor)}"></span><div class="pilot-name"><span>${esc(lap.callsign)}</span></div></div></span></td>`
       : "";
     const clockText = formatLapWallClock(this.store, lap);
     const toggleTitle = isInvalid
@@ -196,13 +230,13 @@ export class PilotLaps extends Component {
     return `
       <tr class="${isInvalid ? "is-invalidated" : ""}" data-lap-row="${lap.lapId}" data-practice-toggle-lap="${lap.lapId}" title="${esc(toggleTitle)}">
         ${pilotTd}
-        <td class="mono col-lap-num">
+        <td class="mono col-lap-num is-sticky-col">
           ${lapNumContent}
         </td>
-        <td class="mono muted col-lap-clock">${esc(clockText)}</td>
+        <td class="mono muted col-lap-clock is-sticky-col"><span class="lap-sticky-inner">${esc(clockText)}</span></td>
         ${cells}
-        <td class="num mono strong col-lap-time ${!isInvalid && lap.isBestLap ? "tone-good" : ""}">${fmtTime(lap.lapTimeSec)}</td>
-        <td class="num mono muted col-vs-best">${vs}</td>
+        <td class="num mono strong col-lap-time is-sticky-col ${!isInvalid && lap.isBestLap ? "tone-good" : ""}"><span class="lap-sticky-inner">${fmtTime(lap.lapTimeSec)}</span></td>
+        <td class="num mono muted col-vs-best is-sticky-col"><span class="lap-sticky-inner">${vs}</span></td>
       </tr>`;
   }
 }

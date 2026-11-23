@@ -2011,6 +2011,141 @@ describe("PracticeView two-step lap deletion and per-pilot lap clearing", () => 
       view.destroy();
     }
   });
+
+  it("displays >3 sections in Practice Laps with sideways inner-section scrolling, chevrons, and hidden scrollbars", async () => {
+    const pilots = [makePilot(1, { callsign: "FAERRY", channel: 1, enabled: true })];
+    const gates = [
+      makeGate(1, { name: "Start", trackOrder: 1 }),
+      makeGate(2, { name: "Split-S", trackOrder: 2 }),
+      makeGate(3, { name: "Corkscrew", trackOrder: 3 }),
+      makeGate(4, { name: "Ladder", trackOrder: 4 }),
+      makeGate(5, { name: "FinishSweep", trackOrder: 5 }),
+    ];
+    const laps = [
+      makeLap(301, 1, 1, 18.45, {
+        callsign: "FAERRY",
+        isBestLap: true,
+        deltaToBest: 0,
+        sectors: [
+          makeSectorSplit(0, 1, 2, 3.51, { badge: "OVERALL_BEST" }),
+          makeSectorSplit(1, 2, 3, 3.62, { badge: "PERSONAL_BEST" }),
+          makeSectorSplit(2, 3, 4, 3.74),
+          makeSectorSplit(3, 4, 5, 3.81),
+          makeSectorSplit(4, 5, 1, 3.77),
+        ],
+      }),
+    ];
+    const sess = makePracticeSession("prac-sec-5", {
+      name: "5-Section Track",
+      active: true,
+      trackInitialized: true,
+      trackSnapshot: gates,
+      pilots: [{ slotIndex: 1, channel: 1 }],
+      laps: structuredClone(laps),
+    });
+    replaceAppHash("#/practice");
+    const store = makeStore({
+      pilots,
+      gates,
+      laps: structuredClone(laps),
+      practiceState: {
+        initialized: true,
+        activeSessionId: "prac-sec-5",
+        selectedSessionId: "prac-sec-5",
+        sessions: [sess],
+      },
+    });
+    const { api, calls } = makeMockApiClient(store);
+
+    const root = mountHtml('<div id="prac-sec-scroll-root" style="width:960px"></div>');
+    const host = root.querySelector<HTMLElement>("#prac-sec-scroll-root")!;
+    const view = new PracticeView(host, store, api);
+    view.onActivate();
+    await flushMicrotasks();
+
+    try {
+      host.querySelector<HTMLButtonElement>("[data-practice-act='open-session']")!.click();
+      await flushMicrotasks();
+      host.querySelector<HTMLButtonElement>("[data-practice-mobile-tab='laps']")!.click();
+      await flushMicrotasks();
+
+      // 1. Desktop PilotLaps: all 5 sections rendered inside sideways-scrollable inner shell (>3 sections)
+      const desktopShell = host.querySelector<HTMLElement>(
+        ".practice-laps-card .laps-inner-scroll-shell"
+      )!;
+      expect(desktopShell).not.toBeNull();
+      expect(desktopShell.classList.contains("has-sector-overflow")).toBe(true);
+      const desktopVp = desktopShell.querySelector<HTMLElement>(".laps-inner-scroll-viewport")!;
+      expect(window.getComputedStyle(desktopVp).scrollbarWidth).toBe("none");
+      expect(desktopShell.querySelectorAll("th.col-sector").length).toBe(5);
+      expect(
+        window.getComputedStyle(desktopShell.querySelector<HTMLElement>("th.col-lap-num")!).position
+      ).toBe("sticky");
+      expect(
+        window.getComputedStyle(desktopShell.querySelector<HTMLElement>("th.col-lap-time")!).position
+      ).toBe("sticky");
+
+      const desktopLeftCue = desktopShell.querySelector<HTMLButtonElement>(".laps-sec-cue.is-left")!;
+      const desktopRightCue = desktopShell.querySelector<HTMLButtonElement>(".laps-sec-cue.is-right")!;
+      expect(desktopLeftCue.hidden).toBe(true);
+      expect(desktopRightCue.hidden).toBe(false);
+
+      // Clicking the right chevron scrolls the sections sideways without scratching Lap 1
+      desktopRightCue.click();
+      await flushMicrotasks();
+      expect(desktopVp.scrollLeft).toBeGreaterThan(0);
+      expect(desktopLeftCue.hidden).toBe(false);
+      expect(
+        desktopShell.querySelector("tr[data-lap-row='301']")!.classList.contains("is-invalidated")
+      ).toBe(false);
+      expect(calls.some((c) => c.method === "practiceAction")).toBe(false);
+
+      // 2. Mobile Laps picker & sectors table: all 5 sections checked by default (no 3-section cap)
+      const mobileHost = host.querySelector<HTMLElement>("[data-slot='mobile-sectors']")!;
+      mobileHost.style.setProperty("display", "flex", "important");
+      mobileHost.style.flexDirection = "column";
+      mobileHost.style.width = "380px";
+      await new Promise((r) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => r(null))));
+
+      const checkRows = Array.from(
+        mobileHost.querySelectorAll<HTMLButtonElement>("[data-practice-sector-toggle]")
+      );
+      expect(checkRows.length).toBe(5);
+      expect(checkRows.every((btn) => btn.getAttribute("aria-checked") === "true")).toBe(true);
+      expect(checkRows.every((btn) => !btn.disabled)).toBe(true);
+
+      const mobileShell = mobileHost.querySelector<HTMLElement>(".laps-inner-scroll-shell")!;
+      const mobileVp = mobileShell.querySelector<HTMLElement>(".laps-inner-scroll-viewport")!;
+      const mobileLeftCue = mobileShell.querySelector<HTMLButtonElement>(".laps-sec-cue.is-left")!;
+      const mobileRightCue = mobileShell.querySelector<HTMLButtonElement>(".laps-sec-cue.is-right")!;
+      expect(mobileShell.classList.contains("has-sector-overflow")).toBe(true);
+      expect(mobileShell.querySelectorAll("th.col-mobile-sector").length).toBe(5);
+      expect(mobileLeftCue.hidden).toBe(true);
+      expect(mobileRightCue.hidden).toBe(false);
+
+      mobileRightCue.click();
+      await flushMicrotasks();
+      expect(mobileVp.scrollLeft).toBeGreaterThan(0);
+      expect(mobileLeftCue.hidden).toBe(false);
+
+      // Unchecking 2 sections down to 3 disables overflow and hides both chevrons
+      checkRows[3].click();
+      mobileHost.querySelectorAll<HTMLButtonElement>("[data-practice-sector-toggle]")[4].click();
+      await flushMicrotasks();
+      const updatedMobileShell = mobileHost.querySelector<HTMLElement>(".laps-inner-scroll-shell")!;
+      expect(updatedMobileShell.querySelectorAll("th.col-mobile-sector").length).toBe(3);
+      expect(updatedMobileShell.classList.contains("has-sector-overflow")).toBe(false);
+      expect(
+        updatedMobileShell.querySelector<HTMLButtonElement>(".laps-sec-cue.is-left")!.hidden
+      ).toBe(true);
+      expect(
+        updatedMobileShell.querySelector<HTMLButtonElement>(".laps-sec-cue.is-right")!.hidden
+      ).toBe(true);
+    } finally {
+      document.querySelectorAll(".slaprf-modal-backdrop").forEach((m) => m.remove());
+      view.destroy();
+    }
+  });
 });
 
 function storeSnapshotFrom(store: ReturnType<typeof makeStore>) {
