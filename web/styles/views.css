@@ -2912,25 +2912,19 @@ html[data-theme="light"] .bar-time {
   gap: 10px;
   flex-shrink: 0;
 }
-.diag-log-info {
-  min-width: 0;
-  flex: 1 1 220px;
-}
 .diag-log-actions {
-  margin-left: auto;
-  justify-content: flex-end;
   gap: 8px;
 }
 .diag-log-actions .custom-select-wrap {
   width: auto;
-  min-width: 138px;
+  min-width: 142px;
   flex: 0 0 auto;
 }
 .diag-log-actions .custom-select-trigger {
-  height: 28px;
-  min-height: 28px;
-  padding: 0 26px 0 10px;
-  font-size: 12px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 28px 0 11px;
+  font-size: 12.5px;
 }
 .mgp-key-row {
   align-items: flex-start;
@@ -2972,7 +2966,7 @@ html[data-theme="light"] .bar-time {
     border-top: 1px solid var(--border);
   }
   .diag-log-actions {
-    justify-content: flex-end;
+    justify-content: flex-start;
     flex-wrap: wrap;
   }
   .option-row > .switch {
@@ -7495,29 +7489,54 @@ html[data-theme="light"] .flasher-hub-link .segmented button.is-active {
   gap: 8px;
 }
 .debug-net-inspector-kpi {
-  padding: 7px 10px;
+  padding: 8px 10px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--surface-2);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  justify-content: flex-start;
+  align-items: flex-start;
+  gap: 3px;
   min-width: 0;
 }
 .debug-net-inspector-kpi-label {
+  display: block;
+  width: 100%;
   font-size: 11px;
+  line-height: 15px;
+  height: 15px;
+  margin: 0;
   color: var(--text-3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .debug-net-inspector-kpi-val {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45ch;
+  width: 100%;
   font-size: 12.5px;
+  line-height: 18px;
+  height: 18px;
+  margin: 0;
   font-weight: 600;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.debug-net-inspector-kpi-val .net-metric-pair {
+  display: inline;
+}
+.debug-net-inspector-kpi-val .net-num-slot {
+  display: inline;
+  width: auto;
+  text-align: left;
+}
+.debug-net-inspector-kpi-val .note {
+  line-height: 18px;
 }
 .debug-net-inspector-bars-wrap {
   display: flex;

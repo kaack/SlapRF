@@ -12,10 +12,10 @@ import { AnnouncerSettings } from "../widgets/AnnouncerSettings";
 import {
   AuthenticationSettingsCard,
   DataSourceCard,
-  DiagnosticsSettingsCard,
   MultiGPSettingsCard,
   PersistenceSettings,
 } from "../widgets/DataSourceCard";
+import { DiagnosticsSettings } from "../widgets/DiagnosticsSettings";
 import { LapRFEmulatorCard } from "../widgets/LapRFEmulatorCard";
 
 /** Settings page: label/description on the left, controls on the right. */
@@ -79,7 +79,7 @@ export class SetupView extends Component {
         <section class="settings-section" data-section-anchor="diagnostics" data-slot="diagnostics-section">
           <div class="settings-intro">
             <h2>Diagnostics</h2>
-            <p>User actions, race &amp; practice events, laps, and hardware links are written to <span class="mono">slaprf.log</span> on servers (or an in-memory buffer in Demo Mode), with simulated activity tagged <span class="mono">[SIM]</span>. Raise the level to <span class="mono">DEBUG</span> or <span class="mono">TRACE</span> when troubleshooting.</p>
+            <p>Inspect, download, or clear diagnostic logs and adjust runtime log verbosity.</p>
           </div>
           <div class="settings-cards" data-slot="diagnostics"></div>
         </section>
@@ -91,7 +91,7 @@ export class SetupView extends Component {
     this.adopt(new LapRFEmulatorCard(this.slot("laprf-emulator"), store));
     this.adopt(new AuthenticationSettingsCard(this.slot("authentication")));
     this.adopt(new PersistenceSettings(this.slot("persistence"), api, announcer));
-    this.adopt(new DiagnosticsSettingsCard(this.slot("diagnostics"), api));
+    this.adopt(new DiagnosticsSettings(this.slot("diagnostics"), api));
 
     this.onDispose(store.subscribe(["status", "config"], () => this.syncVisibility()));
     this.onDispose(subscribeCapabilities(() => this.syncVisibility()));
