@@ -128,6 +128,7 @@ final class HighSpeedGlPipe implements SurfaceTexture.OnFrameAvailableListener {
     private volatile int capW;
     private volatile int capH;
     private volatile boolean highSpeedRate = false;
+    private volatile boolean ingestEnabled = true;
     private final int outW;
     private final int outH;
     private final int fboW;
@@ -225,6 +226,7 @@ final class HighSpeedGlPipe implements SurfaceTexture.OnFrameAvailableListener {
         this.capW = newCapW;
         this.capH = newCapH;
         this.highSpeedRate = isHighSpeed;
+        this.ingestEnabled = !isHighSpeed;
         final SurfaceTexture st = camSurfaceTexture;
         if (st != null) {
             st.setDefaultBufferSize(newCapW, newCapH);
@@ -415,39 +417,45 @@ final class HighSpeedGlPipe implements SurfaceTexture.OnFrameAvailableListener {
                 }
             }
 
-            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboId);
-            GLES20.glViewport(0, 0, fboW, fboH);
-            GLES20.glUseProgram(nv21ProgId);
-            GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
-            GLES20.glUniformMatrix4fv(nv21UTexMatrixLoc, 1, false, stMatrix, 0);
-            GLES20.glUniform1f(nv21URotModeLoc, rotMode);
-            GLES20.glUniform1f(nv21UCropFracLoc, cropFrac);
-            GLES20.glUniform2f(nv21UOutSizeLoc, (float) outW, (float) outH);
-            GLES20.glEnableVertexAttribArray(nv21APosLoc);
-            GLES20.glVertexAttribPointer(nv21APosLoc, 2, GLES20.GL_FLOAT, false, 0, screenPosBuf);
-            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+            if (ingestEnabled) {
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fboId);
+                GLES20.glViewport(0, 0, fboW, fboH);
+                GLES20.glUseProgram(nv21ProgId);
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+                GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
+                GLES20.glUniformMatrix4fv(nv21UTexMatrixLoc, 1, false, stMatrix, 0);
+                GLES20.glUniform1f(nv21URotModeLoc, rotMode);
+                GLES20.glUniform1f(nv21UCropFracLoc, cropFrac);
+                GLES20.glUniform2f(nv21UOutSizeLoc, (float) outW, (float) outH);
+                GLES20.glEnableVertexAttribArray(nv21APosLoc);
+                GLES20.glVertexAttribPointer(nv21APosLoc, 2, GLES20.GL_FLOAT, false, 0, screenPosBuf);
+                GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
 
-            int writeIdx = pboFrameCount % PBO_RING;
-            int readIdx = (pboFrameCount + 1) % PBO_RING;
-            pboTimestampNs[writeIdx] = tsNs;
+                int writeIdx = pboFrameCount % PBO_RING;
+                int readIdx = (pboFrameCount + 1) % PBO_RING;
+                pboTimestampNs[writeIdx] = tsNs;
 
-            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboIds[writeIdx]);
-            GLES30.glReadPixels(0, 0, fboW, fboH, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, 0);
+                GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboIds[writeIdx]);
+                GLES30.glReadPixels(0, 0, fboW, fboH, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, 0);
 
-            if (pboFrameCount >= PBO_RING - 1) {
-                GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboIds[readIdx]);
-                ByteBuffer buf = (ByteBuffer) GLES30.glMapBufferRange(
-                        GLES30.GL_PIXEL_PACK_BUFFER, 0, nv21Bytes, GLES30.GL_MAP_READ_BIT);
-                if (buf != null) {
-                    buf.position(0);
-                    sink.onHighSpeedFrameReady(buf, pboTimestampNs[readIdx]);
-                    GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER);
+                if (pboFrameCount >= PBO_RING - 1) {
+                    GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pboIds[readIdx]);
+                    ByteBuffer buf = (ByteBuffer) GLES30.glMapBufferRange(
+                            GLES30.GL_PIXEL_PACK_BUFFER, 0, nv21Bytes, GLES30.GL_MAP_READ_BIT);
+                    if (buf != null) {
+                        buf.position(0);
+                        sink.onHighSpeedFrameReady(buf, pboTimestampNs[readIdx]);
+                        GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER);
+                    }
                 }
+                GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0);
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+                pboFrameCount++;
+            } else {
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+                GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId);
             }
-            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0);
-            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
-            pboFrameCount++;
 
             long minPreviewGapNs = highSpeedRate ? 15_500_000L : 0L;
             if (windowSurface != EGL14.EGL_NO_SURFACE && (tsNs - lastPreviewDrawNs) >= minPreviewGapNs) {

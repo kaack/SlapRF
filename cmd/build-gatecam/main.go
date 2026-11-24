@@ -200,7 +200,7 @@ func main() {
 	rJava := filepath.Join(genJavaDir, "app", "slaprf", "gatecam", "R.java")
 	cp := tc.androidJar + string(os.PathListSeparator) + openCVJar
 
-	log.Printf("[build-gatecam] Compiling GateCamHost, GateCamShim & HighSpeedGlPipe against OpenCV %s...", openCVVersion)
+	log.Printf("[build-gatecam] Compiling GateCamHost, GateCamShim, HighSpeedGlPipe & HighSpeedCodecRing against OpenCV %s...", openCVVersion)
 	runCmd(
 		tc.env(nil),
 		tc.javac,
@@ -211,6 +211,7 @@ func main() {
 		filepath.FromSlash("tools/gatecam/android/java/app/slaprf/gatecam/GateCamHost.java"),
 		filepath.FromSlash("tools/gatecam/android/java/app/slaprf/gatecam/GateCamShim.java"),
 		filepath.FromSlash("tools/gatecam/android/java/app/slaprf/gatecam/HighSpeedGlPipe.java"),
+		filepath.FromSlash("tools/gatecam/android/java/app/slaprf/gatecam/HighSpeedCodecRing.java"),
 		rJava,
 	)
 

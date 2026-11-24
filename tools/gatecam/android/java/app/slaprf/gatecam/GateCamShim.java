@@ -21,7 +21,6 @@ import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.Image;
-import android.media.ImageReader;
 import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -67,7 +66,9 @@ public final class GateCamShim {
     private static final int RING_W = 640;
     private static final int RING_H = 360;
     private static final int NV21_BYTES = RING_W * RING_H * 3 / 2;
-    private static final int RING_CAP = 264; // ~91 MB static allocation: 4.4s @ 60fps, 2.2s @ 120fps, 1.1s @ 240fps
+    private static final int RING_CAP = 180; // ~62 MB static allocation: 3.0s @ 60fps (120/240fps uses HighSpeedCodecRing)
+    private static final int META_CAP = 1024;
+    private static final int META_MASK = META_CAP - 1;
 
     private static Context appCtx;
     private static volatile Activity activeActivity;
@@ -85,10 +86,13 @@ public final class GateCamShim {
     private static HandlerThread cbThread;
     private static Handler cbHandler;
     private static volatile boolean wantCameraOpen = false;
+    private static boolean cameraOpening = false;
     private static volatile CameraDevice cameraDevice;
     private static volatile CameraCaptureSession captureSession;
     private static HighSpeedGlPipe glPipe;
+    private static volatile HighSpeedCodecRing codecRing;
     private static volatile boolean activeHighSpeedSession = false;
+    private static volatile int activeSessionFps = 0;
     private static boolean sessionClosing = false;
     private static boolean sessionCreating = false;
     private static boolean pendingSessionSwitch = false;
@@ -139,12 +143,16 @@ public final class GateCamShim {
     private static volatile double measuredFps = 60.0;
     private static long prevFrameTsNs = 0;
 
-    // Recent CaptureResult metadata cache (keyed by SENSOR_TIMESTAMP, 64-entry ring)
+    // Recent CaptureResult metadata cache (keyed by SENSOR_TIMESTAMP, 1024-entry ring)
     private static final Object metaLock = new Object();
-    private static final long[] metaTsKey = new long[64];
-    private static final long[] metaExpNs = new long[64];
-    private static final long[] metaSkewNs = new long[64];
+    private static final long[] metaTsKey = new long[META_CAP];
+    private static final long[] metaExpNs = new long[META_CAP];
+    private static final long[] metaSkewNs = new long[META_CAP];
     private static int metaHead = 0;
+    private static volatile long latestCaptureSensorTsNs = 0L;
+    private static volatile boolean ptsEpochCalibrated = false;
+    private static volatile long ptsEpochOffsetNs = 0L;
+    private static volatile boolean loggedSnapDelta = false;
     private static volatile long latestExposureNs = 8_000_000L;
     private static volatile long latestSkewNs = 8_000_000L;
     private static volatile int latestIso = 200;
@@ -291,10 +299,22 @@ public final class GateCamShim {
         });
     }
 
+    private static void scheduleCameraRetryOnControlThread() {
+        if (!wantCameraOpen) return;
+        camHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (wantCameraOpen && cameraDevice == null && !cameraOpening) {
+                    openCameraOnControlThread();
+                }
+            }
+        }, 700);
+    }
+
     @SuppressLint("MissingPermission")
     private static void openCameraOnControlThread() {
         TextureView tv = previewTexture;
-        if (!wantCameraOpen || appCtx == null || tv == null || !tv.isAvailable() || cameraDevice != null) {
+        if (!wantCameraOpen || appCtx == null || tv == null || !tv.isAvailable() || cameraDevice != null || cameraOpening) {
             return;
         }
         try {
@@ -312,7 +332,8 @@ public final class GateCamShim {
                 if (chosen == null) chosen = id;
             }
             if (chosen == null) {
-                lastError = "No camera found";
+                lastError = "Waiting for camera service...";
+                scheduleCameraRetryOnControlThread();
                 return;
             }
             cameraId = chosen;
@@ -394,14 +415,16 @@ public final class GateCamShim {
                 targetFps = 60;
             }
 
+            cameraOpening = true;
             cm.openCamera(cameraId, new CameraDevice.StateCallback() {
                 @Override
                 public void onOpened(final CameraDevice camera) {
                     camHandler.post(new Runnable() {
                         @Override
                         public void run() {
-                            if (!wantCameraOpen) {
-                                camera.close();
+                            cameraOpening = false;
+                            if (!wantCameraOpen || cameraDevice != null) {
+                                try { camera.close(); } catch (Throwable ignored) {}
                                 return;
                             }
                             cameraDevice = camera;
@@ -416,6 +439,7 @@ public final class GateCamShim {
                     camHandler.post(new Runnable() {
                         @Override
                         public void run() {
+                            cameraOpening = false;
                             if (cameraDevice == camera) {
                                 closeCameraOnControlThread();
                             } else {
@@ -430,35 +454,37 @@ public final class GateCamShim {
                     camHandler.post(new Runnable() {
                         @Override
                         public void run() {
+                            cameraOpening = false;
                             lastError = "CameraDevice error " + error;
                             if (cameraDevice == camera) {
                                 closeCameraOnControlThread();
                             } else {
                                 try { camera.close(); } catch (Throwable ignored) {}
                             }
-                            if (wantCameraOpen) {
-                                // Auto-retry (e.g. ERROR_CAMERA_DISABLED=3 while lockscreen is still dismissing)
-                                camHandler.postDelayed(new Runnable() {
-                                    @Override
-                                    public void run() {
-                                        if (wantCameraOpen && cameraDevice == null) {
-                                            openCameraOnControlThread();
-                                        }
-                                    }
-                                }, 650);
-                            }
+                            scheduleCameraRetryOnControlThread();
                         }
                     });
                 }
             }, cbHandler);
         } catch (Throwable t) {
+            cameraOpening = false;
             activeHighSpeedSession = false;
             captureSession = null;
             lastError = String.valueOf(t.getMessage());
+            scheduleCameraRetryOnControlThread();
+        }
+    }
+
+    private static void releaseCodecRingOnControlThread() {
+        HighSpeedCodecRing ring = codecRing;
+        codecRing = null;
+        if (ring != null) {
+            try { ring.release(); } catch (Throwable ignored) {}
         }
     }
 
     private static void closeCameraOnControlThread() {
+        cameraOpening = false;
         sessionClosing = false;
         sessionCreating = false;
         pendingSessionSwitch = false;
@@ -472,11 +498,13 @@ public final class GateCamShim {
         if (cd != null) {
             try { cd.close(); } catch (Throwable ignored) {}
         }
+        releaseCodecRingOnControlThread();
         if (glPipe != null) {
             try { glPipe.release(); } catch (Throwable ignored) {}
             glPipe = null;
         }
         activeHighSpeedSession = false;
+        activeSessionFps = 0;
         boundSurfaceTexture = null;
         synchronized (ringLock) {
             ringHead = 0;
@@ -553,16 +581,45 @@ public final class GateCamShim {
         if (cd == null || pipe == null || pipe.getCameraInputSurface() == null || sessionClosing || sessionCreating) {
             return;
         }
+        // Safe to release previous H.264 encoder here: any prior CaptureSession has already fired onClosed.
+        releaseCodecRingOnControlThread();
+
         synchronized (ringLock) {
             ringHead = 0;
             ringCount = 0;
             prevFrameTsNs = 0;
         }
-        final boolean wantHs = (targetFps >= 120 && supports120Fps && !availableHsFpsRanges.isEmpty());
+        final int sessionFps = targetFps;
+        final boolean wantHs = (sessionFps >= 120 && supports120Fps && !availableHsFpsRanges.isEmpty());
         activeHighSpeedSession = wantHs;
-        pipe.setCaptureConfig(wantHs ? hsCapW : capW, wantHs ? hsCapH : capH, wantHs);
+        activeSessionFps = sessionFps;
+        ptsEpochCalibrated = false;
+        ptsEpochOffsetNs = 0L;
+        loggedSnapDelta = false;
 
-        List<Surface> targets = Collections.singletonList(pipe.getCameraInputSurface());
+        List<Surface> targets;
+        if (wantHs) {
+            HighSpeedCodecRing ring = new HighSpeedCodecRing(
+                    hsCapW,
+                    hsCapH,
+                    sessionFps,
+                    RING_W,
+                    RING_H,
+                    GateCamShim::resolveCodecSensorTimestampNs);
+            if (ring.start() && ring.getInputSurface() != null) {
+                codecRing = ring;
+                pipe.setCaptureConfig(hsCapW, hsCapH, true);
+                targets = Arrays.asList(pipe.getCameraInputSurface(), ring.getInputSurface());
+            } else {
+                ring.release();
+                pipe.setCaptureConfig(hsCapW, hsCapH, false);
+                targets = Collections.singletonList(pipe.getCameraInputSurface());
+            }
+        } else {
+            pipe.setCaptureConfig(capW, capH, false);
+            targets = Collections.singletonList(pipe.getCameraInputSurface());
+        }
+
         sessionCreating = true;
         CameraCaptureSession.StateCallback stateCb = new CameraCaptureSession.StateCallback() {
             @Override
@@ -576,7 +633,7 @@ public final class GateCamShim {
                             return;
                         }
                         boolean curWantHs = (targetFps >= 120 && supports120Fps && !availableHsFpsRanges.isEmpty());
-                        if (pendingSessionSwitch || curWantHs != wantHs) {
+                        if (pendingSessionSwitch || curWantHs != wantHs || (curWantHs && targetFps != sessionFps)) {
                             pendingSessionSwitch = true;
                             sessionClosing = true;
                             try {
@@ -602,6 +659,7 @@ public final class GateCamShim {
                     public void run() {
                         sessionCreating = false;
                         captureSession = null;
+                        releaseCodecRingOnControlThread();
                         lastError = wantHs ? "High-speed session configure failed" : "Capture session configure failed";
                         if (pendingSessionSwitch && cameraDevice == cd && glPipe == pipe) {
                             pendingSessionSwitch = false;
@@ -635,7 +693,9 @@ public final class GateCamShim {
         } catch (Throwable t) {
             sessionCreating = false;
             activeHighSpeedSession = false;
+            activeSessionFps = 0;
             captureSession = null;
+            releaseCodecRingOnControlThread();
             lastError = String.valueOf(t.getMessage());
         }
     }
@@ -716,12 +776,16 @@ public final class GateCamShim {
                 CameraConstrainedHighSpeedCaptureSession hsSession = (CameraConstrainedHighSpeedCaptureSession) captureSession;
                 Surface camSurf = glPipe.getCameraInputSurface();
                 if (camSurf == null) return;
+                Surface encSurf = (codecRing != null) ? codecRing.getInputSurface() : null;
 
                 Range<Integer> hsRange = pickBestHsFpsRange(targetFps);
                 float dist = resolveFixedFocusDiopters();
                 try {
                     CaptureRequest.Builder b = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
                     b.addTarget(camSurf);
+                    if (encSurf != null) {
+                        b.addTarget(encSurf);
+                    }
                     b.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
                     b.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON);
                     b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, hsRange);
@@ -740,6 +804,9 @@ public final class GateCamShim {
                 } catch (IllegalArgumentException iae) {
                     CaptureRequest.Builder b2 = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
                     b2.addTarget(camSurf);
+                    if (encSurf != null) {
+                        b2.addTarget(encSurf);
+                    }
                     b2.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
                     b2.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON);
                     b2.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, hsRange);
@@ -831,25 +898,86 @@ public final class GateCamShim {
             }
 
             if (ts != null) {
+                latestCaptureSensorTsNs = ts;
                 synchronized (metaLock) {
                     metaTsKey[metaHead] = ts;
                     metaExpNs[metaHead] = latestExposureNs;
                     metaSkewNs[metaHead] = latestSkewNs;
-                    metaHead = (metaHead + 1) & 63;
+                    metaHead = (metaHead + 1) & META_MASK;
                 }
             }
         }
     };
 
+    private static long resolveCodecSensorTimestampNs(long presentationTimeUs) {
+        long rawNs = presentationTimeUs * 1000L;
+        if (!ptsEpochCalibrated) {
+            long boot1 = SystemClock.elapsedRealtimeNanos();
+            long mono = System.nanoTime();
+            long boot2 = SystemClock.elapsedRealtimeNanos();
+            long bootNow = (boot1 >>> 1) + (boot2 >>> 1);
+            if (timestampSource == CameraMetadata.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME) {
+                if (Math.abs(bootNow - rawNs) < 5_000_000_000L) {
+                    ptsEpochOffsetNs = 0L;
+                } else if (Math.abs(mono - rawNs) < 5_000_000_000L) {
+                    // GraphicBufferSource converted BOOTTIME -> MONOTONIC; restore exact kernel BOOTTIME-MONOTONIC offset
+                    ptsEpochOffsetNs = bootNow - mono;
+                } else {
+                    long refNs = latestCaptureSensorTsNs > 0L ? latestCaptureSensorTsNs : bootNow;
+                    ptsEpochOffsetNs = refNs - rawNs;
+                }
+            } else {
+                if (Math.abs(mono - rawNs) < 5_000_000_000L) {
+                    ptsEpochOffsetNs = 0L;
+                } else {
+                    long refNs = latestCaptureSensorTsNs > 0L ? latestCaptureSensorTsNs : mono;
+                    ptsEpochOffsetNs = refNs - rawNs;
+                }
+            }
+            ptsEpochCalibrated = true;
+        }
+        long approxNs = rawNs + ptsEpochOffsetNs;
+        // Snap to exact nanosecond SENSOR_TIMESTAMP from TotalCaptureResult (within ±1.5 ms)
+        synchronized (metaLock) {
+            long bestTs = approxNs;
+            long bestDiff = 1_500_000L;
+            for (int k = 1; k <= 256; k++) {
+                int idx = (metaHead - k) & META_MASK;
+                long key = metaTsKey[idx];
+                if (key == 0L) break;
+                long diff = Math.abs(key - approxNs);
+                if (diff < bestDiff) {
+                    bestDiff = diff;
+                    bestTs = key;
+                    if (diff <= 2000L) break;
+                }
+            }
+            if (!loggedSnapDelta && bestTs != approxNs) {
+                loggedSnapDelta = true;
+                android.util.Log.i("GateCamCodec", "Snapped H.264 PTS to Camera2 SENSOR_TIMESTAMP: diffNs=" + bestDiff);
+            }
+            return bestTs;
+        }
+    }
+
     private static void lookupCaptureMeta(long tsNs, long[] outExpAndSkew) {
         outExpAndSkew[0] = latestExposureNs;
         outExpAndSkew[1] = latestSkewNs;
         synchronized (metaLock) {
-            for (int i = 0; i < 64; i++) {
-                if (metaTsKey[i] == tsNs) {
+            long bestDiff = 600_000L;
+            for (int i = 0; i < META_CAP; i++) {
+                long key = metaTsKey[i];
+                if (key == 0L) continue;
+                if (key == tsNs) {
                     outExpAndSkew[0] = metaExpNs[i];
                     outExpAndSkew[1] = metaSkewNs[i];
                     return;
+                }
+                long diff = Math.abs(key - tsNs);
+                if (diff < bestDiff) {
+                    bestDiff = diff;
+                    outExpAndSkew[0] = metaExpNs[i];
+                    outExpAndSkew[1] = metaSkewNs[i];
                 }
             }
         }
@@ -921,84 +1049,10 @@ public final class GateCamShim {
         }
     }
 
-    private static void ingestYuvFrame(Image img) {
-        if (img.getFormat() != ImageFormat.YUV_420_888) return;
-        int srcW = img.getWidth();
-        int srcH = img.getHeight();
-        if (srcW < RING_W || srcH < RING_H) return;
-
-        long tsNs = img.getTimestamp();
-        if (prevFrameTsNs > 0 && tsNs > prevFrameTsNs) {
-            double instFps = 1e9 / (double) (tsNs - prevFrameTsNs);
-            if (instFps >= 15.0 && instFps <= 260.0) {
-                measuredFps = measuredFps * 0.90 + instFps * 0.10;
-            }
-        }
-        prevFrameTsNs = tsNs;
-
-        int rotDeg = computeSensorToDisplayDegrees();
-        lastRotDeg = rotDeg;
-        long[] meta = new long[2];
-        lookupCaptureMeta(tsNs, meta);
-
-        int slot;
-        byte[] dst;
-        synchronized (ringLock) {
-            slot = ringHead;
-            dst = ringNV21[slot];
-        }
-
-        downsampleLandscapeWidescreenToNV21(img, dst, rotDeg);
-
-        synchronized (ringLock) {
-            ringSensorTsNs[slot] = tsNs;
-            ringExposureNs[slot] = meta[0];
-            ringSkewNs[slot] = meta[1];
-            ringHead = (slot + 1) % RING_CAP;
-            if (ringCount < RING_CAP) ringCount++;
-        }
-
-        // Closed-loop Shutter-Priority (Tv) Auto-ISO adjustment every 8 frames when shutterUs > 0
-        if (shutterUs > 0 && (++aeTick & 7) == 0) {
-            int lumaLen = RING_W * RING_H;
-            int step = Math.max(1, lumaLen / 256);
-            long sumY = 0;
-            int cnt = 0;
-            for (int idx = step / 2; idx < lumaLen; idx += step) {
-                sumY += (dst[idx] & 0xFF);
-                cnt++;
-            }
-            if (cnt > 0) {
-                double meanY = (double) sumY / (double) cnt;
-                // Keep scene brightness in a comfortable [92 .. 138] target band around 112
-                if (meanY < 92.0 || meanY > 138.0) {
-                    double ratio = 112.0 / Math.max(10.0, meanY);
-                    double damped = Math.max(0.55, Math.min(2.1, Math.pow(ratio, 0.65)));
-                    final double nextTotalIso = currentTotalIso * damped;
-                    camHandler.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (shutterUs > 0) {
-                                int prevIso = manualIso;
-                                int prevBoost = manualBoost;
-                                updateManualIsoFromTotal(nextTotalIso);
-                                lastSceneEvNsIso = (double) shutterUs * 1000.0 * currentTotalIso;
-                                if (Math.abs(manualIso - prevIso) >= Math.max(10, prevIso / 12)
-                                        || Math.abs(manualBoost - prevBoost) >= 6) {
-                                    applyRepeatingRequestOnControlThread();
-                                }
-                            }
-                        }
-                    });
-                }
-            }
-        }
-    }
-
     /**
-     * Converts sensor YUV_420_888 (e.g. 1280x960 4:3) into an upright 640x360 (16:9) Landscape widescreen
-     * NV21 frame in a single zero-allocation pass. When the phone is held upright in Portrait (rotDeg=90/270),
-     * uses 100% of the sensor's horizontal width (`srcH=960`) and center-crops vertically (`540` of `1280` rows),
+     * Converts sensor/decoder YUV_420_888 (e.g. 1280x960 or 1280x720) into an upright 640x360 (16:9)
+     * Landscape widescreen NV21 frame in a single zero-allocation pass. When the phone is held upright
+     * in Portrait (rotDeg=90/270), uses 100% of the sensor's horizontal width and center-crops vertically,
      * matching the TextureView preview pixel-for-pixel.
      */
     private static void downsampleLandscapeWidescreenToNV21(Image img, byte[] dst, int rotDeg) {
@@ -1010,14 +1064,22 @@ public final class GateCamShim {
         int yPixStride = planes[0].getPixelStride();
         int uvRowStride = planes[1].getRowStride();
         int uvPixStride = planes[1].getPixelStride();
+        int maxYOff = yBuf.limit() - 1;
+        int maxUvOff = Math.min(uBuf.limit(), vBuf.limit()) - 1;
+        if (maxYOff < 0 || maxUvOff < 0) return;
 
         int srcW = img.getWidth();  // 1280
-        int srcH = img.getHeight(); // 960 (or 720)
+        int srcH = img.getHeight(); // 960 or 720
+        Rect crop = img.getCropRect();
+        if (crop != null && crop.width() >= RING_W && crop.height() >= RING_H) {
+            srcW = Math.min(srcW, crop.width());
+            srcH = Math.min(srcH, crop.height());
+        }
 
         if (rotDeg == 90 || rotDeg == 270) {
             boolean rot270 = (rotDeg == 270);
-            int cropH = Math.min(srcW, (srcH * RING_H) / RING_W); // 960 * 360 / 640 = 540
-            int uTop = (srcW - cropH) / 2;                        // (1280 - 540) / 2 = 370
+            int cropH = Math.min(srcW, (srcH * RING_H) / RING_W);
+            int uTop = (srcW - cropH) / 2;
 
             int outIdx = 0;
             for (int dy = 0; dy < RING_H; dy++) {
@@ -1027,24 +1089,25 @@ public final class GateCamShim {
                 for (int dx = 0; dx < RING_W; dx++) {
                     int ux = (dx * srcH) / RING_W;
                     int sy = rot270 ? ux : (srcH - 1 - ux);
-                    dst[outIdx++] = yBuf.get(sy * yRowStride + sxOff);
+                    int yOff = Math.min(maxYOff, Math.max(0, sy * yRowStride + sxOff));
+                    dst[outIdx++] = yBuf.get(yOff);
                 }
             }
 
-            int uvW = RING_W / 2; // 320
-            int uvH = RING_H / 2; // 180
-            int srcUvW = srcW / 2; // 640
-            int srcUvH = srcH / 2; // 480
-            int cropUvH = Math.min(srcUvW, (srcUvH * uvH) / uvW); // 270
-            int uUvTop = (srcUvW - cropUvH) / 2;                  // 185
+            int uvW = RING_W / 2;
+            int uvH = RING_H / 2;
+            int srcUvW = srcW / 2;
+            int srcUvH = srcH / 2;
+            int cropUvH = Math.min(srcUvW, (srcUvH * uvH) / uvW);
+            int uUvTop = (srcUvW - cropUvH) / 2;
             for (int dy = 0; dy < uvH; dy++) {
                 int uy = uUvTop + (dy * cropUvH) / uvH;
                 int sx = rot270 ? (srcUvW - 1 - uy) : uy;
-                int sxOff = Math.min(srcUvW - 2, Math.max(0, sx)) * uvPixStride;
+                int sxOff = Math.min(srcUvW - 1, Math.max(0, sx)) * uvPixStride;
                 for (int dx = 0; dx < uvW; dx++) {
                     int ux = (dx * srcUvH) / uvW;
                     int sy = rot270 ? ux : (srcUvH - 1 - ux);
-                    int off = sy * uvRowStride + sxOff;
+                    int off = Math.min(maxUvOff, Math.max(0, sy * uvRowStride + sxOff));
                     dst[outIdx++] = vBuf.get(off);
                     dst[outIdx++] = uBuf.get(off);
                 }
@@ -1064,7 +1127,8 @@ public final class GateCamShim {
             for (int dx = 0; dx < RING_W; dx++) {
                 int sx = (dx * srcW) / RING_W;
                 if (rot180) sx = srcW - 1 - sx;
-                dst[outIdx++] = yBuf.get(rowBase + sx * yPixStride);
+                int yOff = Math.min(maxYOff, Math.max(0, rowBase + sx * yPixStride));
+                dst[outIdx++] = yBuf.get(yOff);
             }
         }
         int uvW = RING_W / 2;
@@ -1078,9 +1142,9 @@ public final class GateCamShim {
             if (rot180) sy = srcUvH - 1 - sy;
             int rowBase = sy * uvRowStride;
             for (int dx = 0; dx < uvW; dx++) {
-                int sx = Math.min(srcUvW - 2, (dx * srcUvW) / uvW);
-                if (rot180) sx = Math.min(srcUvW - 2, srcUvW - 1 - sx);
-                int off = rowBase + sx * uvPixStride;
+                int sx = Math.min(srcUvW - 1, (dx * srcUvW) / uvW);
+                if (rot180) sx = Math.min(srcUvW - 1, srcUvW - 1 - sx);
+                int off = Math.min(maxUvOff, Math.max(0, rowBase + sx * uvPixStride));
                 dst[outIdx++] = vBuf.get(off);
                 dst[outIdx++] = uBuf.get(off);
             }
@@ -1098,21 +1162,32 @@ public final class GateCamShim {
 
     public static String statusJson() {
         try {
+            int ringCap = RING_CAP;
             int filled;
             double spanMs = 0.0;
             double fpsVal = measuredFps;
-            synchronized (ringLock) {
-                filled = ringCount;
-                if (ringCount >= 2) {
-                    int newest = (ringHead - 1 + RING_CAP) % RING_CAP;
-                    int oldest = (ringHead - ringCount + RING_CAP) % RING_CAP;
-                    long dtNs = ringSensorTsNs[newest] - ringSensorTsNs[oldest];
-                    if (dtNs > 0) spanMs = dtNs / 1e6;
-                    int win = Math.min(ringCount - 1, 32);
-                    int winOld = (ringHead - 1 - win + RING_CAP) % RING_CAP;
-                    long winDtNs = ringSensorTsNs[newest] - ringSensorTsNs[winOld];
-                    if (winDtNs > 0) {
-                        fpsVal = (win * 1e9) / (double) winDtNs;
+            HighSpeedCodecRing hsRing = activeHighSpeedSession ? codecRing : null;
+            if (hsRing != null) {
+                double[] stats = new double[3];
+                hsRing.getStats(stats);
+                ringCap = hsRing.getCapacity();
+                filled = (int) Math.round(stats[0]);
+                spanMs = stats[1];
+                fpsVal = stats[2];
+            } else {
+                synchronized (ringLock) {
+                    filled = ringCount;
+                    if (ringCount >= 2) {
+                        int newest = (ringHead - 1 + RING_CAP) % RING_CAP;
+                        int oldest = (ringHead - ringCount + RING_CAP) % RING_CAP;
+                        long dtNs = ringSensorTsNs[newest] - ringSensorTsNs[oldest];
+                        if (dtNs > 0) spanMs = dtNs / 1e6;
+                        int win = Math.min(ringCount - 1, 32);
+                        int winOld = (ringHead - 1 - win + RING_CAP) % RING_CAP;
+                        long winDtNs = ringSensorTsNs[newest] - ringSensorTsNs[winOld];
+                        if (winDtNs > 0) {
+                            fpsVal = (win * 1e9) / (double) winDtNs;
+                        }
                     }
                 }
             }
@@ -1134,7 +1209,7 @@ public final class GateCamShim {
             o.put("focusMode", focusMode);
             o.put("focusDistDiopters", Math.round(latestFocusDiopters * 100.0) / 100.0);
             o.put("focusLocked", !oneShotAfActive);
-            o.put("ringCapacity", RING_CAP);
+            o.put("ringCapacity", ringCap);
             o.put("ringFilled", filled);
             o.put("ringSpanMs", Math.round(spanMs * 10.0) / 10.0);
             o.put("timestampSource", timestampSource);
@@ -1193,7 +1268,9 @@ public final class GateCamShim {
                 public void run() {
                     if (cameraDevice == null) return;
                     boolean wantHs = (targetFps >= 120 && supports120Fps && !availableHsFpsRanges.isEmpty());
-                    if (wantHs != activeHighSpeedSession || (captureSession == null && !sessionCreating && !sessionClosing)) {
+                    if (wantHs != activeHighSpeedSession
+                            || (wantHs && targetFps != activeSessionFps)
+                            || (captureSession == null && !sessionCreating && !sessionClosing)) {
                         requestSessionSwitchOnControlThread();
                     } else {
                         applyRepeatingRequestOnControlThread();
@@ -1244,6 +1321,10 @@ public final class GateCamShim {
                             CameraConstrainedHighSpeedCaptureSession hsSession = (CameraConstrainedHighSpeedCaptureSession) captureSession;
                             CaptureRequest.Builder trig = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
                             trig.addTarget(glPipe.getCameraInputSurface());
+                            Surface encSurf = (codecRing != null) ? codecRing.getInputSurface() : null;
+                            if (encSurf != null) {
+                                trig.addTarget(encSurf);
+                            }
                             trig.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
                             trig.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON);
                             trig.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, pickBestHsFpsRange(targetFps));
@@ -1294,10 +1375,18 @@ public final class GateCamShim {
 
     public static byte[] latestPreviewJpeg() {
         byte[] copy = null;
-        synchronized (ringLock) {
-            if (ringCount > 0) {
-                int newest = (ringHead - 1 + RING_CAP) % RING_CAP;
-                copy = Arrays.copyOf(ringNV21[newest], NV21_BYTES);
+        HighSpeedCodecRing hsRing = activeHighSpeedSession ? codecRing : null;
+        if (hsRing != null) {
+            int rotDeg = computeSensorToDisplayDegrees();
+            lastRotDeg = rotDeg;
+            copy = hsRing.decodeLatestFrameNV21(rotDeg, GateCamShim::downsampleLandscapeWidescreenToNV21);
+        }
+        if (copy == null) {
+            synchronized (ringLock) {
+                if (ringCount > 0) {
+                    int newest = (ringHead - 1 + RING_CAP) % RING_CAP;
+                    copy = Arrays.copyOf(ringNV21[newest], NV21_BYTES);
+                }
             }
         }
         if (copy == null) return null;
@@ -1346,22 +1435,42 @@ public final class GateCamShim {
             double p2y = gateObj != null ? gateObj.optDouble("p2y", 0.86) : 0.86;
             double bandNorm = gateObj != null ? gateObj.optDouble("bandHalfWidthNorm", 0.18) : 0.18;
 
-            // 1. Copy matching ring slots under lock in < 1 ms so live Camera2 capture never stalls
+            // 1. Decode matching H.264 FIFO burst slice (120/240 fps) or copy raw NV21 ring slots (60 fps)
             List<byte[]> slicedNV21 = new ArrayList<>();
             List<Long> slicedTs = new ArrayList<>();
             List<Long> slicedExp = new ArrayList<>();
             List<Long> slicedSkew = new ArrayList<>();
 
-            synchronized (ringLock) {
-                int oldest = (ringHead - ringCount + RING_CAP) % RING_CAP;
-                for (int i = 0; i < ringCount; i++) {
-                    int idx = (oldest + i) % RING_CAP;
-                    long ts = ringSensorTsNs[idx];
-                    if (ts >= startNs && ts <= endNs) {
-                        slicedNV21.add(Arrays.copyOf(ringNV21[idx], NV21_BYTES));
-                        slicedTs.add(ts);
-                        slicedExp.add(ringExposureNs[idx]);
-                        slicedSkew.add(ringSkewNs[idx]);
+            HighSpeedCodecRing hsRing = activeHighSpeedSession ? codecRing : null;
+            if (hsRing != null) {
+                int rotDeg = computeSensorToDisplayDegrees();
+                lastRotDeg = rotDeg;
+                List<HighSpeedCodecRing.DecodedFrame> decoded = hsRing.decodeWindowToNV21(
+                        startNs,
+                        endNs,
+                        180,
+                        rotDeg,
+                        GateCamShim::downsampleLandscapeWidescreenToNV21);
+                long[] meta = new long[2];
+                for (HighSpeedCodecRing.DecodedFrame df : decoded) {
+                    lookupCaptureMeta(df.sensorTsNs, meta);
+                    slicedNV21.add(df.nv21);
+                    slicedTs.add(df.sensorTsNs);
+                    slicedExp.add(meta[0]);
+                    slicedSkew.add(meta[1]);
+                }
+            } else {
+                synchronized (ringLock) {
+                    int oldest = (ringHead - ringCount + RING_CAP) % RING_CAP;
+                    for (int i = 0; i < ringCount; i++) {
+                        int idx = (oldest + i) % RING_CAP;
+                        long ts = ringSensorTsNs[idx];
+                        if (ts >= startNs && ts <= endNs) {
+                            slicedNV21.add(Arrays.copyOf(ringNV21[idx], NV21_BYTES));
+                            slicedTs.add(ts);
+                            slicedExp.add(ringExposureNs[idx]);
+                            slicedSkew.add(ringSkewNs[idx]);
+                        }
                     }
                 }
             }
