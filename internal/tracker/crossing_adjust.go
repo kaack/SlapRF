@@ -30,234 +30,274 @@ func startFinishGateIDFrom(ordered []domain.TrackGate) uint8 {
 	return 1
 }
 
-func clampCrossingTargetTimestamp(
-	crossings []domain.GateCrossingEvent,
-	laps []domain.LapRecord,
+func gateFromOrdered(ordered []domain.TrackGate, gateID uint8) domain.TrackGate {
+	for _, g := range ordered {
+		if g.GateID == gateID {
+			return g
+		}
+	}
+	return domain.TrackGate{GateID: gateID, Role: domain.GateRoleSectorGate}
+}
+
+func gateLabelFromOrdered(ordered []domain.TrackGate, detected map[uint8]*domain.DetectedTimer, gateID uint8) string {
+	for i, g := range ordered {
+		if g.GateID == gateID {
+			if n := strings.TrimSpace(g.Name); n != "" {
+				return n
+			}
+			if g.AssignedTimerID > 0 && detected != nil {
+				if d, ok := detected[g.AssignedTimerID]; ok && strings.TrimSpace(d.TimerLabel) != "" {
+					return strings.TrimSpace(d.TimerLabel)
+				}
+			}
+			if n := strings.TrimSpace(g.TimerLabel); n != "" {
+				return n
+			}
+			return fmt.Sprintf("Gate %d", i+1)
+		}
+	}
+	return fmt.Sprintf("Gate %d", gateID)
+}
+
+func sortCrossingsChronological(list []domain.GateCrossingEvent) {
+	sort.SliceStable(list, func(a, b int) bool {
+		if list[a].TimestampUs != list[b].TimestampUs {
+			return list[a].TimestampUs < list[b].TimestampUs
+		}
+		return list[a].EventID < list[b].EventID
+	})
+}
+
+// replayPilotCrossingsLocked evaluates all crossings for `slotIndex` in chronological order
+// against `orderedGates` and `globalRules` (including per-gate and per-pilot overrides),
+// marking rule-violating crossings (`MIN_LAP`, `OUT_OF_ORDER`) via `InvalidReason`/`InvalidDetail`
+// while rebuilding that pilot's counted laps and section splits from valid crossings.
+func (e *Engine) replayPilotCrossingsLocked(
+	allCrossings []domain.GateCrossingEvent,
+	prevAllLaps []domain.LapRecord,
 	orderedGates []domain.TrackGate,
-	movedIdx int,
-	requestedTsUs uint64,
-) uint64 {
-	moved := crossings[movedIdx]
-	oldTsUs := moved.TimestampUs
-	slotIndex := moved.SlotIndex
-	sfGateID := startFinishGateIDFrom(orderedGates)
-	movedIsSF := moved.IsStartFinish || moved.GateID == sfGateID
-
-	var minUs uint64 = 1
-	var maxUs uint64 = math.MaxUint64 - 1_000_000
-
-	for i, c := range crossings {
-		if i == movedIdx || c.SlotIndex != slotIndex {
-			continue
-		}
-		cIsSF := c.IsStartFinish || c.GateID == sfGateID
-		if c.GateID == moved.GateID || (movedIsSF && cIsSF) {
-			if c.TimestampUs <= oldTsUs && c.TimestampUs+50_000 > minUs {
-				minUs = c.TimestampUs + 50_000
+	detected map[uint8]*domain.DetectedTimer,
+	globalRules domain.TimingRules,
+	slotIndex int,
+	defaultCallsign string,
+) ([]domain.GateCrossingEvent, []domain.LapRecord) {
+	otherCrossings := make([]domain.GateCrossingEvent, 0, len(allCrossings))
+	pilotCrossings := make([]domain.GateCrossingEvent, 0, len(allCrossings))
+	for _, c := range allCrossings {
+		if c.SlotIndex == slotIndex {
+			if c.Callsign != "" && defaultCallsign == "" {
+				defaultCallsign = c.Callsign
 			}
-			if c.TimestampUs >= oldTsUs && c.TimestampUs > 50_000 && c.TimestampUs-50_000 < maxUs {
-				maxUs = c.TimestampUs - 50_000
+			pilotCrossings = append(pilotCrossings, c)
+		} else {
+			otherCrossings = append(otherCrossings, c)
+		}
+	}
+	sortCrossingsChronological(pilotCrossings)
+
+	otherLaps := make([]domain.LapRecord, 0, len(prevAllLaps))
+	prevPilotLaps := make([]domain.LapRecord, 0, len(prevAllLaps))
+	for _, l := range prevAllLaps {
+		if l.SlotIndex == slotIndex {
+			if l.Callsign != "" && defaultCallsign == "" {
+				defaultCallsign = l.Callsign
+			}
+			prevPilotLaps = append(prevPilotLaps, l)
+		} else {
+			otherLaps = append(otherLaps, l)
+		}
+	}
+	if defaultCallsign == "" {
+		for _, p := range e.pilots {
+			if p.SlotIndex == slotIndex && p.Callsign != "" {
+				defaultCallsign = p.Callsign
+				break
 			}
 		}
 	}
-
-	for _, l := range laps {
-		if l.SlotIndex != slotIndex || l.CompletedAtUs == 0 {
-			continue
-		}
-		origEnd := l.CompletedAtUs
-		origStart := uint64(0)
-		if l.LapTimeSec > 0 && float64(origEnd) > l.LapTimeSec*1e6 {
-			origStart = uint64(math.Round(float64(origEnd) - l.LapTimeSec*1e6))
-		}
-		if movedIsSF {
-			if absDiffUs(origEnd, oldTsUs) <= 50_000 {
-				if origStart+100_000 > minUs {
-					minUs = origStart + 100_000
-				}
-			}
-			if absDiffUs(origStart, oldTsUs) <= 50_000 {
-				if origEnd > 100_000 && origEnd-100_000 < maxUs {
-					maxUs = origEnd - 100_000
-				}
-			}
-		} else if oldTsUs+50_000 >= origStart && oldTsUs <= origEnd+10_000 {
-			if origStart+20_000 > minUs {
-				minUs = origStart + 20_000
-			}
-			if origEnd > 20_000 && origEnd-20_000 < maxUs {
-				maxUs = origEnd - 20_000
-			}
-			break
-		}
+	if defaultCallsign == "" {
+		defaultCallsign = fmt.Sprintf("P%d", slotIndex)
 	}
 
-	if !movedIsSF {
-		// If on an in-progress lap after the latest Start/Finish pass, keep after that Start/Finish pass.
-		var lastSfBefore uint64
-		hasLaterSf := false
-		for i, c := range crossings {
-			if i == movedIdx || c.SlotIndex != slotIndex {
+	usedPrevLap := make([]bool, len(prevPilotLaps))
+	matchPrevLap := func(completedAtUs uint64) *domain.LapRecord {
+		bestIdx := -1
+		var bestDiff uint64 = math.MaxUint64
+		for i := range prevPilotLaps {
+			if usedPrevLap[i] {
 				continue
 			}
-			if c.IsStartFinish || c.GateID == sfGateID {
-				if c.TimestampUs <= oldTsUs && c.TimestampUs > lastSfBefore {
-					lastSfBefore = c.TimestampUs
-				} else if c.TimestampUs > oldTsUs {
-					hasLaterSf = true
-				}
+			d := absDiffUs(prevPilotLaps[i].CompletedAtUs, completedAtUs)
+			if d <= 50_000 && d < bestDiff {
+				bestDiff = d
+				bestIdx = i
 			}
 		}
-		if lastSfBefore > 0 && !hasLaterSf && lastSfBefore+20_000 > minUs {
-			minUs = lastSfBefore + 20_000
+		if bestIdx >= 0 {
+			usedPrevLap[bestIdx] = true
+			return &prevPilotLaps[bestIdx]
 		}
+		return nil
 	}
 
-	if minUs > maxUs {
-		return requestedTsUs
-	}
-	if requestedTsUs < minUs {
-		return minUs
-	}
-	if requestedTsUs > maxUs {
-		return maxUs
-	}
-	return requestedTsUs
-}
-
-func rebuildLapSectorsFromCrossings(
-	crossings []domain.GateCrossingEvent,
-	orderedGates []domain.TrackGate,
-	detected map[uint8]*domain.DetectedTimer,
-	slotIndex int,
-	sfGateID uint8,
-	startUs uint64,
-	endUs uint64,
-) []domain.SectorSplit {
-	var sectorEvents []domain.GateCrossingEvent
-	lastGate := sfGateID
-	lastIdx := indexOfGate(orderedGates, sfGateID)
-	for _, c := range crossings {
-		if c.SlotIndex != slotIndex {
-			continue
-		}
-		if c.TimestampUs <= startUs || c.TimestampUs >= endUs {
-			continue
-		}
-		if c.IsStartFinish || c.GateID == sfGateID {
-			continue
-		}
-		if c.GateID == lastGate {
-			continue
-		}
-		candIdx := indexOfGate(orderedGates, c.GateID)
-		if lastIdx >= 0 && candIdx >= 0 && candIdx <= lastIdx {
-			continue
-		}
-		sectorEvents = append(sectorEvents, c)
-		lastGate = c.GateID
-		if candIdx >= 0 {
-			lastIdx = candIdx
-		}
-	}
-
-	rebuilt := make([]domain.SectorSplit, 0, len(sectorEvents)+1)
-	prevGate := sfGateID
-	prevTs := startUs
-	for _, sc := range sectorEvents {
-		rebuilt = append(rebuilt, domain.SectorSplit{
-			SectorIndex:  len(rebuilt) + 1,
-			FromGateID:   prevGate,
-			ToGateID:     sc.GateID,
-			Label:        sectionLabelFromGates(orderedGates, detected, prevGate, sc.GateID),
-			SplitSeconds: round3(seconds(prevTs, sc.TimestampUs)),
-			ExitSpeedMph: sc.EstimatedSpeedMph,
-			Badge:        domain.BadgeNormal,
-		})
-		prevGate = sc.GateID
-		prevTs = sc.TimestampUs
-	}
-	if len(rebuilt) > 0 || len(orderedGates) <= 1 {
-		rebuilt = append(rebuilt, domain.SectorSplit{
-			SectorIndex:  len(rebuilt) + 1,
-			FromGateID:   prevGate,
-			ToGateID:     sfGateID,
-			Label:        sectionLabelFromGates(orderedGates, detected, prevGate, sfGateID),
-			SplitSeconds: round3(seconds(prevTs, endUs)),
-			Badge:        domain.BadgeNormal,
-		})
-	}
-	return rebuilt
-}
-
-func recalculatePilotLapsOnCrossingMove(
-	laps []domain.LapRecord,
-	crossings []domain.GateCrossingEvent,
-	orderedGates []domain.TrackGate,
-	detected map[uint8]*domain.DetectedTimer,
-	slotIndex int,
-	moved domain.GateCrossingEvent,
-	oldTsUs uint64,
-	newTsUs uint64,
-) {
 	sfGateID := startFinishGateIDFrom(orderedGates)
-	if moved.IsStartFinish {
-		sfGateID = moved.GateID
-	}
-	movedIsSF := moved.IsStartFinish || moved.GateID == sfGateID
-	deltaMs := (int64(newTsUs) - int64(oldTsUs)) / 1000
+	hasSFGate := len(orderedGates) > 0 && orderedGates[0].Role == domain.GateRoleStartFinish
+	lastAcceptedGateUs := make(map[uint8]uint64, len(orderedGates))
+	var prog pilotProgress
+	rebuiltPilotLaps := make([]domain.LapRecord, 0, len(prevPilotLaps)+1)
 
-	for i := range laps {
-		l := &laps[i]
-		if l.SlotIndex != slotIndex || l.CompletedAtUs == 0 {
+	for i := range pilotCrossings {
+		c := &pilotCrossings[i]
+		gate := gateFromOrdered(orderedGates, c.GateID)
+		r := gate.RulesForPilot(globalRules, slotIndex)
+		isSF := gate.Role == domain.GateRoleStartFinish || c.GateID == sfGateID
+		c.IsStartFinish = isSF
+		c.StartedLap = false
+		c.InvalidReason = ""
+		c.InvalidDetail = ""
+		if c.Callsign == "" {
+			c.Callsign = defaultCallsign
+		}
+		gateLbl := gateLabelFromOrdered(orderedGates, detected, c.GateID)
+		if c.GateName == "" {
+			c.GateName = gateLbl
+		}
+
+		// 1. Stale progress: pilot landed/stopped for longer than MaxLapSec.
+		if prog.lastGateID != 0 && seconds(prog.lastGateTimeUs, c.TimestampUs) > r.MaxLapSec {
+			prog = pilotProgress{}
+		}
+
+		// 2. Sector gate before Start/Finish begins the first lap.
+		if !isSF && prog.lapStartUs == 0 && hasSFGate {
+			sfLbl := gateLabelFromOrdered(orderedGates, detected, orderedGates[0].GateID)
+			c.InvalidReason = domain.FilterOutOfOrder
+			c.InvalidDetail = fmt.Sprintf("%s before %s (Start/Finish) - waiting for lap start", gateLbl, sfLbl)
 			continue
 		}
-		origEnd := l.CompletedAtUs
-		origStart := uint64(0)
-		if l.LapTimeSec > 0 && float64(origEnd) > l.LapTimeSec*1e6 {
-			origStart = uint64(math.Round(float64(origEnd) - l.LapTimeSec*1e6))
-		} else if i > 0 && laps[i-1].SlotIndex == slotIndex {
-			origStart = laps[i-1].CompletedAtUs
+
+		// 3. Minimum lap time on Start/Finish and per-timer independent MinLapSec.
+		if isSF && prog.lapStartUs != 0 {
+			if lapSec := seconds(prog.lapStartUs, c.TimestampUs); lapSec < r.MinLapSec {
+				c.InvalidReason = domain.FilterMinLap
+				c.InvalidDetail = fmt.Sprintf("Lap would be %.2fs (min lap %.1fs)", lapSec, r.MinLapSec)
+				continue
+			}
 		}
-
-		newStart := origStart
-		newEnd := origEnd
-		touched := false
-
-		if movedIsSF {
-			if absDiffUs(origEnd, oldTsUs) <= 50_000 {
-				newEnd = newTsUs
-				if l.CompletedAtMs > 0 {
-					l.CompletedAtMs += deltaMs
+		if prevUs, ok := lastAcceptedGateUs[c.GateID]; ok {
+			if sinceSame := seconds(prevUs, c.TimestampUs); sinceSame < r.MinLapSec {
+				c.InvalidReason = domain.FilterMinLap
+				if isSF {
+					c.InvalidDetail = fmt.Sprintf("Lap would be %.2fs (min lap %.1fs)", sinceSame, r.MinLapSec)
+				} else {
+					c.InvalidDetail = fmt.Sprintf("%s again after %.2fs - quicker than min lap (%.1fs)", gateLbl, sinceSame, r.MinLapSec)
 				}
-				touched = true
+				continue
 			}
-			if absDiffUs(origStart, oldTsUs) <= 50_000 {
-				newStart = newTsUs
-				touched = true
-			}
-		} else if (oldTsUs+50_000 >= origStart && oldTsUs <= origEnd+10_000) ||
-			(newTsUs+50_000 >= origStart && newTsUs <= origEnd+10_000) {
-			touched = true
 		}
 
-		if !touched {
-			continue
+		// 4. Sequential track order around the loop.
+		if !isSF && prog.lapStartUs != 0 && prog.lastGateID != 0 && len(orderedGates) >= 2 {
+			lastIdx := indexOfGate(orderedGates, prog.lastGateID)
+			candIdx := indexOfGate(orderedGates, c.GateID)
+			if lastIdx >= 0 && candIdx >= 0 && candIdx <= lastIdx {
+				nextIdx := (lastIdx + 1) % len(orderedGates)
+				lastLbl := gateLabelFromOrdered(orderedGates, detected, prog.lastGateID)
+				nextLbl := gateLabelFromOrdered(orderedGates, detected, orderedGates[nextIdx].GateID)
+				c.InvalidReason = domain.FilterOutOfOrder
+				c.InvalidDetail = fmt.Sprintf("%s out of track order after %s (expecting %s)", gateLbl, lastLbl, nextLbl)
+				continue
+			}
 		}
-		l.CompletedAtUs = newEnd
-		if newEnd > newStart {
-			l.LapTimeSec = round3(seconds(newStart, newEnd))
+
+		// ---- Valid crossing ----
+		lastAcceptedGateUs[c.GateID] = c.TimestampUs
+		if prog.lapStartUs != 0 && prog.lastGateID != 0 && prog.lastGateID != c.GateID {
+			prog.currentSectors = append(prog.currentSectors, domain.SectorSplit{
+				SectorIndex:  len(prog.currentSectors) + 1,
+				FromGateID:   prog.lastGateID,
+				ToGateID:     c.GateID,
+				Label:        sectionLabelFromGates(orderedGates, detected, prog.lastGateID, c.GateID),
+				SplitSeconds: round3(seconds(prog.lastGateTimeUs, c.TimestampUs)),
+				ExitSpeedMph: c.EstimatedSpeedMph,
+				Badge:        domain.BadgeNormal,
+			})
 		}
-		l.Sectors = rebuildLapSectorsFromCrossings(
-			crossings,
-			orderedGates,
-			detected,
-			slotIndex,
-			sfGateID,
-			newStart,
-			newEnd,
-		)
+
+		if isSF {
+			if prog.lapStartUs != 0 {
+				lapSec := seconds(prog.lapStartUs, c.TimestampUs)
+				if lapSec > r.MaxLapSec {
+					c.StartedLap = true
+				} else {
+					if len(prog.currentSectors) == 0 && prog.lastGateID == c.GateID {
+						prog.currentSectors = append(prog.currentSectors, domain.SectorSplit{
+							SectorIndex:  1,
+							FromGateID:   c.GateID,
+							ToGateID:     c.GateID,
+							Label:        sectionLabelFromGates(orderedGates, detected, c.GateID, c.GateID),
+							SplitSeconds: round3(lapSec),
+							ExitSpeedMph: c.EstimatedSpeedMph,
+							Badge:        domain.BadgeNormal,
+						})
+					}
+					prevMatch := matchPrevLap(c.TimestampUs)
+					var lapID uint64
+					var completedMs int64
+					var invalidated bool
+					if prevMatch != nil {
+						lapID = prevMatch.LapID
+						completedMs = prevMatch.CompletedAtMs
+						invalidated = prevMatch.Invalidated
+					} else {
+						e.nextLapID++
+						lapID = e.nextLapID
+						completedMs = e.wallClockMsForTimestampLocked(c.TimestampUs)
+					}
+					rebuiltPilotLaps = append(rebuiltPilotLaps, domain.LapRecord{
+						LapID:         lapID,
+						SlotIndex:     slotIndex,
+						Callsign:      defaultCallsign,
+						LapNumber:     len(rebuiltPilotLaps) + 1,
+						LapTimeSec:    round3(lapSec),
+						Sectors:       append([]domain.SectorSplit(nil), prog.currentSectors...),
+						CompletedAtUs: c.TimestampUs,
+						CompletedAtMs: completedMs,
+						Invalidated:   invalidated,
+					})
+				}
+			} else {
+				c.StartedLap = true
+			}
+			prog.lapStartUs = c.TimestampUs
+			prog.currentSectors = nil
+			prog.prevGateID = 0
+			prog.prevGateTimeUs = 0
+		} else if prog.lastGateID != c.GateID {
+			prog.prevGateID = prog.lastGateID
+			prog.prevGateTimeUs = prog.lastGateTimeUs
+		}
+
+		prog.lastGateID = c.GateID
+		prog.lastGateTimeUs = c.TimestampUs
 	}
+
+	mergedCrossings := make([]domain.GateCrossingEvent, 0, len(otherCrossings)+len(pilotCrossings))
+	mergedCrossings = append(mergedCrossings, otherCrossings...)
+	mergedCrossings = append(mergedCrossings, pilotCrossings...)
+	sortCrossingsChronological(mergedCrossings)
+
+	mergedLaps := make([]domain.LapRecord, 0, len(otherLaps)+len(rebuiltPilotLaps))
+	mergedLaps = append(mergedLaps, otherLaps...)
+	mergedLaps = append(mergedLaps, rebuiltPilotLaps...)
+	sort.SliceStable(mergedLaps, func(a, b int) bool {
+		if mergedLaps[a].CompletedAtUs != mergedLaps[b].CompletedAtUs {
+			return mergedLaps[a].CompletedAtUs < mergedLaps[b].CompletedAtUs
+		}
+		return mergedLaps[a].LapID < mergedLaps[b].LapID
+	})
+
+	return mergedCrossings, mergedLaps
 }
 
 func (e *Engine) rebuildPilotLiveProgressFromCrossingsLocked(slotIndex int, orderedGates []domain.TrackGate) {
@@ -271,7 +311,7 @@ func (e *Engine) rebuildPilotLiveProgressFromCrossingsLocked(slotIndex int, orde
 	var lastSf *domain.GateCrossingEvent
 	for i := range e.crossings {
 		c := &e.crossings[i]
-		if c.SlotIndex != slotIndex {
+		if c.SlotIndex != slotIndex || c.InvalidReason != "" {
 			continue
 		}
 		e.lastAcceptedUs[detectorKey(c.GateID, slotIndex)] = c.TimestampUs
@@ -292,7 +332,7 @@ func (e *Engine) rebuildPilotLiveProgressFromCrossingsLocked(slotIndex int, orde
 	lastIdx := indexOfGate(orderedGates, lastSf.GateID)
 	for i := range e.crossings {
 		c := e.crossings[i]
-		if c.SlotIndex != slotIndex || c.TimestampUs <= lastSf.TimestampUs {
+		if c.SlotIndex != slotIndex || c.InvalidReason != "" || c.TimestampUs <= lastSf.TimestampUs {
 			continue
 		}
 		if c.IsStartFinish || c.GateID == sfGateID || c.GateID == prog.lastGateID {
@@ -341,9 +381,183 @@ func (e *Engine) rebuildPilotLiveProgressFromCrossingsLocked(slotIndex int, orde
 	e.progress[slotIndex] = prog
 }
 
+func (e *Engine) orderedGatesForPracticeSessionLocked(target *domain.PracticeSession) []domain.TrackGate {
+	if target.TrackInitialized || len(target.TrackSnapshot) > 0 {
+		orderedGates := append([]domain.TrackGate(nil), target.TrackSnapshot...)
+		sort.SliceStable(orderedGates, func(a, b int) bool {
+			return orderedGates[a].TrackOrder < orderedGates[b].TrackOrder
+		})
+		return orderedGates
+	}
+	return e.orderedGatesLocked()
+}
+
+func (e *Engine) rebuildRootSectorBestsLocked() {
+	e.overallBestSec = make(map[string]float64)
+	e.pilotBestSec = make(map[string]float64)
+	e.sectorHistory = make(map[string][]domain.SectorSplit)
+	for _, lap := range e.laps {
+		if lap.Invalidated {
+			continue
+		}
+		for _, split := range lap.Sectors {
+			pKey := pairKey(split.FromGateID, split.ToGateID)
+			sKey := sectorKey(lap.SlotIndex, pKey)
+			e.sectorHistory[sKey] = append(e.sectorHistory[sKey], split)
+			if split.SplitSeconds > 0 {
+				if e.overallBestSec[pKey] == 0 || split.SplitSeconds < e.overallBestSec[pKey] {
+					e.overallBestSec[pKey] = split.SplitSeconds
+				}
+				if e.pilotBestSec[sKey] == 0 || split.SplitSeconds < e.pilotBestSec[sKey] {
+					e.pilotBestSec[sKey] = split.SplitSeconds
+				}
+			}
+		}
+	}
+}
+
+func (e *Engine) newManualCrossingEventLocked(
+	orderedGates []domain.TrackGate,
+	gateID uint8,
+	slotIndex int,
+	timestampUs uint64,
+	peakRSSIDbm *float32,
+	callsignOverride string,
+) (domain.GateCrossingEvent, error) {
+	if gateID == 0 || slotIndex <= 0 || timestampUs == 0 {
+		return domain.GateCrossingEvent{}, fmt.Errorf("gateId, slotIndex, and timestampUs must be positive")
+	}
+	foundGate := false
+	var gate domain.TrackGate
+	for _, g := range orderedGates {
+		if g.GateID == gateID {
+			gate = g
+			foundGate = true
+			break
+		}
+	}
+	if !foundGate {
+		return domain.GateCrossingEvent{}, ErrUnknownGate
+	}
+	callsign := strings.TrimSpace(callsignOverride)
+	var freq uint16
+	for _, p := range e.pilots {
+		if p.SlotIndex == slotIndex {
+			if callsign == "" {
+				callsign = p.Callsign
+			}
+			freq = p.FrequencyMHz
+			break
+		}
+	}
+	if callsign == "" {
+		callsign = fmt.Sprintf("P%d", slotIndex)
+	}
+	var peak float32 = -55.0
+	if peakRSSIDbm != nil && !math.IsNaN(float64(*peakRSSIDbm)) && !math.IsInf(float64(*peakRSSIDbm), 0) {
+		peak = *peakRSSIDbm
+	}
+	e.nextEventID++
+	if e.passingNumbers == nil {
+		e.passingNumbers = make(map[uint8]uint32)
+	}
+	e.passingNumbers[gateID]++
+	sfGateID := startFinishGateIDFrom(orderedGates)
+	return domain.GateCrossingEvent{
+		EventID:       e.nextEventID,
+		GateID:        gateID,
+		GateName:      gateLabelFromOrdered(orderedGates, e.detected, gateID),
+		IsStartFinish: gate.Role == domain.GateRoleStartFinish || gateID == sfGateID,
+		SlotIndex:     slotIndex,
+		Callsign:      callsign,
+		FrequencyMHz:  freq,
+		TimestampUs:   timestampUs,
+		PeakRSSIDbm:   peak,
+		PassingNumber: e.passingNumbers[gateID],
+		Manual:        true,
+	}, nil
+}
+
+// AddPracticeSessionCrossing inserts a manual crossing on `gateID` for `slotIndex` at `timestampUs`
+// and replays the pilot's session crossings against timing and sequential track-order rules.
+func (e *Engine) AddPracticeSessionCrossing(
+	sessionID string,
+	gateID uint8,
+	slotIndex int,
+	timestampUs uint64,
+	peakRSSIDbm *float32,
+) (domain.PracticeManagerState, uint64, error) {
+	e.mu.Lock()
+	targetID := strings.TrimSpace(sessionID)
+	if targetID == "" || strings.EqualFold(targetID, "current") {
+		targetID = e.practiceState.SelectedSessionID
+		if targetID == "" {
+			targetID = e.practiceState.ActiveSessionID
+		}
+	}
+	target := e.findPracticeSessionLocked(targetID)
+	if target == nil {
+		snap := clonePracticeManagerState(e.practiceState)
+		e.mu.Unlock()
+		return snap, 0, fmt.Errorf("practice session %q not found", sessionID)
+	}
+
+	isActive := target.Active && e.practiceState.ActiveSessionID == target.SessionID && !e.isLiveRaceHeatActiveLocked()
+	if isActive && len(e.crossings) > len(target.Crossings) {
+		e.syncActivePracticeRecordsLocked()
+	}
+
+	orderedGates := e.orderedGatesForPracticeSessionLocked(target)
+	var callsign string
+	for _, sp := range target.Pilots {
+		if sp.SlotIndex == slotIndex && sp.Callsign != "" {
+			callsign = sp.Callsign
+			break
+		}
+	}
+	ev, err := e.newManualCrossingEventLocked(orderedGates, gateID, slotIndex, timestampUs, peakRSSIDbm, callsign)
+	if err != nil {
+		snap := clonePracticeManagerState(e.practiceState)
+		e.mu.Unlock()
+		return snap, 0, err
+	}
+	for _, c := range target.Crossings {
+		if c.EventID >= ev.EventID {
+			ev.EventID = c.EventID + 1
+			e.nextEventID = ev.EventID
+		}
+	}
+
+	target.Crossings = append(target.Crossings, ev)
+	target.Crossings, target.Laps = e.replayPilotCrossingsLocked(
+		target.Crossings,
+		target.Laps,
+		orderedGates,
+		e.detected,
+		e.rules,
+		slotIndex,
+		ev.Callsign,
+	)
+	e.recomputePracticeSessionLapsLocked(target)
+	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+
+	if isActive {
+		e.crossings = append([]domain.GateCrossingEvent(nil), target.Crossings...)
+		e.syncActivePracticeLapsLocked(target)
+		e.rebuildPilotLiveProgressFromCrossingsLocked(slotIndex, orderedGates)
+	}
+	target.Summaries = e.computePracticeSessionSummariesLocked(target)
+
+	practiceSnap := clonePracticeManagerState(e.practiceState)
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	e.notifyPracticeUpdated(practiceSnap, subs)
+	return practiceSnap, ev.EventID, nil
+}
+
 // AdjustPracticeSessionCrossing moves a recorded gate crossing in a Practice session to
-// `newTimestampUs` (clamped within neighboring pass boundaries) and recalculates all affected
-// lap durations, sector splits, personal/overall best badges, and session summaries.
+// `newTimestampUs` and replays all crossings for that pilot against timing and track-order rules.
 func (e *Engine) AdjustPracticeSessionCrossing(
 	sessionID string,
 	eventID uint64,
@@ -387,37 +601,23 @@ func (e *Engine) AdjustPracticeSessionCrossing(
 		return snap, fmt.Errorf("crossing %d not found in practice session %q", eventID, target.SessionID)
 	}
 
-	var orderedGates []domain.TrackGate
-	if target.TrackInitialized || len(target.TrackSnapshot) > 0 {
-		orderedGates = append([]domain.TrackGate(nil), target.TrackSnapshot...)
-		sort.SliceStable(orderedGates, func(a, b int) bool {
-			return orderedGates[a].TrackOrder < orderedGates[b].TrackOrder
-		})
-	} else {
-		orderedGates = e.orderedGatesLocked()
-	}
-
-	movedCopy := target.Crossings[movedIdx]
-	oldTsUs := movedCopy.TimestampUs
-	clampedTsUs := clampCrossingTargetTimestamp(target.Crossings, target.Laps, orderedGates, movedIdx, newTimestampUs)
-
-	target.Crossings[movedIdx].TimestampUs = clampedTsUs
+	orderedGates := e.orderedGatesForPracticeSessionLocked(target)
+	slotIndex := target.Crossings[movedIdx].SlotIndex
+	callsign := target.Crossings[movedIdx].Callsign
+	target.Crossings[movedIdx].TimestampUs = newTimestampUs
+	target.Crossings[movedIdx].Manual = true
 	if peakRSSIDbm != nil && !math.IsNaN(float64(*peakRSSIDbm)) && !math.IsInf(float64(*peakRSSIDbm), 0) {
 		target.Crossings[movedIdx].PeakRSSIDbm = *peakRSSIDbm
 	}
-	sort.SliceStable(target.Crossings, func(a, b int) bool {
-		return target.Crossings[a].TimestampUs < target.Crossings[b].TimestampUs
-	})
 
-	recalculatePilotLapsOnCrossingMove(
-		target.Laps,
+	target.Crossings, target.Laps = e.replayPilotCrossingsLocked(
 		target.Crossings,
+		target.Laps,
 		orderedGates,
 		e.detected,
-		movedCopy.SlotIndex,
-		movedCopy,
-		oldTsUs,
-		clampedTsUs,
+		e.rules,
+		slotIndex,
+		callsign,
 	)
 	e.recomputePracticeSessionLapsLocked(target)
 	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
@@ -425,7 +625,7 @@ func (e *Engine) AdjustPracticeSessionCrossing(
 	if isActive {
 		e.crossings = append([]domain.GateCrossingEvent(nil), target.Crossings...)
 		e.syncActivePracticeLapsLocked(target)
-		e.rebuildPilotLiveProgressFromCrossingsLocked(movedCopy.SlotIndex, orderedGates)
+		e.rebuildPilotLiveProgressFromCrossingsLocked(slotIndex, orderedGates)
 	}
 	target.Summaries = e.computePracticeSessionSummariesLocked(target)
 
@@ -437,8 +637,108 @@ func (e *Engine) AdjustPracticeSessionCrossing(
 	return practiceSnap, nil
 }
 
-// AdjustEngineCrossing moves a crossing directly on the root engine buffers (used when no
-// Practice sessions are initialized or during live heat telemetry).
+// DeletePracticeSessionCrossing removes crossing `eventID` from a Practice session and replays
+// the pilot's remaining crossings to recompute valid/invalid crossings, laps, and splits.
+func (e *Engine) DeletePracticeSessionCrossing(
+	sessionID string,
+	eventID uint64,
+) (domain.PracticeManagerState, error) {
+	if eventID == 0 {
+		return e.PracticeSnapshot(), fmt.Errorf("eventId must be positive")
+	}
+
+	e.mu.Lock()
+	targetID := strings.TrimSpace(sessionID)
+	if targetID == "" || strings.EqualFold(targetID, "current") {
+		targetID = e.practiceState.SelectedSessionID
+		if targetID == "" {
+			targetID = e.practiceState.ActiveSessionID
+		}
+	}
+	target := e.findPracticeSessionLocked(targetID)
+	if target == nil {
+		snap := clonePracticeManagerState(e.practiceState)
+		e.mu.Unlock()
+		return snap, fmt.Errorf("practice session %q not found", sessionID)
+	}
+
+	isActive := target.Active && e.practiceState.ActiveSessionID == target.SessionID && !e.isLiveRaceHeatActiveLocked()
+	if isActive && len(e.crossings) > len(target.Crossings) {
+		e.syncActivePracticeRecordsLocked()
+	}
+
+	delIdx := -1
+	for i := range target.Crossings {
+		if target.Crossings[i].EventID == eventID {
+			delIdx = i
+			break
+		}
+	}
+	if delIdx < 0 {
+		snap := clonePracticeManagerState(e.practiceState)
+		e.mu.Unlock()
+		return snap, fmt.Errorf("crossing %d not found in practice session %q", eventID, target.SessionID)
+	}
+
+	removed := target.Crossings[delIdx]
+	target.Crossings = append(target.Crossings[:delIdx], target.Crossings[delIdx+1:]...)
+	orderedGates := e.orderedGatesForPracticeSessionLocked(target)
+	target.Crossings, target.Laps = e.replayPilotCrossingsLocked(
+		target.Crossings,
+		target.Laps,
+		orderedGates,
+		e.detected,
+		e.rules,
+		removed.SlotIndex,
+		removed.Callsign,
+	)
+	e.recomputePracticeSessionLapsLocked(target)
+	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+
+	if isActive {
+		e.crossings = append([]domain.GateCrossingEvent(nil), target.Crossings...)
+		e.syncActivePracticeLapsLocked(target)
+		e.rebuildPilotLiveProgressFromCrossingsLocked(removed.SlotIndex, orderedGates)
+	}
+	target.Summaries = e.computePracticeSessionSummariesLocked(target)
+
+	practiceSnap := clonePracticeManagerState(e.practiceState)
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	e.notifyPracticeUpdated(practiceSnap, subs)
+	return practiceSnap, nil
+}
+
+// AddEngineCrossing inserts a manual crossing directly on the root engine buffers.
+func (e *Engine) AddEngineCrossing(gateID uint8, slotIndex int, timestampUs uint64, peakRSSIDbm *float32) (uint64, error) {
+	e.mu.Lock()
+	orderedGates := e.orderedGatesLocked()
+	ev, err := e.newManualCrossingEventLocked(orderedGates, gateID, slotIndex, timestampUs, peakRSSIDbm, "")
+	if err != nil {
+		e.mu.Unlock()
+		return 0, err
+	}
+	e.crossings = append(e.crossings, ev)
+	e.crossings, e.laps = e.replayPilotCrossingsLocked(
+		e.crossings,
+		e.laps,
+		orderedGates,
+		e.detected,
+		e.rules,
+		slotIndex,
+		ev.Callsign,
+	)
+	tmpSess := domain.PracticeSession{Laps: e.laps}
+	e.recomputePracticeSessionLapsLocked(&tmpSess)
+	e.laps = tmpSess.Laps
+	e.rebuildRootSectorBestsLocked()
+	e.rebuildPilotLiveProgressFromCrossingsLocked(slotIndex, orderedGates)
+	e.mu.Unlock()
+	return ev.EventID, nil
+}
+
+// AdjustEngineCrossing moves a crossing directly on the root engine buffers.
 func (e *Engine) AdjustEngineCrossing(eventID uint64, newTimestampUs uint64, peakRSSIDbm *float32) error {
 	if eventID == 0 || newTimestampUs == 0 {
 		return fmt.Errorf("eventId and timestampUs must be positive")
@@ -458,62 +758,173 @@ func (e *Engine) AdjustEngineCrossing(eventID uint64, newTimestampUs uint64, pea
 	}
 
 	orderedGates := e.orderedGatesLocked()
-	movedCopy := e.crossings[movedIdx]
-	oldTsUs := movedCopy.TimestampUs
-	clampedTsUs := clampCrossingTargetTimestamp(e.crossings, e.laps, orderedGates, movedIdx, newTimestampUs)
-
-	e.crossings[movedIdx].TimestampUs = clampedTsUs
+	slotIndex := e.crossings[movedIdx].SlotIndex
+	callsign := e.crossings[movedIdx].Callsign
+	e.crossings[movedIdx].TimestampUs = newTimestampUs
+	e.crossings[movedIdx].Manual = true
 	if peakRSSIDbm != nil && !math.IsNaN(float64(*peakRSSIDbm)) && !math.IsInf(float64(*peakRSSIDbm), 0) {
 		e.crossings[movedIdx].PeakRSSIDbm = *peakRSSIDbm
 	}
-	sort.SliceStable(e.crossings, func(a, b int) bool {
-		return e.crossings[a].TimestampUs < e.crossings[b].TimestampUs
-	})
 
-	recalculatePilotLapsOnCrossingMove(
-		e.laps,
+	e.crossings, e.laps = e.replayPilotCrossingsLocked(
 		e.crossings,
+		e.laps,
 		orderedGates,
 		e.detected,
-		movedCopy.SlotIndex,
-		movedCopy,
-		oldTsUs,
-		clampedTsUs,
+		e.rules,
+		slotIndex,
+		callsign,
 	)
-
 	tmpSess := domain.PracticeSession{Laps: e.laps}
 	e.recomputePracticeSessionLapsLocked(&tmpSess)
 	e.laps = tmpSess.Laps
-
-	e.overallBestSec = make(map[string]float64)
-	e.pilotBestSec = make(map[string]float64)
-	e.sectorHistory = make(map[string][]domain.SectorSplit)
-	for _, lap := range e.laps {
-		if lap.Invalidated {
-			continue
-		}
-		for _, split := range lap.Sectors {
-			pKey := pairKey(split.FromGateID, split.ToGateID)
-			sKey := sectorKey(lap.SlotIndex, pKey)
-			e.sectorHistory[sKey] = append(e.sectorHistory[sKey], split)
-			if split.SplitSeconds > 0 {
-				if e.overallBestSec[pKey] == 0 || split.SplitSeconds < e.overallBestSec[pKey] {
-					e.overallBestSec[pKey] = split.SplitSeconds
-				}
-				if e.pilotBestSec[sKey] == 0 || split.SplitSeconds < e.pilotBestSec[sKey] {
-					e.pilotBestSec[sKey] = split.SplitSeconds
-				}
-			}
-		}
-	}
-	e.rebuildPilotLiveProgressFromCrossingsLocked(movedCopy.SlotIndex, orderedGates)
+	e.rebuildRootSectorBestsLocked()
+	e.rebuildPilotLiveProgressFromCrossingsLocked(slotIndex, orderedGates)
 	e.mu.Unlock()
 	return nil
 }
 
-// AdjustRaceCrossing adjusts a gate crossing on the Race Signals chart and, if it corresponds to
-// a Start/Finish crossing in an active or completed heat of `raceID`, updates the seat's heat
-// crossings and recomputes official heat standings.
+// DeleteEngineCrossing deletes a crossing directly from the root engine buffers.
+func (e *Engine) DeleteEngineCrossing(eventID uint64) error {
+	if eventID == 0 {
+		return fmt.Errorf("eventId must be positive")
+	}
+
+	e.mu.Lock()
+	delIdx := -1
+	for i := range e.crossings {
+		if e.crossings[i].EventID == eventID {
+			delIdx = i
+			break
+		}
+	}
+	if delIdx < 0 {
+		e.mu.Unlock()
+		return fmt.Errorf("crossing %d not found", eventID)
+	}
+
+	removed := e.crossings[delIdx]
+	e.crossings = append(e.crossings[:delIdx], e.crossings[delIdx+1:]...)
+	orderedGates := e.orderedGatesLocked()
+	e.crossings, e.laps = e.replayPilotCrossingsLocked(
+		e.crossings,
+		e.laps,
+		orderedGates,
+		e.detected,
+		e.rules,
+		removed.SlotIndex,
+		removed.Callsign,
+	)
+	tmpSess := domain.PracticeSession{Laps: e.laps}
+	e.recomputePracticeSessionLapsLocked(&tmpSess)
+	e.laps = tmpSess.Laps
+	e.rebuildRootSectorBestsLocked()
+	e.rebuildPilotLiveProgressFromCrossingsLocked(removed.SlotIndex, orderedGates)
+	e.mu.Unlock()
+	return nil
+}
+
+func findCompletedLapSectorsByEnd(laps []domain.LapRecord, slotIndex int, completedAtUs uint64) []domain.SectorSplit {
+	for i := range laps {
+		if laps[i].SlotIndex == slotIndex && absDiffUs(laps[i].CompletedAtUs, completedAtUs) <= 5_000 {
+			return append([]domain.SectorSplit(nil), laps[i].Sectors...)
+		}
+	}
+	return nil
+}
+
+// AddRaceCrossing inserts a manual crossing on the Race Signals chart and updates official heat
+// standings if it is a valid Start/Finish crossing for an active or completed heat seat.
+func (e *Engine) AddRaceCrossing(raceID string, gateID uint8, slotIndex int, timestampUs uint64, peakRSSIDbm *float32) (uint64, error) {
+	e.mu.Lock()
+	swap, err := e.enterTargetRaceLocked(raceID)
+	if err != nil {
+		e.mu.Unlock()
+		return 0, err
+	}
+
+	orderedGates := e.orderedGatesLocked()
+	ev, err := e.newManualCrossingEventLocked(orderedGates, gateID, slotIndex, timestampUs, peakRSSIDbm, "")
+	if err != nil {
+		_ = e.exitTargetRaceLocked(&swap, false)
+		e.mu.Unlock()
+		return 0, err
+	}
+	e.crossings = append(e.crossings, ev)
+	e.crossings, e.laps = e.replayPilotCrossingsLocked(
+		e.crossings,
+		e.laps,
+		orderedGates,
+		e.detected,
+		e.rules,
+		slotIndex,
+		ev.Callsign,
+	)
+	tmpSess := domain.PracticeSession{Laps: e.laps}
+	e.recomputePracticeSessionLapsLocked(&tmpSess)
+	e.laps = tmpSess.Laps
+	e.rebuildPilotLiveProgressFromCrossingsLocked(slotIndex, orderedGates)
+
+	var replayedEv *domain.GateCrossingEvent
+	for i := range e.crossings {
+		if e.crossings[i].EventID == ev.EventID {
+			replayedEv = &e.crossings[i]
+			break
+		}
+	}
+
+	heatChanged := false
+	if replayedEv != nil && replayedEv.IsStartFinish && replayedEv.InvalidReason == "" {
+		for hi := len(e.raceState.Heats) - 1; hi >= 0; hi-- {
+			h := &e.raceState.Heats[hi]
+			if h.State != domain.HeatRunning && h.State != domain.HeatFinished && h.State != domain.HeatConfirmed {
+				continue
+			}
+			for si := range h.Seats {
+				seat := &h.Seats[si]
+				if seat.PilotSlotIndex != slotIndex {
+					continue
+				}
+				seat.Crossings = append(seat.Crossings, domain.HeatCrossing{
+					CrossingID:  replayedEv.EventID,
+					TimestampUs: replayedEv.TimestampUs,
+					Manual:      true,
+					PeakRSSIDbm: replayedEv.PeakRSSIDbm,
+					Sectors:     findCompletedLapSectorsByEnd(e.laps, slotIndex, replayedEv.TimestampUs),
+				})
+				sort.SliceStable(seat.Crossings, func(a, b int) bool {
+					return seat.Crossings[a].TimestampUs < seat.Crossings[b].TimestampUs
+				})
+				race.RecomputeHeat(h, e.raceState.Config.QualifyingMetric)
+				heatChanged = true
+				break
+			}
+			if heatChanged {
+				break
+			}
+		}
+	}
+
+	if heatChanged {
+		e.resolveActiveTournamentLocked()
+	}
+	if swap.swapped {
+		_ = e.exitTargetRaceLocked(&swap, true)
+	} else if e.raceState.RaceID != "" {
+		e.syncActiveRaceToEventLocked()
+	}
+	raceSnap := cloneRaceState(e.raceState)
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	if heatChanged {
+		e.notifyRaceUpdated(raceSnap, nil, subs)
+	}
+	return ev.EventID, nil
+}
+
+// AdjustRaceCrossing adjusts a gate crossing on the Race Signals chart and updates official
+// heat standings when Start/Finish crossings or sector splits change.
 func (e *Engine) AdjustRaceCrossing(raceID string, eventID uint64, newTimestampUs uint64, peakRSSIDbm *float32) error {
 	if eventID == 0 || newTimestampUs == 0 {
 		return fmt.Errorf("eventId and timestampUs must be positive")
@@ -535,29 +946,24 @@ func (e *Engine) AdjustRaceCrossing(raceID string, eventID uint64, newTimestampU
 	}
 	var movedCopy domain.GateCrossingEvent
 	var oldTsUs uint64
-	clampedTsUs := newTimestampUs
 	orderedGates := e.orderedGatesLocked()
 
 	if movedIdx >= 0 {
 		movedCopy = e.crossings[movedIdx]
 		oldTsUs = movedCopy.TimestampUs
-		clampedTsUs = clampCrossingTargetTimestamp(e.crossings, e.laps, orderedGates, movedIdx, newTimestampUs)
-		e.crossings[movedIdx].TimestampUs = clampedTsUs
+		e.crossings[movedIdx].TimestampUs = newTimestampUs
+		e.crossings[movedIdx].Manual = true
 		if peakRSSIDbm != nil && !math.IsNaN(float64(*peakRSSIDbm)) && !math.IsInf(float64(*peakRSSIDbm), 0) {
 			e.crossings[movedIdx].PeakRSSIDbm = *peakRSSIDbm
 		}
-		sort.SliceStable(e.crossings, func(a, b int) bool {
-			return e.crossings[a].TimestampUs < e.crossings[b].TimestampUs
-		})
-		recalculatePilotLapsOnCrossingMove(
-			e.laps,
+		e.crossings, e.laps = e.replayPilotCrossingsLocked(
 			e.crossings,
+			e.laps,
 			orderedGates,
 			e.detected,
+			e.rules,
 			movedCopy.SlotIndex,
-			movedCopy,
-			oldTsUs,
-			clampedTsUs,
+			movedCopy.Callsign,
 		)
 		tmpSess := domain.PracticeSession{Laps: e.laps}
 		e.recomputePracticeSessionLapsLocked(&tmpSess)
@@ -566,6 +972,13 @@ func (e *Engine) AdjustRaceCrossing(raceID string, eventID uint64, newTimestampU
 	}
 
 	sfGateID := startFinishGateIDFrom(orderedGates)
+	invalidByID := make(map[uint64]bool, len(e.crossings))
+	for i := range e.crossings {
+		if e.crossings[i].InvalidReason != "" {
+			invalidByID[e.crossings[i].EventID] = true
+		}
+	}
+
 	heatChanged := false
 	if movedIdx < 0 || movedCopy.IsStartFinish || movedCopy.GateID == sfGateID {
 		for hi := len(e.raceState.Heats) - 1; hi >= 0; hi-- {
@@ -578,11 +991,13 @@ func (e *Engine) AdjustRaceCrossing(raceID string, eventID uint64, newTimestampU
 				for ci := range seat.Crossings {
 					hc := &seat.Crossings[ci]
 					if hc.CrossingID == eventID || (oldTsUs > 0 && absDiffUs(hc.TimestampUs, oldTsUs) <= 50_000) {
-						hc.TimestampUs = clampedTsUs
+						hc.TimestampUs = newTimestampUs
 						if peakRSSIDbm != nil {
 							hc.PeakRSSIDbm = *peakRSSIDbm
 						}
 						hc.Manual = true
+						hc.Invalidated = invalidByID[hc.CrossingID]
+						hc.Sectors = findCompletedLapSectorsByEnd(e.laps, seat.PilotSlotIndex, hc.TimestampUs)
 						sort.SliceStable(seat.Crossings, func(a, b int) bool {
 							return seat.Crossings[a].TimestampUs < seat.Crossings[b].TimestampUs
 						})
@@ -611,8 +1026,99 @@ func (e *Engine) AdjustRaceCrossing(raceID string, eventID uint64, newTimestampU
 		e.resolveActiveTournamentLocked()
 	}
 	if swap.swapped {
-		_ = e.exitTargetRaceLocked(&swap, heatChanged)
-	} else if heatChanged && e.raceState.RaceID != "" {
+		_ = e.exitTargetRaceLocked(&swap, true)
+	} else if e.raceState.RaceID != "" {
+		e.syncActiveRaceToEventLocked()
+	}
+	raceSnap := cloneRaceState(e.raceState)
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	if heatChanged {
+		e.notifyRaceUpdated(raceSnap, nil, subs)
+	}
+	return nil
+}
+
+// DeleteRaceCrossing removes crossing `eventID` from the Race Signals chart and recomputes
+// official heat standings if it belonged to a heat seat.
+func (e *Engine) DeleteRaceCrossing(raceID string, eventID uint64) error {
+	if eventID == 0 {
+		return fmt.Errorf("eventId must be positive")
+	}
+
+	e.mu.Lock()
+	swap, err := e.enterTargetRaceLocked(raceID)
+	if err != nil {
+		e.mu.Unlock()
+		return err
+	}
+
+	delIdx := -1
+	for i := range e.crossings {
+		if e.crossings[i].EventID == eventID {
+			delIdx = i
+			break
+		}
+	}
+	var removed domain.GateCrossingEvent
+	orderedGates := e.orderedGatesLocked()
+	if delIdx >= 0 {
+		removed = e.crossings[delIdx]
+		e.crossings = append(e.crossings[:delIdx], e.crossings[delIdx+1:]...)
+		e.crossings, e.laps = e.replayPilotCrossingsLocked(
+			e.crossings,
+			e.laps,
+			orderedGates,
+			e.detected,
+			e.rules,
+			removed.SlotIndex,
+			removed.Callsign,
+		)
+		tmpSess := domain.PracticeSession{Laps: e.laps}
+		e.recomputePracticeSessionLapsLocked(&tmpSess)
+		e.laps = tmpSess.Laps
+		e.rebuildPilotLiveProgressFromCrossingsLocked(removed.SlotIndex, orderedGates)
+	}
+
+	heatChanged := false
+	for hi := len(e.raceState.Heats) - 1; hi >= 0; hi-- {
+		h := &e.raceState.Heats[hi]
+		for si := range h.Seats {
+			seat := &h.Seats[si]
+			if delIdx >= 0 && seat.PilotSlotIndex != removed.SlotIndex {
+				continue
+			}
+			for ci := range seat.Crossings {
+				hc := seat.Crossings[ci]
+				if hc.CrossingID == eventID || (delIdx >= 0 && removed.IsStartFinish && absDiffUs(hc.TimestampUs, removed.TimestampUs) <= 50_000) {
+					seat.Crossings = append(seat.Crossings[:ci], seat.Crossings[ci+1:]...)
+					race.RecomputeHeat(h, e.raceState.Config.QualifyingMetric)
+					heatChanged = true
+					break
+				}
+			}
+			if heatChanged {
+				break
+			}
+		}
+		if heatChanged {
+			break
+		}
+	}
+
+	if delIdx < 0 && !heatChanged {
+		_ = e.exitTargetRaceLocked(&swap, false)
+		e.mu.Unlock()
+		return fmt.Errorf("crossing %d not found in race %q", eventID, raceID)
+	}
+
+	if heatChanged {
+		e.resolveActiveTournamentLocked()
+	}
+	if swap.swapped {
+		_ = e.exitTargetRaceLocked(&swap, true)
+	} else if e.raceState.RaceID != "" {
 		e.syncActiveRaceToEventLocked()
 	}
 	raceSnap := cloneRaceState(e.raceState)

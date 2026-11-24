@@ -165,6 +165,9 @@ export interface GateCrossingEvent {
   passAreaDbSec?: number;
   isStepBurst?: boolean;
   passingNumber: number;
+  manual?: boolean;
+  invalidReason?: FilterReason;
+  invalidDetail?: string;
 }
 
 export interface SectorSplit {

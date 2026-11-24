@@ -1246,6 +1246,30 @@ export class ApiClient {
     return `${this.resolveSessionBaseUrl(explicitScope)}/track`;
   }
 
+  public async addCrossing(
+    gateId: number,
+    slotIndex: number,
+    timestampUs: number,
+    peakRssiDbm?: number,
+    scope?: TrackScope | null
+  ): Promise<void> {
+    const body: { gateId: number; slotIndex: number; timestampUs: number; peakRssiDbm?: number } = {
+      gateId: Math.round(gateId),
+      slotIndex: Math.round(slotIndex),
+      timestampUs: Math.round(timestampUs),
+    };
+    if (typeof peakRssiDbm === "number" && Number.isFinite(peakRssiDbm)) {
+      body.peakRssiDbm = Math.round(peakRssiDbm * 100) / 100;
+    }
+    this.store.hydrate(
+      await this.transport.request<FullStateResponse>(
+        "POST",
+        `${this.resolveSessionBaseUrl(scope)}/crossings`,
+        body
+      )
+    );
+  }
+
   public async adjustCrossing(
     eventId: number,
     timestampUs: number,
@@ -1263,6 +1287,15 @@ export class ApiClient {
         "PATCH",
         `${this.resolveSessionBaseUrl(scope)}/crossings/${encodeURIComponent(String(eventId))}`,
         body
+      )
+    );
+  }
+
+  public async deleteCrossing(eventId: number, scope?: TrackScope | null): Promise<void> {
+    this.store.hydrate(
+      await this.transport.request<FullStateResponse>(
+        "DELETE",
+        `${this.resolveSessionBaseUrl(scope)}/crossings/${encodeURIComponent(String(eventId))}`
       )
     );
   }

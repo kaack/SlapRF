@@ -1453,6 +1453,57 @@ paths:
               example:
                 error: "practice session or lap not found"
 
+  /v1/practice/sessions/{sessionId}/crossings:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Practice Sessions]
+      summary: Add a manual gate crossing and replay pilot timing and track-order rules
+      operationId: addPracticeSessionCrossing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [gateId, slotIndex, timestampUs]
+              properties:
+                gateId:
+                  type: integer
+                  example: 2
+                slotIndex:
+                  type: integer
+                  example: 1
+                timestampUs:
+                  type: integer
+                  example: 48250000
+                peakRssiDbm:
+                  type: number
+                  example: -58.4
+      responses:
+        "200":
+          description: Updated full state with replayed crossings, laps, and summaries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /v1/practice/sessions/{sessionId}/crossings/{eventId}:
     parameters:
       - name: sessionId
@@ -1504,6 +1555,74 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags: [Practice Sessions]
+      summary: Delete a gate crossing and replay remaining crossings for that pilot
+      operationId: deletePracticeSessionCrossing
+      responses:
+        "200":
+          description: Updated full state with recalculated crossings, laps, and summaries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session or crossing event not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/race/sessions/{sessionId}/crossings:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Race Sessions]
+      summary: Add a manual race gate crossing and recalculate splits and heat standings
+      operationId: addRaceSessionCrossing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [gateId, slotIndex, timestampUs]
+              properties:
+                gateId:
+                  type: integer
+                  example: 2
+                slotIndex:
+                  type: integer
+                  example: 1
+                timestampUs:
+                  type: integer
+                  example: 48250000
+                peakRssiDbm:
+                  type: number
+                  example: -58.4
+      responses:
+        "200":
+          description: Updated full state with recalculated splits and heat standings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /v1/race/sessions/{sessionId}/crossings/{eventId}:
     parameters:
@@ -1550,6 +1669,23 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session or crossing event not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags: [Race Sessions]
+      summary: Delete a race gate crossing and recalculate splits and heat standings
+      operationId: deleteRaceSessionCrossing
+      responses:
+        "200":
+          description: Updated full state with recalculated splits and heat standings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
         "404":
           description: Race session or crossing event not found
           content:
@@ -6719,6 +6855,16 @@ components:
         passingNumber:
           type: integer
           example: 12
+        manual:
+          type: boolean
+          description: True when the crossing was added or moved manually on the Signals chart.
+        invalidReason:
+          type: string
+          enum: [SPIKE, MIN_LAP, LAP_TOO_LONG, OUT_OF_ORDER]
+          description: Non-empty when timing or sequential gate-order rules invalidate this crossing.
+        invalidDetail:
+          type: string
+          description: Human-readable explanation when invalidReason is set.
 
     FilteredDetection:
       type: object

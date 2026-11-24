@@ -224,10 +224,23 @@ interface CrossingBox {
   origTsUs: number;
   tsUs: number;
   title: string;
+  counted: boolean;
   lineX: number;
   pillX: number;
   pillY: number;
   pillW: number;
+  delX: number;
+  delY: number;
+  delW: number;
+}
+
+interface LiveCrossingEval {
+  effTs: number;
+  counted: boolean;
+  invalidReason: FilterReason | null;
+  invalidDetail: string;
+  suffix: string;
+  detailPrefix: string;
 }
 
 type RssiDragState =
@@ -306,6 +319,8 @@ export class PilotRssiChart extends Component {
   } | null = null;
   /** Optimistic crossing timestamps while a PATCH is in flight, so the line never snaps back. */
   private readonly pendingCrossings = new Map<number, number>();
+  private readonly pendingDeletedCrossings = new Set<number>();
+  private pendingDeleteCrossing: { box: CrossingBox; startX: number; startY: number } | null = null;
   private crossingBoxes: CrossingBox[] = [];
   /** Values shown while a save is in flight, so the line doesn't jump back. */
   private readonly pending = new Map<number, { enter: number; exit: number }>();
@@ -318,8 +333,13 @@ export class PilotRssiChart extends Component {
   private tags: TagBox[] = [];
   private calibMessage = "";
   private calibMessageShort = "";
-  /** Gate shown on its own (with its editable threshold); null shows every gate. */
-  private focus: number | null = null;
+  /** Selected timer IDs; empty = "All timers", 1 = single focused timer, 2+ = multi-timer comparison. */
+  private readonly selectedGates = new Set<number>();
+  /** When true (default), threshold lines and crossing lines cannot be dragged accidentally while scrolling. */
+  private chartLinesLocked = true;
+  private lastOverlayActionsSig = "";
+  private liveEvalSig = "";
+  private readonly liveEvalByEventId = new Map<number, LiveCrossingEval>();
   /** Optional explicit pilot slot override (e.g. when embedded in Race Control). */
   private pilotSlotOverride: number | null = null;
   /** Optional multi-pilot overlay mode ("All" seated pilots in Race Control). */
@@ -391,9 +411,34 @@ export class PilotRssiChart extends Component {
     return Boolean(this.multiPilotSlots && this.multiPilotSlots.length > 0);
   }
 
-  /** True when a single timer is focused and the signal stream is paused, enabling crossing-line dragging. */
+  /** Single selected timer ID when exactly 1 timer is checked, otherwise null ("All" or 2+ compared timers). */
+  private get focus(): number | null {
+    return this.selectedGates.size === 1 ? this.selectedGates.values().next().value ?? null : null;
+  }
+
+  private set focus(gateId: number | null) {
+    this.selectedGates.clear();
+    if (gateId !== null && gateId > 0) {
+      this.selectedGates.add(gateId);
+    }
+  }
+
+  private get selectedGatesKey(): string {
+    return this.selectedGates.size === 0
+      ? "all"
+      : Array.from(this.selectedGates)
+          .sort((a, b) => a - b)
+          .join(",");
+  }
+
+  /** True when a single timer is selected and the chart lines lock has been unlocked. */
+  private get canEditLines(): boolean {
+    return !this.chartLinesLocked && this.focus !== null && !this.isMultiPilotMode && !this.store.isHistoricalTrack;
+  }
+
+  /** True when unlocked on a single timer and paused, enabling crossing-line dragging & deletion. */
   private get canEditCrossings(): boolean {
-    return this.focus !== null && this.endUs !== null && !this.isMultiPilotMode;
+    return this.canEditLines && this.endUs !== null;
   }
 
   private get activePilotSlot(): number {
@@ -479,9 +524,11 @@ export class PilotRssiChart extends Component {
     return this.isMobileLayout ? 4 : 16;
   }
 
-  /** The gates drawn on the chart: the focused one, or all of them. */
+  /** The gates drawn on the chart: all of them, or the checked timer subset. */
   private get shownGates() {
-    return this.focus === null ? this.store.nodes : this.store.nodes.filter((p) => p.gateId === this.focus);
+    return this.selectedGates.size === 0
+      ? this.store.nodes
+      : this.store.nodes.filter((p) => this.selectedGates.has(p.gateId));
   }
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient, options?: PilotRssiChartOptions) {
@@ -506,7 +553,12 @@ export class PilotRssiChart extends Component {
           </div>
         </div>
         <div class="canvas-host canvas-host-md scope-canvas" data-slot="chart" tabindex="0"
-             aria-label="Signal chart. Space pauses, arrow keys jump between passes."></div>
+             aria-label="Signal chart. Space pauses, arrow keys jump between passes.">
+          <div class="scope-chart-overlay-actions" data-slot="chart-actions" hidden>
+            <button class="scope-chart-action-btn" type="button" data-act="add-crossing" title="Unlock chart lines to add crossings" aria-label="Add crossing" disabled>${icons.plus(15)}</button>
+            <button class="scope-chart-action-btn is-locked" type="button" data-act="toggle-chart-lock" aria-pressed="false" title="Unlock chart lines to adjust thresholds or crossings" aria-label="Unlock chart lines">${icons.lock(14)}</button>
+          </div>
+        </div>
         <div class="scope-bottom-bar">
           <div class="scope-axis-controls" data-slot="axis-controls" role="group" aria-label="X and Y axis scale controls"></div>
           <span class="scope-hint" data-slot="hint"></span>
@@ -688,9 +740,36 @@ export class PilotRssiChart extends Component {
     this.listen(el, "click", (e) => {
       if (this.tuneDrawerEl.contains(e.target as Node)) return;
       const btn = (e.target as HTMLElement).closest<HTMLElement>(
-        "[data-act], [data-window], [data-axis-act], [data-calib], [data-calib-gate], [data-tune-gate], [data-focus]"
+        "[data-gate-check], [data-act], [data-window], [data-axis-act], [data-calib], [data-calib-gate], [data-tune-gate], [data-focus]"
       );
       if (!btn) return;
+      if (btn.dataset.gateCheck) {
+        e.stopPropagation();
+        const gId = Number(btn.dataset.gateCheck);
+        if (Number.isFinite(gId) && gId > 0) {
+          if (this.selectedGates.has(gId)) {
+            this.selectedGates.delete(gId);
+          } else {
+            this.selectedGates.add(gId);
+          }
+          if (this.focus === null) {
+            this.tuneDrawerOpen = false;
+            this.tuningGateId = null;
+          } else if (this.tuneDrawerOpen) {
+            this.tuningGateId = this.focus;
+          } else {
+            this.tuningGateId = null;
+          }
+          this.calibMessage = "";
+          this.calibMessageShort = "";
+          this.saveChartPrefs();
+          this.renderControls();
+          this.renderCalib();
+          this.renderLegend();
+          this.renderTuningDrawer();
+        }
+        return;
+      }
       if (btn.dataset.calibGate) {
         e.stopPropagation();
         if (btn.dataset.calibBusy === "1" || btn.getAttribute("aria-disabled") === "true") {
@@ -817,6 +896,8 @@ export class PilotRssiChart extends Component {
         this.setWindow(Number(btn.dataset.window) * 1e6, false);
       } else if (btn.dataset.calib === "auto") void this.autoCalibrate();
       else if (btn.dataset.calib === "reset") void this.resetToDefault();
+      else if (btn.dataset.act === "toggle-chart-lock") this.toggleChartLock();
+      else if (btn.dataset.act === "add-crossing") void this.addManualCrossing();
       else if (btn.dataset.act === "live") this.toggleLive();
       else if (btn.dataset.act) this.jump(btn.dataset.act === "prev" ? -1 : 1);
     });
@@ -825,7 +906,11 @@ export class PilotRssiChart extends Component {
       if (e.key !== "Enter" && e.key !== " ") return;
       const target = e.target as HTMLElement | null;
       if (!target) return;
-      if (target.hasAttribute("data-calib-gate") || target.hasAttribute("data-tune-gate")) {
+      if (
+        target.hasAttribute("data-calib-gate") ||
+        target.hasAttribute("data-tune-gate") ||
+        target.hasAttribute("data-gate-check")
+      ) {
         e.preventDefault();
         e.stopPropagation();
         target.click();
@@ -870,7 +955,8 @@ export class PilotRssiChart extends Component {
       anchorYFrac: number;
     } | null = null;
 
-    this.listen(host, "dblclick", () => {
+    this.listen(host, "dblclick", (e) => {
+      if ((e.target as HTMLElement | null)?.closest("[data-slot='chart-actions']")) return;
       this.resetAxesToAuto();
     });
 
@@ -905,6 +991,7 @@ export class PilotRssiChart extends Component {
     this.onDispose(() => host.removeEventListener("wheel", onWheel));
 
     this.listen(host, "pointerdown", (e) => {
+      if ((e.target as HTMLElement | null)?.closest("[data-slot='chart-actions']")) return;
       if (e.pointerType === "mouse" && e.button !== 0) return;
 
       try {
@@ -980,6 +1067,11 @@ export class PilotRssiChart extends Component {
 
       const grabbedCrossing = this.crossingAt(x, y, isTouch);
       if (grabbedCrossing !== null) {
+        if (grabbedCrossing.inDelete) {
+          this.pendingDeleteCrossing = { box: grabbedCrossing.box, startX: x, startY: y };
+          host.classList.add("is-over-crossing-delete");
+          return;
+        }
         const bounds = this.crossingBoundsFor(
           grabbedCrossing.box.eventId,
           grabbedCrossing.box.slotIndex,
@@ -1064,6 +1156,12 @@ export class PilotRssiChart extends Component {
     });
 
     this.listen(host, "pointermove", (e) => {
+      if (!this.crossingDrag && !this.tagDrag && !this.drag && (e.target as HTMLElement | null)?.closest("[data-slot='chart-actions']")) {
+        this.hoverX = null;
+        this.hoverY = null;
+        host.classList.remove("is-over-tag", "is-over-axis", "is-over-yaxis", "is-over-crossing", "is-over-crossing-delete");
+        return;
+      }
       const r = host.getBoundingClientRect();
       const x = e.clientX - r.left;
       const y = e.clientY - r.top;
@@ -1187,18 +1285,28 @@ export class PilotRssiChart extends Component {
 
       if (!this.drag) {
         const overTagBox = this.tagBoxAt(x, y) !== null;
-        const overCrossing = !overTagBox && this.crossingAt(x, y, e.pointerType === "touch") !== null;
-        const overTag = overTagBox || (!overCrossing && this.tagLineAt(x, y) !== null);
-        const overYAxis = !overTag && !overCrossing && x < this.padL && y >= this.padT && y <= r.height - PAD.b;
+        const crossingHit = !overTagBox ? this.crossingAt(x, y, e.pointerType === "touch") : null;
+        const overCrossingDelete = Boolean(crossingHit?.inDelete);
+        const overCrossing = crossingHit !== null && !overCrossingDelete;
+        const overTag = overTagBox || (!overCrossing && !overCrossingDelete && this.tagLineAt(x, y) !== null);
+        const overYAxis =
+          !overTag &&
+          !overCrossing &&
+          !overCrossingDelete &&
+          x < this.padL &&
+          y >= this.padT &&
+          y <= r.height - PAD.b;
         const overXAxis =
           !overTag &&
           !overCrossing &&
+          !overCrossingDelete &&
           !overYAxis &&
           y >= r.height - PAD.b &&
           x >= this.padL &&
           x <= this.padL + this.plot.w;
         host.classList.toggle("is-over-tag", overTag);
         host.classList.toggle("is-over-crossing", overCrossing);
+        host.classList.toggle("is-over-crossing-delete", overCrossingDelete);
         host.classList.toggle("is-over-yaxis", overYAxis);
         host.classList.toggle("is-over-axis", overXAxis);
         return;
@@ -1299,6 +1407,19 @@ export class PilotRssiChart extends Component {
         }
       }
 
+      if (this.pendingDeleteCrossing) {
+        const pendingDel = this.pendingDeleteCrossing;
+        this.pendingDeleteCrossing = null;
+        const r = host.getBoundingClientRect();
+        const ux = e.clientX - r.left;
+        const uy = e.clientY - r.top;
+        if (
+          e.type !== "pointercancel" &&
+          Math.hypot(ux - pendingDel.startX, uy - pendingDel.startY) <= 14
+        ) {
+          void this.deleteManualCrossing(pendingDel.box.eventId, pendingDel.box.title);
+        }
+      }
       if (this.crossingDrag) {
         const { eventId, gateId, title, tsUs, origTsUs } = this.crossingDrag;
         this.crossingDrag = null;
@@ -1333,7 +1454,13 @@ export class PilotRssiChart extends Component {
         this.saveChartPrefs();
         this.renderControls();
       }
-      host.classList.remove("is-dragging", "is-over-axis", "is-over-yaxis", "is-over-crossing");
+      host.classList.remove(
+        "is-dragging",
+        "is-over-axis",
+        "is-over-yaxis",
+        "is-over-crossing",
+        "is-over-crossing-delete"
+      );
     };
     this.listen(host, "pointerup", endDrag);
     this.listen(host, "pointercancel", endDrag);
@@ -1341,7 +1468,13 @@ export class PilotRssiChart extends Component {
       this.hoverX = null;
       this.hoverY = null;
       if (!this.drag && !this.crossingDrag) {
-        host.classList.remove("is-over-tag", "is-over-axis", "is-over-yaxis", "is-over-crossing");
+        host.classList.remove(
+          "is-over-tag",
+          "is-over-axis",
+          "is-over-yaxis",
+          "is-over-crossing",
+          "is-over-crossing-delete"
+        );
       }
     });
 
@@ -1376,7 +1509,9 @@ export class PilotRssiChart extends Component {
     this.onDispose(
       store.subscribe(["config", "status", "rules"], () => {
         this.syncHardwareModeScale();
-        if (this.focus !== null && !store.node(this.focus)) this.focus = null;
+        for (const gId of Array.from(this.selectedGates)) {
+          if (!store.node(gId)) this.selectedGates.delete(gId);
+        }
         if (this.tuningGateId !== null && !store.node(this.tuningGateId)) this.tuningGateId = null;
         this.renderControls();
         this.renderCalib();
@@ -1638,6 +1773,7 @@ export class PilotRssiChart extends Component {
         yMin?: number;
         yMax?: number;
         focus?: number | null;
+        selectedGates?: number[];
       };
       if (typeof parsed.autoX === "boolean") {
         this.autoX = parsed.autoX;
@@ -1654,7 +1790,14 @@ export class PilotRssiChart extends Component {
         this.yMin = Math.max(DBM_MIN, parsed.yMin);
         this.yMax = Math.min(DBM_MAX, parsed.yMax);
       }
-      if (parsed.focus === null || (typeof parsed.focus === "number" && parsed.focus >= 1)) {
+      if (Array.isArray(parsed.selectedGates)) {
+        this.selectedGates.clear();
+        for (const id of parsed.selectedGates) {
+          if (typeof id === "number" && Number.isFinite(id) && id >= 1) {
+            this.selectedGates.add(Math.round(id));
+          }
+        }
+      } else if (parsed.focus === null || (typeof parsed.focus === "number" && parsed.focus >= 1)) {
         this.focus = parsed.focus;
       }
     } catch {
@@ -1673,6 +1816,7 @@ export class PilotRssiChart extends Component {
           yMin: this.yMin,
           yMax: this.yMax,
           focus: this.focus,
+          selectedGates: Array.from(this.selectedGates),
         })
       );
     } catch {
@@ -1688,7 +1832,8 @@ export class PilotRssiChart extends Component {
     this.yMax = this.defYMax;
     this.smoothYMin = null;
     this.smoothYMax = null;
-    this.focus = null;
+    this.selectedGates.clear();
+    this.chartLinesLocked = true;
     this.endUs = null;
     this.calibMessage = "";
     this.saveChartPrefs();
@@ -1779,9 +1924,32 @@ export class PilotRssiChart extends Component {
     return exitThresholdAt(this.store, gateId, this.activePilotSlot);
   }
 
+  private toggleChartLock(): void {
+    this.chartLinesLocked = !this.chartLinesLocked;
+    if (!this.chartLinesLocked) {
+      if (this.endUs === null) {
+        const anchor =
+          this.latest > 0
+            ? this.latest
+            : this.store.crossings.length > 0
+              ? this.store.crossings[this.store.crossings.length - 1].timestampUs
+              : 0;
+        if (anchor > 0) {
+          this.pauseAt(anchor);
+        }
+      }
+    } else {
+      this.tagDrag = null;
+      this.crossingDrag = null;
+      this.pendingDeleteCrossing = null;
+    }
+    this.renderControls();
+    this.renderCalib();
+  }
+
   /** Threshold pill box directly under `(x, y)`, if any. */
   private tagBoxAt(x: number, y: number): { gateId: number; kind: "enter" | "exit" } | null {
-    if (this.store.isHistoricalTrack || this.isMultiPilotMode) return null;
+    if (!this.canEditLines) return null;
     for (const t of this.tags) {
       if (x >= t.x && x <= t.x + t.w && y >= t.y && y <= t.y + TAG_H) {
         return { gateId: t.gateId, kind: t.kind };
@@ -1792,7 +1960,7 @@ export class PilotRssiChart extends Component {
 
   /** Horizontal threshold line directly under `(x, y)`, if any. */
   private tagLineAt(x: number, y: number): { gateId: number; kind: "enter" | "exit" } | null {
-    if (this.store.isHistoricalTrack || this.isMultiPilotMode) return null;
+    if (!this.canEditLines) return null;
     if (x < this.padL || x > this.padL + this.plot.w) return null;
     let best: TagBox | null = null;
     for (const t of this.tags) {
@@ -1808,8 +1976,12 @@ export class PilotRssiChart extends Component {
     return this.tagBoxAt(x, y) ?? this.tagLineAt(x, y);
   }
 
-  /** Timed crossing pill or vertical line under `(x, y)` when paused on a single focused timer. */
-  private crossingAt(x: number, y: number, isTouch = false): { box: CrossingBox; inPill: boolean } | null {
+  /** Timed crossing pill, delete `×` button, or vertical line under `(x, y)` when unlocked & paused. */
+  private crossingAt(
+    x: number,
+    y: number,
+    isTouch = false
+  ): { box: CrossingBox; inPill: boolean; inDelete: boolean } | null {
     if (!this.canEditCrossings || this.crossingBoxes.length === 0) return null;
     const padPad = isTouch ? 4 : 0;
     for (let i = this.crossingBoxes.length - 1; i >= 0; i--) {
@@ -1820,7 +1992,8 @@ export class PilotRssiChart extends Component {
         y >= b.pillY - padPad &&
         y <= b.pillY + TAG_H + padPad
       ) {
-        return { box: b, inPill: true };
+        const inDelete = x >= b.delX - (isTouch ? 3 : 0);
+        return { box: b, inPill: true, inDelete };
       }
     }
     if (y < this.padT || y > this.padT + this.plot.h) return null;
@@ -1833,88 +2006,91 @@ export class PilotRssiChart extends Component {
         best = b;
       }
     }
-    return best ? { box: best, inPill: false } : null;
+    return best ? { box: best, inPill: false, inDelete: false } : null;
   }
 
-  /** Computes the allowed microsecond range `[minTsUs, maxTsUs]` for dragging a crossing line. */
+  /** Computes the allowed microsecond range `[minTsUs, maxTsUs]` for freely dragging a crossing line. */
   private crossingBoundsFor(
-    eventId: number,
-    slotIndex: number,
-    gateId: number,
+    _eventId: number,
+    _slotIndex: number,
+    _gateId: number,
     origTsUs: number
   ): { minTsUs: number; maxTsUs: number } {
-    const sfGateIds = new Set<number>();
-    for (const node of this.store.nodes) {
-      if (node.role === "START_FINISH") sfGateIds.add(node.gateId);
+    const end = this.viewEnd();
+    const start = end - this.windowUs;
+    let minTsUs = Math.min(this.earliest, start);
+    if (this.store.crossings.length > 0) {
+      minTsUs = Math.min(minTsUs, this.store.crossings[0].timestampUs - this.windowUs);
     }
-    const crossings = this.store.crossings;
-    const movedEv = crossings.find((c) => c.eventId === eventId);
-    const movedIsSF = Boolean(movedEv?.isStartFinish || sfGateIds.has(gateId));
+    minTsUs = Math.max(1, Math.round(minTsUs));
+    const maxTsUs = Math.max(
+      origTsUs + 60_000_000,
+      this.latest > 0 ? this.latest + this.windowUs : 0,
+      Math.round(end + this.windowUs)
+    );
+    return { minTsUs, maxTsUs: Math.max(minTsUs, maxTsUs) };
+  }
 
-    let minTsUs = Math.max(1, this.earliest);
-    let maxTsUs = this.latest > origTsUs ? this.latest : origTsUs + 60_000_000;
-
-    for (const c of crossings) {
-      if (c.eventId === eventId || c.slotIndex !== slotIndex) continue;
-      const cIsSF = Boolean(c.isStartFinish || sfGateIds.has(c.gateId));
-      if (c.gateId === gateId || (movedIsSF && cIsSF)) {
-        if (c.timestampUs <= origTsUs) {
-          minTsUs = Math.max(minTsUs, c.timestampUs + 50_000);
-        }
-        if (c.timestampUs >= origTsUs) {
-          maxTsUs = Math.min(maxTsUs, Math.max(1, c.timestampUs - 50_000));
-        }
-      }
+  private async addManualCrossing(): Promise<void> {
+    if (this.chartLinesLocked || this.focus === null || this.isMultiPilotMode || this.store.isHistoricalTrack) {
+      return;
     }
-
-    const slotLaps = this.store.laps
-      .filter((l) => l.slotIndex === slotIndex && l.completedAtUs > 0)
-      .sort((a, b) => a.completedAtUs - b.completedAtUs);
-    for (let i = 0; i < slotLaps.length; i++) {
-      const l = slotLaps[i];
-      const origEnd = l.completedAtUs;
-      const origStart =
-        l.lapTimeSec > 0
-          ? Math.max(0, Math.round(origEnd - l.lapTimeSec * 1_000_000))
-          : i > 0
-            ? slotLaps[i - 1].completedAtUs
-            : 0;
-      if (movedIsSF) {
-        if (Math.abs(origEnd - origTsUs) <= 50_000) {
-          minTsUs = Math.max(minTsUs, origStart + 100_000);
-        }
-        if (Math.abs(origStart - origTsUs) <= 50_000) {
-          maxTsUs = Math.min(maxTsUs, Math.max(1, origEnd - 100_000));
-        }
-      } else if (origTsUs + 50_000 >= origStart && origTsUs <= origEnd + 10_000) {
-        minTsUs = Math.max(minTsUs, origStart + 20_000);
-        maxTsUs = Math.min(maxTsUs, Math.max(1, origEnd - 20_000));
-        break;
-      }
+    const gateId = this.focus;
+    if (this.endUs === null) {
+      const anchor =
+        this.latest > 0
+          ? this.latest
+          : this.store.crossings.length > 0
+            ? this.store.crossings[this.store.crossings.length - 1].timestampUs
+            : 15_000_000;
+      this.pauseAt(anchor);
+      this.renderControls();
     }
-
-    if (!movedIsSF) {
-      let lastSfBefore = 0;
-      let hasLaterSf = false;
-      for (const c of crossings) {
-        if (c.eventId === eventId || c.slotIndex !== slotIndex) continue;
-        if (c.isStartFinish || sfGateIds.has(c.gateId)) {
-          if (c.timestampUs <= origTsUs && c.timestampUs > lastSfBefore) {
-            lastSfBefore = c.timestampUs;
-          } else if (c.timestampUs > origTsUs) {
-            hasLaterSf = true;
-          }
-        }
-      }
-      if (lastSfBefore > 0 && !hasLaterSf) {
-        minTsUs = Math.max(minTsUs, lastSfBefore + 20_000);
-      }
+    const end = this.viewEnd();
+    const start = end - this.windowUs;
+    let tsUs = Math.max(1, Math.round(start + this.windowUs * 0.5));
+    const slot = this.activePilotSlot;
+    while (
+      this.store.crossings.some(
+        (c) =>
+          c.slotIndex === slot &&
+          c.gateId === gateId &&
+          !this.pendingDeletedCrossings.has(c.eventId) &&
+          Math.abs(c.timestampUs - tsUs) < 35_000
+      )
+    ) {
+      tsUs += 150_000;
     }
-
-    if (minTsUs > maxTsUs) {
-      return { minTsUs: origTsUs, maxTsUs: origTsUs };
+    const pilot = this.store.pilot(slot);
+    const pos = pilot ? this.store.pilots.indexOf(pilot) : -1;
+    const peakDbm = pos >= 0 ? this.rssiAt(gateId, pos, tsUs) : undefined;
+    const gateLbl = this.labelOfGate(gateId);
+    try {
+      await this.api.addCrossing(gateId, slot, tsUs, peakDbm);
+      this.calibMessage = `Added ${gateLbl} crossing — drag handle to position.`;
+      this.calibMessageShort = `Added ${gateLbl} crossing`;
+    } catch {
+      this.calibMessage = `Could not add ${gateLbl} crossing.`;
+      this.calibMessageShort = `Could not add ${gateLbl} crossing.`;
+    } finally {
+      this.renderCalib();
     }
-    return { minTsUs, maxTsUs };
+  }
+
+  private async deleteManualCrossing(eventId: number, title: string): Promise<void> {
+    if (!eventId || this.pendingDeletedCrossings.has(eventId)) return;
+    this.pendingDeletedCrossings.add(eventId);
+    try {
+      await this.api.deleteCrossing(eventId);
+      this.calibMessage = `Removed ${title}.`;
+      this.calibMessageShort = `Removed ${title}`;
+    } catch {
+      this.calibMessage = `Could not remove ${title}.`;
+      this.calibMessageShort = `Could not remove ${title}.`;
+    } finally {
+      this.pendingDeletedCrossings.delete(eventId);
+      this.renderCalib();
+    }
   }
 
   private async saveManualCrossing(
@@ -2429,12 +2605,232 @@ export class PilotRssiChart extends Component {
     });
   }
 
+  private evaluateLivePilotCrossings(slotIndex: number): Map<number, LiveCrossingEval> {
+    const dragSig = this.crossingDrag ? `${this.crossingDrag.eventId}:${this.crossingDrag.tsUs}` : "";
+    const pendSig =
+      this.pendingCrossings.size > 0
+        ? Array.from(this.pendingCrossings.entries())
+            .map(([k, v]) => `${k}=${v}`)
+            .join(",")
+        : "";
+    const delSig =
+      this.pendingDeletedCrossings.size > 0 ? Array.from(this.pendingDeletedCrossings).join(",") : "";
+    const nodes = this.store.nodes;
+    const rules = this.store.rules;
+    const rulesSig = `${rules.minLapSec}:${rules.maxLapSec}:${nodes
+      .map((n) => {
+        const eff = pilotGateRulesAt(this.store, n.gateId, slotIndex);
+        return `${n.gateId}:${n.trackOrder}:${n.role}:${eff.minLapSec}:${eff.maxLapSec}`;
+      })
+      .join("|")}`;
+    const sig = `${this.store.stateRev ?? 0}:${this.store.crossings.length}:${slotIndex}:${dragSig}:${pendSig}:${delSig}:${rulesSig}`;
+    if (sig === this.liveEvalSig) {
+      return this.liveEvalByEventId;
+    }
+    this.liveEvalSig = sig;
+    this.liveEvalByEventId.clear();
+
+    const ordered = [...nodes].sort((a, b) => a.trackOrder - b.trackOrder);
+    const orderedIdx = new Map<number, number>();
+    ordered.forEach((n, idx) => orderedIdx.set(n.gateId, idx));
+    const sfGate = ordered.find((n) => n.role === "START_FINISH") ?? ordered[0];
+    const sfGateId = sfGate?.gateId ?? 1;
+    const hasSfGate = Boolean(ordered[0] && ordered[0].role === "START_FINISH");
+
+    const list: Array<{ ev: GateCrossingEvent; effTs: number }> = [];
+    for (const c of this.store.crossings) {
+      if (c.slotIndex !== slotIndex || !c.eventId || this.pendingDeletedCrossings.has(c.eventId)) {
+        continue;
+      }
+      const effTs =
+        this.crossingDrag && this.crossingDrag.eventId === c.eventId
+          ? this.crossingDrag.tsUs
+          : this.pendingCrossings.has(c.eventId)
+            ? this.pendingCrossings.get(c.eventId)!
+            : c.timestampUs;
+      list.push({ ev: c, effTs });
+    }
+    list.sort((a, b) => (a.effTs !== b.effTs ? a.effTs - b.effTs : a.ev.eventId - b.ev.eventId));
+
+    const lastAcceptedGateUs = new Map<number, number>();
+    let lapStartUs = 0;
+    let lastGateId = 0;
+    let lastGateTimeUs = 0;
+    let completedLaps = 0;
+
+    // Pre-scan valid SF timestamps so in-progress vs completed lap numbering is exact
+    const validSfIndices = new Set<number>();
+    {
+      const tmpLastGateUs = new Map<number, number>();
+      let tmpLapStart = 0;
+      let tmpLastGate = 0;
+      let tmpLastTime = 0;
+      for (let i = 0; i < list.length; i++) {
+        const { ev, effTs } = list[i];
+        const effRules = pilotGateRulesAt(this.store, ev.gateId, slotIndex);
+        const isSF = Boolean(ev.isStartFinish || ev.gateId === sfGateId);
+        if (tmpLastGate !== 0 && (effTs - tmpLastTime) / 1e6 > effRules.maxLapSec) {
+          tmpLapStart = 0;
+          tmpLastGate = 0;
+          tmpLastTime = 0;
+        }
+        if (!isSF && tmpLapStart === 0 && hasSfGate) continue;
+        if (isSF && tmpLapStart > 0 && (effTs - tmpLapStart) / 1e6 < effRules.minLapSec) continue;
+        const prevSame = tmpLastGateUs.get(ev.gateId);
+        if (prevSame !== undefined && (effTs - prevSame) / 1e6 < effRules.minLapSec) continue;
+        if (!isSF && tmpLapStart > 0 && tmpLastGate !== 0 && ordered.length >= 2) {
+          const li = orderedIdx.get(tmpLastGate);
+          const ci = orderedIdx.get(ev.gateId);
+          if (li !== undefined && ci !== undefined && ci <= li) continue;
+        }
+        tmpLastGateUs.set(ev.gateId, effTs);
+        if (isSF) {
+          validSfIndices.add(i);
+          tmpLapStart = effTs;
+        }
+        tmpLastGate = ev.gateId;
+        tmpLastTime = effTs;
+      }
+    }
+
+    for (let i = 0; i < list.length; i++) {
+      const { ev, effTs } = list[i];
+      const effRules = pilotGateRulesAt(this.store, ev.gateId, slotIndex);
+      const isSF = Boolean(ev.isStartFinish || ev.gateId === sfGateId);
+      const gateLbl = this.labelOfGate(ev.gateId);
+
+      if (lastGateId !== 0 && (effTs - lastGateTimeUs) / 1e6 > effRules.maxLapSec) {
+        lapStartUs = 0;
+        lastGateId = 0;
+        lastGateTimeUs = 0;
+      }
+
+      if (!isSF && lapStartUs === 0 && hasSfGate) {
+        const sfLbl = this.labelOfGate(ordered[0].gateId);
+        const detail = `${gateLbl} before ${sfLbl} (Start/Finish) - waiting for lap start`;
+        this.liveEvalByEventId.set(ev.eventId, {
+          effTs,
+          counted: false,
+          invalidReason: "OUT_OF_ORDER",
+          invalidDetail: detail,
+          suffix: FILTER_LABELS.OUT_OF_ORDER,
+          detailPrefix: detail,
+        });
+        continue;
+      }
+
+      if (isSF && lapStartUs > 0) {
+        const lapSec = Math.max(0, (effTs - lapStartUs) / 1e6);
+        if (lapSec < effRules.minLapSec) {
+          const detail = `Lap would be ${lapSec.toFixed(2)}s (min lap ${effRules.minLapSec.toFixed(1)}s)`;
+          this.liveEvalByEventId.set(ev.eventId, {
+            effTs,
+            counted: false,
+            invalidReason: "MIN_LAP",
+            invalidDetail: detail,
+            suffix: FILTER_LABELS.MIN_LAP,
+            detailPrefix: detail,
+          });
+          continue;
+        }
+      }
+
+      const prevSameUs = lastAcceptedGateUs.get(ev.gateId);
+      if (prevSameUs !== undefined) {
+        const sinceSame = Math.max(0, (effTs - prevSameUs) / 1e6);
+        if (sinceSame < effRules.minLapSec) {
+          const detail = isSF
+            ? `Lap would be ${sinceSame.toFixed(2)}s (min lap ${effRules.minLapSec.toFixed(1)}s)`
+            : `${gateLbl} again after ${sinceSame.toFixed(2)}s - quicker than min lap (${effRules.minLapSec.toFixed(1)}s)`;
+          this.liveEvalByEventId.set(ev.eventId, {
+            effTs,
+            counted: false,
+            invalidReason: "MIN_LAP",
+            invalidDetail: detail,
+            suffix: FILTER_LABELS.MIN_LAP,
+            detailPrefix: detail,
+          });
+          continue;
+        }
+      }
+
+      if (!isSF && lapStartUs > 0 && lastGateId !== 0 && ordered.length >= 2) {
+        const lastIdx = orderedIdx.get(lastGateId);
+        const candIdx = orderedIdx.get(ev.gateId);
+        if (lastIdx !== undefined && candIdx !== undefined && candIdx <= lastIdx) {
+          const nextIdx = (lastIdx + 1) % ordered.length;
+          const lastLbl = this.labelOfGate(lastGateId);
+          const nextLbl = this.labelOfGate(ordered[nextIdx].gateId);
+          const detail = `${gateLbl} out of track order after ${lastLbl} (expecting ${nextLbl})`;
+          this.liveEvalByEventId.set(ev.eventId, {
+            effTs,
+            counted: false,
+            invalidReason: "OUT_OF_ORDER",
+            invalidDetail: detail,
+            suffix: FILTER_LABELS.OUT_OF_ORDER,
+            detailPrefix: detail,
+          });
+          continue;
+        }
+      }
+
+      // Valid crossing
+      lastAcceptedGateUs.set(ev.gateId, effTs);
+      let suffix = "";
+      let detailPrefix = "Timed";
+      if (isSF) {
+        if (lapStartUs > 0) {
+          const lapSec = (effTs - lapStartUs) / 1e6;
+          if (lapSec > effRules.maxLapSec) {
+            suffix = "Start";
+            detailPrefix = "Start";
+          } else {
+            completedLaps++;
+            suffix = `Lap ${completedLaps}`;
+            detailPrefix = `Lap ${completedLaps} (${lapSec.toFixed(2)}s)`;
+          }
+        } else {
+          suffix = "Start";
+          detailPrefix = "Start";
+        }
+        lapStartUs = effTs;
+      } else {
+        const curLapNum = completedLaps + 1;
+        let hasClosingSf = false;
+        for (let j = i + 1; j < list.length; j++) {
+          if (validSfIndices.has(j)) {
+            hasClosingSf = true;
+            break;
+          }
+        }
+        const splitSec = lastGateTimeUs > 0 ? Math.max(0, (effTs - lastGateTimeUs) / 1e6) : 0;
+        suffix = `Lap ${curLapNum}`;
+        detailPrefix = hasClosingSf
+          ? `Lap ${curLapNum}${splitSec > 0 ? ` · +${splitSec.toFixed(2)}s` : ""}`
+          : `Lap ${curLapNum} (in progress)`;
+      }
+      lastGateId = ev.gateId;
+      lastGateTimeUs = effTs;
+
+      this.liveEvalByEventId.set(ev.eventId, {
+        effTs,
+        counted: true,
+        invalidReason: null,
+        invalidDetail: "",
+        suffix,
+        detailPrefix,
+      });
+    }
+
+    return this.liveEvalByEventId;
+  }
+
   /** Selected pilot's (or all seated pilots') passes in [from, to], oldest first. */
-  private passes(from: number, to: number, gateFilter: number | null = null): PassMarker[] {
+  private passes(from: number, to: number, gateFilter: ReadonlySet<number> | null = null): PassMarker[] {
     const crossings = this.store.crossings;
     const filtered = this.store.filtered;
     const out: PassMarker[] = [];
-    if (crossings.length > 0) {
+    if (crossings.length > 0 && this.isMultiPilotMode) {
       this.syncCrossingLapMeta();
     }
     const cStart = PilotRssiChart.firstEventAtOrAfter(crossings, from);
@@ -2445,18 +2841,25 @@ export class PilotRssiChart extends Component {
       for (let i = cStart; i < crossings.length; i++) {
         const c = crossings[i];
         if (c.timestampUs > to) break;
-        if (gateFilter !== null && c.gateId !== gateFilter) continue;
+        if (gateFilter !== null && !gateFilter.has(c.gateId)) continue;
         if (!slotSet.has(c.slotIndex)) continue;
         const p = this.store.pilot(c.slotIndex);
         const who = p?.callsign ?? c.callsign ?? `P${c.slotIndex}`;
         const gateLbl = this.labelOfGate(c.gateId);
+        const counted = !c.invalidReason;
         const meta = this.crossingLapMeta.get(PilotRssiChart.crossingMetaKey(c));
         out.push({
           ts: c.timestampUs,
           gateId: c.gateId,
-          counted: true,
-          title: meta?.suffix ? `${who} · ${gateLbl} · ${meta.suffix}` : `${who} · ${gateLbl}`,
-          detail: `${meta?.detailPrefix ?? "Timed"} · peak ${c.peakRssiDbm.toFixed(0)}${this.unitSuffix}`,
+          counted,
+          title: !counted && c.invalidReason
+            ? `${who} · ${gateLbl} (${FILTER_LABELS[c.invalidReason] ?? c.invalidReason})`
+            : meta?.suffix
+              ? `${who} · ${gateLbl} · ${meta.suffix}`
+              : `${who} · ${gateLbl}`,
+          detail: !counted && c.invalidDetail
+            ? c.invalidDetail
+            : `${meta?.detailPrefix ?? "Timed"} · peak ${c.peakRssiDbm.toFixed(0)}${this.unitSuffix}`,
           color: p?.color,
           slotIndex: c.slotIndex,
         });
@@ -2464,7 +2867,7 @@ export class PilotRssiChart extends Component {
       for (let i = fStart; i < filtered.length; i++) {
         const f = filtered[i];
         if (f.timestampUs > to) break;
-        if (gateFilter !== null && f.gateId !== gateFilter) continue;
+        if (gateFilter !== null && !gateFilter.has(f.gateId)) continue;
         if (!slotSet.has(f.slotIndex)) continue;
         const p = this.store.pilot(f.slotIndex);
         out.push({
@@ -2482,38 +2885,58 @@ export class PilotRssiChart extends Component {
     }
 
     const slot = this.activePilotSlot;
-    const hasLiveOverrides = this.crossingDrag !== null || this.pendingCrossings.size > 0;
+    const hasLiveOverrides =
+      this.crossingDrag !== null || this.pendingCrossings.size > 0 || this.pendingDeletedCrossings.size > 0;
+    if (crossings.length > 0 && !hasLiveOverrides) {
+      this.syncCrossingLapMeta();
+    }
+    const evalMap = hasLiveOverrides && crossings.length > 0 ? this.evaluateLivePilotCrossings(slot) : null;
     const scanStart = hasLiveOverrides ? 0 : cStart;
+    const crossingTsSet = new Set<string>();
+
     for (let i = scanStart; i < crossings.length; i++) {
       const c = crossings[i];
       if (!hasLiveOverrides && c.timestampUs > to) break;
-      if (gateFilter !== null && c.gateId !== gateFilter) continue;
+      if (gateFilter !== null && !gateFilter.has(c.gateId)) continue;
       if (c.slotIndex !== slot) continue;
-      const effTs =
-        this.crossingDrag && this.crossingDrag.eventId === c.eventId
-          ? this.crossingDrag.tsUs
-          : c.eventId && this.pendingCrossings.has(c.eventId)
-            ? this.pendingCrossings.get(c.eventId)!
-            : c.timestampUs;
+      if (c.eventId && this.pendingDeletedCrossings.has(c.eventId)) continue;
+
+      const evRes = c.eventId && evalMap ? evalMap.get(c.eventId) : undefined;
+      const effTs = evRes ? evRes.effTs : c.timestampUs;
       if (effTs < from || effTs > to) continue;
+
+      crossingTsSet.add(`${c.gateId}:${c.timestampUs}`);
       const gateLbl = this.labelOfGate(c.gateId);
-      const meta = this.crossingLapMeta.get(PilotRssiChart.crossingMetaKey(c));
+      const counted = evRes ? evRes.counted : !c.invalidReason;
+      const invReason = evRes ? evRes.invalidReason : (c.invalidReason ?? null);
+      const invDetail = evRes ? evRes.invalidDetail : (c.invalidDetail ?? "");
+      const meta = !evRes ? this.crossingLapMeta.get(PilotRssiChart.crossingMetaKey(c)) : undefined;
+      const suffix = evRes ? evRes.suffix : (meta?.suffix ?? "");
+      const detailPrefix = evRes ? evRes.detailPrefix : (meta?.detailPrefix ?? "Timed");
+
       out.push({
         ts: effTs,
         origTs: c.timestampUs,
         eventId: c.eventId,
         gateId: c.gateId,
-        counted: true,
-        title: meta?.suffix ? `${gateLbl} · ${meta.suffix}` : gateLbl,
-        detail: `${meta?.detailPrefix ?? "Timed"} · peak ${c.peakRssiDbm.toFixed(0)}${this.unitSuffix}`,
+        counted,
+        title: !counted && invReason
+          ? `${gateLbl} · ${FILTER_LABELS[invReason] ?? invReason}`
+          : suffix
+            ? `${gateLbl} · ${suffix}`
+            : gateLbl,
+        detail: !counted && invDetail
+          ? invDetail
+          : `${detailPrefix} · peak ${c.peakRssiDbm.toFixed(0)}${this.unitSuffix}`,
         slotIndex: c.slotIndex,
       });
     }
     for (let i = fStart; i < filtered.length; i++) {
       const f = filtered[i];
       if (f.timestampUs > to) break;
-      if (gateFilter !== null && f.gateId !== gateFilter) continue;
+      if (gateFilter !== null && !gateFilter.has(f.gateId)) continue;
       if (f.slotIndex !== slot) continue;
+      if (crossingTsSet.has(`${f.gateId}:${f.timestampUs}`)) continue;
       out.push({
         ts: f.timestampUs,
         gateId: f.gateId,
@@ -2527,9 +2950,9 @@ export class PilotRssiChart extends Component {
     return out;
   }
 
-  /** Passes filtered to the currently focused gate (or all gates when focus is null). */
+  /** Passes filtered to the currently checked timer subset (or all timers when none checked). */
   private focusedPasses(from: number, to: number): PassMarker[] {
-    return this.passes(from, to, this.focus);
+    return this.passes(from, to, this.selectedGates.size > 0 ? this.selectedGates : null);
   }
 
   /** Index of the first frame at or after ts (binary search; frames are in time order). */
@@ -2720,13 +3143,13 @@ export class PilotRssiChart extends Component {
     } else {
       this.tags = [];
     }
-    if (this.latest === 0) {
+    if (this.latest === 0 && this.store.crossings.length === 0) {
       this.crossingBoxes = [];
       return;
     }
 
     // Pass markers: dashed in the gate's (or pilot's) colour when timed, red when set aside.
-    // When paused on a focused timer, timed crossings render interactive pill handles for dragging.
+    // When paused & unlocked on a focused timer, crossings render interactive pill handles with `×` delete.
     ctx.font = font(600, 10.5);
     const passes = this.focusedPasses(start, end);
     const rows = passes.length > 0 ? this.labelRows(ctx, start, end) : this.cachedLabelRows;
@@ -2755,15 +3178,17 @@ export class PilotRssiChart extends Component {
     passes.forEach((p) => {
       const x = xOf(p.ts);
       const color = p.counted ? adaptColorForTheme(p.color || this.colorOf(p.gateId)) : theme.bad;
-      const editable = canEdit && p.counted && (p.eventId ?? 0) > 0;
+      const editable = canEdit && (p.eventId ?? 0) > 0;
       const isDraggingThis = editable && this.crossingDrag?.eventId === p.eventId;
       const isActiveCrossing =
         editable && (isDraggingThis || prevCrossingHit?.box.eventId === p.eventId);
+      const isHoverDelete =
+        editable && !isDraggingThis && Boolean(prevCrossingHit?.inDelete && prevCrossingHit.box.eventId === p.eventId);
 
       ctx.save();
-      ctx.strokeStyle = withAlpha(color, isActiveCrossing ? 0.96 : p.counted ? 0.75 : 0.9);
-      ctx.lineWidth = isActiveCrossing ? 2 : editable ? 1.3 : p.counted ? 1 : 1.5;
-      ctx.setLineDash(isDraggingThis ? [] : editable ? [4, 3] : p.counted ? [2, 3] : [5, 3]);
+      ctx.strokeStyle = withAlpha(color, isActiveCrossing ? 0.96 : p.counted ? 0.75 : 0.92);
+      ctx.lineWidth = isActiveCrossing ? 2 : editable ? 1.4 : p.counted ? 1 : 1.5;
+      ctx.setLineDash(isDraggingThis ? [] : editable ? (p.counted ? [4, 3] : [5, 3]) : p.counted ? [2, 3] : [5, 3]);
       ctx.beginPath();
       ctx.moveTo(x, padT);
       ctx.lineTo(x, padT + plotH);
@@ -2774,29 +3199,67 @@ export class PilotRssiChart extends Component {
       const row = rows.get(PilotRssiChart.keyOf(p)) ?? 0;
       if (editable) {
         ctx.font = font(700, 10.5);
-        const pillW = ctx.measureText(lbl).width + 14;
-        const pillX = Math.max(padL + 2, Math.min(padL + plotW - pillW - 2, x + 4));
+        const delW = 16;
+        const textW = ctx.measureText(lbl).width;
+        const pillW = textW + 12 + delW;
         const pillY = padT + 2 + row * (TAG_H + 3);
+        const rightReserve = pillY < padT + 34 ? 68 : 2;
+        const pillX = Math.max(
+          padL + 2,
+          Math.min(Math.max(padL + 2, padL + plotW - pillW - rightReserve), x + 4)
+        );
+        const delX = pillX + pillW - delW;
         ctx.beginPath();
         ctx.roundRect(pillX, pillY, pillW, TAG_H, 5);
         if (isDraggingThis) {
           ctx.fillStyle = color;
           ctx.fill();
         } else {
-          ctx.fillStyle = theme.surface;
+          ctx.fillStyle = p.counted ? theme.surface : withAlpha(theme.bad, 0.14);
           ctx.fill();
           ctx.strokeStyle = color;
-          ctx.lineWidth = 1;
+          ctx.lineWidth = p.counted ? 1 : 1.4;
           ctx.stroke();
         }
         if (isActiveCrossing) {
-          ctx.strokeStyle = theme.text;
+          ctx.strokeStyle = p.counted ? theme.text : theme.bad;
           ctx.lineWidth = 1.5;
           ctx.stroke();
         }
-        ctx.fillStyle = isDraggingThis ? inkOnColor(color) : color;
+        const fg = isDraggingThis ? inkOnColor(color) : color;
+        ctx.fillStyle = fg;
         ctx.textAlign = "left";
         ctx.fillText(lbl, pillX + 7, pillY + 12.5);
+
+        // Separator and `×` delete icon inside right end of handle
+        ctx.save();
+        if (isHoverDelete) {
+          ctx.fillStyle = theme.bad;
+          ctx.beginPath();
+          ctx.roundRect(delX + 1, pillY + 2, delW - 3, TAG_H - 4, 3.5);
+          ctx.fill();
+        } else {
+          ctx.strokeStyle = withAlpha(fg, 0.26);
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(delX + 0.5, pillY + 3.5);
+          ctx.lineTo(delX + 0.5, pillY + TAG_H - 3.5);
+          ctx.stroke();
+        }
+        const cx = delX + delW * 0.5 - 0.5;
+        const cy = pillY + TAG_H * 0.5;
+        const rHalf = 2.8;
+        ctx.strokeStyle = isHoverDelete ? "#ffffff" : fg;
+        ctx.lineWidth = 1.5;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(cx - rHalf, cy - rHalf);
+        ctx.lineTo(cx + rHalf, cy + rHalf);
+        ctx.moveTo(cx + rHalf, cy - rHalf);
+        ctx.lineTo(cx - rHalf, cy + rHalf);
+        ctx.stroke();
+        ctx.restore();
+
         nextCrossingBoxes.push({
           eventId: p.eventId!,
           gateId: p.gateId,
@@ -2804,10 +3267,14 @@ export class PilotRssiChart extends Component {
           origTsUs: p.origTs ?? p.ts,
           tsUs: p.ts,
           title: p.title,
+          counted: p.counted,
           lineX: x,
           pillX,
           pillY,
           pillW,
+          delX,
+          delY: pillY,
+          delW,
         });
       } else {
         ctx.fillStyle = color;
@@ -2831,12 +3298,22 @@ export class PilotRssiChart extends Component {
       const liveDbm = pilotEntry
         ? this.rssiAt(this.crossingDrag.gateId, pilotEntry.slot, this.crossingDrag.tsUs)
         : undefined;
+      const liveEval = this.liveEvalByEventId.get(this.crossingDrag.eventId);
+      const dragCounted = liveEval ? liveEval.counted : true;
+      const dragTitle =
+        !dragCounted && liveEval?.invalidReason
+          ? `${this.labelOfGate(this.crossingDrag.gateId)} · ${FILTER_LABELS[liveEval.invalidReason] ?? liveEval.invalidReason}`
+          : this.crossingDrag.title;
+      const dragDetail =
+        !dragCounted && liveEval?.invalidDetail
+          ? liveEval.invalidDetail
+          : `Move ${signed}${liveDbm !== undefined ? ` · ${liveDbm.toFixed(0)}${this.unitSuffix}` : ""}`;
       this.drawCursor(ctx, h, plotH, dragX, {
         ts: this.crossingDrag.tsUs,
         gateId: this.crossingDrag.gateId,
-        counted: true,
-        title: this.crossingDrag.title,
-        detail: `Move ${signed}${liveDbm !== undefined ? ` · ${liveDbm.toFixed(0)}${this.unitSuffix}` : ""}`,
+        counted: dragCounted,
+        title: dragTitle,
+        detail: dragDetail,
       });
     } else if (
       !this.tagDrag &&
@@ -2964,7 +3441,10 @@ export class PilotRssiChart extends Component {
   }
 
   private labelOf(p: PassMarker): string {
-    return p.counted ? p.title : `✕ ${p.title}`;
+    if (p.counted || (this.canEditCrossings && (p.eventId ?? 0) > 0)) {
+      return p.title;
+    }
+    return `✕ ${p.title}`;
   }
 
   /**
@@ -2981,7 +3461,7 @@ export class PilotRssiChart extends Component {
     const multiSig = this.isMultiPilotMode ? (this.multiPilotSlots ?? []).join(",") : "";
     const editMode = this.canEditCrossings ? 1 : 0;
     const dragSig = this.crossingDrag ? `${this.crossingDrag.eventId}:${this.crossingDrag.tsUs}` : "";
-    const sig = `${windowPasses.length}:${firstTs}:${lastTs}:${this.store.laps.length}:${this.store.stateRev ?? 0}:${editMode}:${dragSig}:${Math.round(this.windowUs)}:${Math.round(this.plot.w)}:${this.focus ?? "all"}:${this.activePilotSlot}:${multiSig}`;
+    const sig = `${windowPasses.length}:${firstTs}:${lastTs}:${this.store.laps.length}:${this.store.stateRev ?? 0}:${editMode}:${dragSig}:${Math.round(this.windowUs)}:${Math.round(this.plot.w)}:${this.selectedGatesKey}:${this.activePilotSlot}:${multiSig}`;
     if (sig === this.cachedLabelSig) {
       return this.cachedLabelRows;
     }
@@ -2990,7 +3470,7 @@ export class PilotRssiChart extends Component {
     const rowEnd = [-Infinity, -Infinity];
     const pxPerUs = Math.max(1e-9, this.plot.w / this.windowUs);
     const baseTs = firstTs;
-    const padExtra = editMode ? 18 : 0;
+    const padExtra = editMode ? 32 : 0;
     for (let i = 0; i < windowPasses.length; i++) {
       const p = windowPasses[i];
       const lbl = this.labelOf(p);
@@ -3175,11 +3655,49 @@ export class PilotRssiChart extends Component {
     if (btn.getAttribute("aria-pressed") !== String(live)) btn.setAttribute("aria-pressed", String(live));
     if (btn.innerHTML !== wantLiveHtml) btn.innerHTML = wantLiveHtml;
 
-    const gateScope = this.focus === null ? "all timers" : gateLabel(this.store, this.focus);
+    const gateScope =
+      this.focus !== null
+        ? gateLabel(this.store, this.focus)
+        : this.selectedGates.size >= 2
+          ? `${this.selectedGates.size} selected timers`
+          : "all timers";
     const prevBtn = this.el.querySelector<HTMLButtonElement>('[data-act="prev"]');
     const nextBtn = this.el.querySelector<HTMLButtonElement>('[data-act="next"]');
     if (prevBtn) prevBtn.title = `Previous pass at ${gateScope} (←)`;
     if (nextBtn) nextBtn.title = `Next pass at ${gateScope} (→)`;
+
+    const overlayEl = this.el.querySelector<HTMLElement>('[data-slot="chart-actions"]');
+    if (overlayEl) {
+      const showOverlay = this.focus !== null && !this.isMultiPilotMode && !this.store.isHistoricalTrack;
+      const overlaySig = `${showOverlay ? 1 : 0}:${this.focus ?? 0}:${this.chartLinesLocked ? 1 : 0}`;
+      if (overlaySig !== this.lastOverlayActionsSig) {
+        this.lastOverlayActionsSig = overlaySig;
+        overlayEl.hidden = !showOverlay;
+        if (showOverlay && this.focus !== null) {
+          const gName = gateLabel(this.store, this.focus);
+          const addBtn = overlayEl.querySelector<HTMLButtonElement>('[data-act="add-crossing"]');
+          const lockBtn = overlayEl.querySelector<HTMLButtonElement>('[data-act="toggle-chart-lock"]');
+          if (addBtn) {
+            addBtn.disabled = this.chartLinesLocked;
+            const addTitle = this.chartLinesLocked
+              ? `Unlock chart lines to add ${gName} crossings`
+              : `Add ${gName} crossing`;
+            addBtn.title = addTitle;
+            addBtn.setAttribute("aria-label", addTitle);
+          }
+          if (lockBtn) {
+            lockBtn.className = `scope-chart-action-btn ${this.chartLinesLocked ? "is-locked" : "is-unlocked"}`;
+            lockBtn.setAttribute("aria-pressed", String(!this.chartLinesLocked));
+            const lockTitle = this.chartLinesLocked
+              ? `Unlock ${gName} threshold and crossing lines`
+              : `Lock ${gName} threshold and crossing lines`;
+            lockBtn.title = lockTitle;
+            lockBtn.setAttribute("aria-label", lockTitle);
+            lockBtn.innerHTML = this.chartLinesLocked ? icons.lock(14) : icons.unlock(14);
+          }
+        }
+      }
+    }
 
     const winSec = this.windowUs / 1e6;
     const roundedWin = Math.round(winSec);
@@ -3306,6 +3824,11 @@ export class PilotRssiChart extends Component {
       if (this.calibMessage) {
         const shortMsg = this.calibMessageShort || this.calibMessage;
         textHtml = `<span class="scope-calib-text-full">${esc(this.calibMessage)}</span><span class="scope-calib-text-short">${esc(shortMsg)}</span>`;
+      } else if (this.selectedGates.size >= 2) {
+        const names = this.shownGates.map((g) => this.labelOfGate(g.gateId)).join(", ");
+        const fullText = `Comparing ${this.selectedGates.size} timers (${names}) · select a single timer to unlock or adjust thresholds and crossings.`;
+        const shortText = `Comparing ${names} · select 1 timer to edit.`;
+        textHtml = `<span class="scope-calib-text-full">${esc(fullText)}</span><span class="scope-calib-text-short">${esc(shortText)}</span>`;
       } else {
         const fullText = isLapRF
           ? "Select a timer above to view or drag its LapRF crossing threshold (300–3500)."
@@ -3332,7 +3855,11 @@ export class PilotRssiChart extends Component {
         const baseText = isLapRF
           ? `${name}: Threshold ${t.dbm.toFixed(0)} ${isCal ? "(calibrated)" : "(default)"}`
           : `${name}: Enter ${t.dbm.toFixed(0)} / Exit ${ex.dbm.toFixed(0)}${this.unitSuffix} ${isCal ? "(calibrated)" : "(default)"}`;
-        const dragHint = isLapRF ? " · drag line to adjust" : " · drag lines to adjust";
+        const dragHint = this.chartLinesLocked
+          ? " · unlock lines in chart to adjust"
+          : isLapRF
+            ? " · drag line to adjust"
+            : " · drag lines to adjust";
         textHtml = `${esc(baseText)}<span class="scope-calib-drag-hint">${esc(dragHint)}</span>`;
       }
       const calibButton = isCalibrating
@@ -3393,8 +3920,9 @@ export class PilotRssiChart extends Component {
         }
       }
     }
+    const selKey = this.selectedGatesKey;
     const calibBusyKey = this.calibratingGates.size > 0 ? Array.from(this.calibratingGates).sort((a, b) => a - b).join(",") : "";
-    const fastKey = `${this.store.stateRev ?? 0}|${this.focus ?? "all"}|${this.tuningGateId ?? "closed"}|${this.tuneDrawerOpen ? 1 : 0}|${activeSlot}|${this.isMultiPilotMode ? (this.multiPilotSlots ?? []).join(",") : "single"}|${unitSuffix}|${this.pending.size}|${calibBusyKey}|${readyMask}`;
+    const fastKey = `${this.store.stateRev ?? 0}|${selKey}|${this.tuningGateId ?? "closed"}|${this.tuneDrawerOpen ? 1 : 0}|${activeSlot}|${this.isMultiPilotMode ? (this.multiPilotSlots ?? []).join(",") : "single"}|${unitSuffix}|${this.pending.size}|${calibBusyKey}|${readyMask}`;
     if (fastKey !== this.lastFastLegendKey || legendEl.childElementCount === 0) {
       this.lastFastLegendKey = fastKey;
       const globalOvrCount = canTune ? countGlobalOverrides(this.store.rules) : 0;
@@ -3406,7 +3934,7 @@ export class PilotRssiChart extends Component {
       };
       const anyCalibrated = canTune && this.store.nodes.some((p) => isGateCalibrated(p.gateId));
       const structSig = [
-        this.focus ?? "all",
+        selKey,
         this.tuningGateId ?? "closed",
         this.tuneDrawerOpen ? "open" : "closed",
         this.isMultiPilotMode ? "multi" : "single",
@@ -3432,8 +3960,9 @@ export class PilotRssiChart extends Component {
 
       if (structSig !== this.lastLegendStructSig || legendEl.childElementCount === 0) {
         this.lastLegendStructSig = structSig;
+        const isAllSelected = this.selectedGates.size === 0;
         const allChip = `
-          <button type="button" class="channel channel-all ${this.focus === null ? "is-focus" : "is-dim"}"
+          <button type="button" class="channel channel-all ${isAllSelected ? "is-focus" : "is-dim"}"
                   data-focus="all" title="Show all timers (${this.store.nodes.length})">
             <span class="dot channel-all-dot"></span>
             <span class="channel-name">All timers</span>
@@ -3452,8 +3981,10 @@ export class PilotRssiChart extends Component {
                 hasReading = true;
               }
             }
+            const isChecked = this.selectedGates.has(p.gateId);
+            const isSolo = this.selectedGates.size === 1 && isChecked;
             const hot = !this.isMultiPilotMode && dbm >= this.thresholdOf(p.gateId).dbm;
-            const dim = this.focus !== null && this.focus !== p.gateId;
+            const dim = !isAllSelected && !isChecked;
             const label = this.labelOfGate(p.gateId);
             const gOvrCount = canTune ? countGateOverrides(p.ruleOverrides, this.store.rules) : 0;
             const pOvrCount = canTune
@@ -3478,9 +4009,16 @@ export class PilotRssiChart extends Component {
               : "";
             const initText = `${this.isMultiPilotMode ? "peak " : ""}${dbm.toFixed(0)}${unitSuffix}`;
             return `
-              <button type="button" class="channel ${hot ? "is-hot" : ""} ${dim ? "is-dim" : ""} ${this.focus === p.gateId ? "is-focus" : ""}"
+              <button type="button" class="channel ${hot ? "is-hot" : ""} ${dim ? "is-dim" : ""} ${isChecked ? "is-focus" : ""}"
                       data-gate-chip="${p.gateId}"
-                      data-focus="${this.focus === p.gateId ? "all" : p.gateId}" title="${this.focus === p.gateId ? "Show all timers" : "Show only this timer"}">
+                      data-focus="${isSolo ? "all" : p.gateId}" title="${isSolo ? "Show all timers" : "Show only this timer"}">
+                <span class="practice-sector-checkbox channel-gate-check ${isChecked ? "is-checked" : ""}"
+                      data-gate-check="${p.gateId}"
+                      role="checkbox"
+                      aria-checked="${isChecked}"
+                      tabindex="0"
+                      title="${isChecked ? `Hide ${esc(label)} trace` : `Compare ${esc(label)} trace`}"
+                      aria-label="Toggle ${esc(label)} trace"></span>
                 <span class="dot" style="--c:${this.colorOf(p.gateId)}"></span>
                 <span class="channel-name">${esc(label)}</span>
                 ${hasOvr ? `<span class="channel-custom-icon" title="Customized" aria-label="Customized">${icons.pencil(12)}</span>` : ""}

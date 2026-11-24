@@ -652,6 +652,50 @@ func (s *Server) handleDeletePracticeSessionLap(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
+// handleAddPracticeSessionCrossing serves `POST /v1/practice/sessions/{sessionId}/crossings`.
+func (s *Server) handleAddPracticeSessionCrossing(w http.ResponseWriter, r *http.Request) {
+	rawID := strings.TrimSpace(r.PathValue("sessionId"))
+	if !rejectColonInPathValue(w, rawID) {
+		return
+	}
+	var body struct {
+		GateID      *uint8   `json:"gateId"`
+		SlotIndex   *int     `json:"slotIndex"`
+		TimestampUs *uint64  `json:"timestampUs"`
+		PeakRSSIDbm *float32 `json:"peakRssiDbm,omitempty"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil ||
+		body.GateID == nil || *body.GateID == 0 ||
+		body.SlotIndex == nil || *body.SlotIndex <= 0 ||
+		body.TimestampUs == nil || *body.TimestampUs == 0 {
+		writeErrorJSON(w, http.StatusBadRequest, "request body must specify positive integer fields 'gateId', 'slotIndex', and 'timestampUs'")
+		return
+	}
+	eng := s.activeEngine()
+	sess, targetID := resolvePracticeSession(eng, rawID)
+	if sess == nil {
+		if rawID == "" || strings.EqualFold(rawID, "current") {
+			evID, err := eng.AddEngineCrossing(*body.GateID, *body.SlotIndex, *body.TimestampUs, body.PeakRSSIDbm)
+			if err != nil {
+				writeEngineError(w, err)
+				return
+			}
+			s.logUserAction("Practice", "Added manual crossing #%d gate=%d slot=%d timestamp=%d us", evID, *body.GateID, *body.SlotIndex, *body.TimestampUs)
+			writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+			return
+		}
+		writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("practice session %q not found", rawID))
+		return
+	}
+	_, evID, err := eng.AddPracticeSessionCrossing(targetID, *body.GateID, *body.SlotIndex, *body.TimestampUs, body.PeakRSSIDbm)
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	s.logUserAction("Practice", "Added manual crossing #%d gate=%d slot=%d timestamp=%d us in session %q (id=%s)", evID, *body.GateID, *body.SlotIndex, *body.TimestampUs, sess.Name, targetID)
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
 // handlePatchPracticeSessionCrossing serves `PATCH /v1/practice/sessions/{sessionId}/crossings/{eventId}`.
 func (s *Server) handlePatchPracticeSessionCrossing(w http.ResponseWriter, r *http.Request) {
 	rawID := strings.TrimSpace(r.PathValue("sessionId"))
@@ -692,6 +736,72 @@ func (s *Server) handlePatchPracticeSessionCrossing(w http.ResponseWriter, r *ht
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
+// handleDeletePracticeSessionCrossing serves `DELETE /v1/practice/sessions/{sessionId}/crossings/{eventId}`.
+func (s *Server) handleDeletePracticeSessionCrossing(w http.ResponseWriter, r *http.Request) {
+	rawID := strings.TrimSpace(r.PathValue("sessionId"))
+	if !rejectColonInPathValue(w, rawID) {
+		return
+	}
+	eventID, ok := parseUint64PathValue(w, r, "eventId")
+	if !ok {
+		return
+	}
+	eng := s.activeEngine()
+	sess, targetID := resolvePracticeSession(eng, rawID)
+	if sess == nil {
+		if rawID == "" || strings.EqualFold(rawID, "current") {
+			if err := eng.DeleteEngineCrossing(eventID); err != nil {
+				writeEngineError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+			return
+		}
+		writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("practice session %q not found", rawID))
+		return
+	}
+	if _, err := eng.DeletePracticeSessionCrossing(targetID, eventID); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	s.logUserAction("Practice", "Deleted crossing #%d in session %q (id=%s)", eventID, sess.Name, targetID)
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+// handleAddRaceSessionCrossing serves `POST /v1/race/sessions/{sessionId}/crossings`.
+func (s *Server) handleAddRaceSessionCrossing(w http.ResponseWriter, r *http.Request) {
+	rawID := strings.TrimSpace(r.PathValue("sessionId"))
+	if !rejectColonInPathValue(w, rawID) {
+		return
+	}
+	var body struct {
+		GateID      *uint8   `json:"gateId"`
+		SlotIndex   *int     `json:"slotIndex"`
+		TimestampUs *uint64  `json:"timestampUs"`
+		PeakRSSIDbm *float32 `json:"peakRssiDbm,omitempty"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil ||
+		body.GateID == nil || *body.GateID == 0 ||
+		body.SlotIndex == nil || *body.SlotIndex <= 0 ||
+		body.TimestampUs == nil || *body.TimestampUs == 0 {
+		writeErrorJSON(w, http.StatusBadRequest, "request body must specify positive integer fields 'gateId', 'slotIndex', and 'timestampUs'")
+		return
+	}
+	eng := s.activeEngine()
+	rs, targetID := findRaceSessionSnapshot(eng, rawID)
+	if rs == nil {
+		writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("race %q not found", rawID))
+		return
+	}
+	evID, err := eng.AddRaceCrossing(targetID, *body.GateID, *body.SlotIndex, *body.TimestampUs, body.PeakRSSIDbm)
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	s.logUserAction("Race", "Added manual crossing #%d gate=%d slot=%d timestamp=%d us in race %q (id=%s)", evID, *body.GateID, *body.SlotIndex, *body.TimestampUs, rs.Config.EventName, targetID)
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
 // handlePatchRaceSessionCrossing serves `PATCH /v1/race/sessions/{sessionId}/crossings/{eventId}`.
 func (s *Server) handlePatchRaceSessionCrossing(w http.ResponseWriter, r *http.Request) {
 	rawID := strings.TrimSpace(r.PathValue("sessionId"))
@@ -721,6 +831,30 @@ func (s *Server) handlePatchRaceSessionCrossing(w http.ResponseWriter, r *http.R
 		return
 	}
 	s.logUserAction("Race", "Adjusted crossing #%d timestamp=%d us in race %q (id=%s)", eventID, *body.TimestampUs, rs.Config.EventName, targetID)
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+// handleDeleteRaceSessionCrossing serves `DELETE /v1/race/sessions/{sessionId}/crossings/{eventId}`.
+func (s *Server) handleDeleteRaceSessionCrossing(w http.ResponseWriter, r *http.Request) {
+	rawID := strings.TrimSpace(r.PathValue("sessionId"))
+	if !rejectColonInPathValue(w, rawID) {
+		return
+	}
+	eventID, ok := parseUint64PathValue(w, r, "eventId")
+	if !ok {
+		return
+	}
+	eng := s.activeEngine()
+	rs, targetID := findRaceSessionSnapshot(eng, rawID)
+	if rs == nil {
+		writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("race %q not found", rawID))
+		return
+	}
+	if err := eng.DeleteRaceCrossing(targetID, eventID); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	s.logUserAction("Race", "Deleted crossing #%d in race %q (id=%s)", eventID, rs.Config.EventName, targetID)
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 

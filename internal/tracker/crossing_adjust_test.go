@@ -130,3 +130,102 @@ func TestAdjustPracticeSessionCrossingRecalculatesLapsAndSplits(t *testing.T) {
 		t.Fatalf("expected Lap 2 (10.4s) to become Best Lap and Lap 1 (11.6s) non-best: lap1=%+v lap2=%+v", lap1, lap2)
 	}
 }
+
+func TestAddMoveDeletePracticeCrossingsWithRuleInvalidation(t *testing.T) {
+	e := NewEngine()
+	e.mu.Lock()
+	e.gates = []domain.TrackGate{
+		{GateID: 1, Name: "H1", Role: domain.GateRoleStartFinish, TrackOrder: 0, AssignedTimerID: 1},
+		{GateID: 2, Name: "T1", Role: domain.GateRoleSectorGate, TrackOrder: 1, AssignedTimerID: 2},
+		{GateID: 3, Name: "T2", Role: domain.GateRoleSectorGate, TrackOrder: 2, AssignedTimerID: 3},
+	}
+	e.mu.Unlock()
+
+	ps, err := e.PracticeAction(PracticeActionPayload{Action: "create_session", Name: "Manual Edit Pack"})
+	if err != nil {
+		t.Fatalf("create_session: %v", err)
+	}
+	sid := ps.Sessions[len(ps.Sessions)-1].SessionID
+	if _, err := e.PracticeAction(PracticeActionPayload{Action: "add_session_pilot", SessionID: sid, SlotIndex: 1, Band: domain.BandRaceband, Channel: 1}); err != nil {
+		t.Fatalf("add_session_pilot: %v", err)
+	}
+	if _, err := e.PracticeAction(PracticeActionPayload{Action: "start_session", SessionID: sid}); err != nil {
+		t.Fatalf("start_session: %v", err)
+	}
+
+	// Build Lap 1: H1(10.0s) -> bad early T1(11.5s) -> T2(17.0s) -> H1(21.0s)
+	_, _, _ = e.AddPracticeSessionCrossing(sid, 1, 1, 10_000_000, nil)
+	_, badT1ID, err := e.AddPracticeSessionCrossing(sid, 2, 1, 11_500_000, nil)
+	if err != nil {
+		t.Fatalf("add bad T1: %v", err)
+	}
+	_, _, _ = e.AddPracticeSessionCrossing(sid, 3, 1, 17_000_000, nil)
+	_, _, _ = e.AddPracticeSessionCrossing(sid, 1, 1, 21_000_000, nil)
+
+	// 1. User drops a new T1 crossing at 13.8s (after badT1 at 11.5s -> 2.3s < 5.0s minLap):
+	//    The newly added crossing stays in Crossings with InvalidReason == MIN_LAP!
+	peak := float32(-51.0)
+	ps1, newT1ID, err := e.AddPracticeSessionCrossing(sid, 2, 1, 13_800_000, &peak)
+	if err != nil {
+		t.Fatalf("add new T1: %v", err)
+	}
+	sess := ps1.Sessions[len(ps1.Sessions)-1]
+	var gotBad, gotNew *domain.GateCrossingEvent
+	for i := range sess.Crossings {
+		if sess.Crossings[i].EventID == badT1ID {
+			gotBad = &sess.Crossings[i]
+		}
+		if sess.Crossings[i].EventID == newT1ID {
+			gotNew = &sess.Crossings[i]
+		}
+	}
+	if gotBad == nil || gotBad.InvalidReason != "" {
+		t.Fatalf("expected earlier 11.5s crossing to remain valid, got %+v", gotBad)
+	}
+	if gotNew == nil || gotNew.InvalidReason != domain.FilterMinLap {
+		t.Fatalf("expected newly dropped 13.8s crossing to be marked MIN_LAP, got %+v", gotNew)
+	}
+
+	// 2. Drag the new crossing to BEFORE 11.5s (to 10.8s):
+	//    Now 10.8s comes first (valid!) and 11.5s turns red (MIN_LAP)!
+	ps2, err := e.AdjustPracticeSessionCrossing(sid, newT1ID, 10_800_000, nil)
+	if err != nil {
+		t.Fatalf("adjust new T1 before bad T1: %v", err)
+	}
+	sess = ps2.Sessions[len(ps2.Sessions)-1]
+	gotBad, gotNew = nil, nil
+	for i := range sess.Crossings {
+		if sess.Crossings[i].EventID == badT1ID {
+			gotBad = &sess.Crossings[i]
+		}
+		if sess.Crossings[i].EventID == newT1ID {
+			gotNew = &sess.Crossings[i]
+		}
+	}
+	if gotNew == nil || gotNew.InvalidReason != "" {
+		t.Fatalf("expected moved 10.8s crossing to become valid, got %+v", gotNew)
+	}
+	if gotBad == nil || gotBad.InvalidReason != domain.FilterMinLap {
+		t.Fatalf("expected old 11.5s crossing to become MIN_LAP, got %+v", gotBad)
+	}
+
+	// 3. Move newT1 back to 13.8s (so newT1 is red again) and DELETE badT1 (11.5s):
+	//    newT1 at 13.8s immediately turns valid and Lap 1 splits become S1=3.8s, S2=3.2s, S3=4.0s!
+	_, _ = e.AdjustPracticeSessionCrossing(sid, newT1ID, 13_800_000, nil)
+	ps3, err := e.DeletePracticeSessionCrossing(sid, badT1ID)
+	if err != nil {
+		t.Fatalf("delete badT1: %v", err)
+	}
+	sess = ps3.Sessions[len(ps3.Sessions)-1]
+	for i := range sess.Crossings {
+		if sess.Crossings[i].EventID == badT1ID {
+			t.Fatalf("expected deleted crossing %d to be removed", badT1ID)
+		}
+		if sess.Crossings[i].EventID == newT1ID && sess.Crossings[i].InvalidReason != "" {
+			t.Fatalf("expected 13.8s crossing to become valid after deleting badT1, got %+v", sess.Crossings[i])
+		}
+	}
+	if len(sess.Laps) != 1 || len(sess.Laps[0].Sectors) != 3 || math.Abs(sess.Laps[0].Sectors[0].SplitSeconds-3.8) > 0.001 {
+		t.Fatalf("expected Lap 1 S1=3.8s after deleting badT1, got %+v", sess.Laps)
+	}
+}

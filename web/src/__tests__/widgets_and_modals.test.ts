@@ -899,13 +899,19 @@ describe("widgets/Toast & TimingRulesEditor", () => {
         []
       );
 
-      // Select timer T1 and pause the chart
+      // Select timer T1 and pause the chart: locked by default so scrolling never snags lines!
       root.querySelector<HTMLButtonElement>('[data-gate-chip="2"]')!.click();
       root.querySelector<HTMLButtonElement>('[data-act="live"]')!.click();
       await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
       await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
 
       const hostEl = root.querySelector<HTMLElement>('[data-slot="chart"]')!;
+      const lockBtn = root.querySelector<HTMLButtonElement>('[data-act="toggle-chart-lock"]')!;
+      const addBtn = root.querySelector<HTMLButtonElement>('[data-act="add-crossing"]')!;
+      expect(lockBtn).not.toBeNull();
+      expect(lockBtn.classList.contains("is-locked")).toBe(true);
+      expect(addBtn.disabled).toBe(true);
+
       const rect = hostEl.getBoundingClientRect();
       // Compute pixel X of 6.5s inside the 15s window ending at 15.0s:
       // padL = 46, padR = 16 => plotW = rect.width - 62
@@ -913,6 +919,25 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       const lineX = 46 + ((6_500_000 - 0) / 15_000_000) * plotW;
       const targetX = 46 + ((8_500_000 - 0) / 15_000_000) * plotW;
       const midY = rect.height * 0.5;
+
+      // While locked by default, hovering over the crossing line does NOT activate `is-over-crossing`
+      hostEl.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          clientX: rect.left + lineX,
+          clientY: rect.top + midY,
+          pointerId: 1,
+          pointerType: "mouse",
+        })
+      );
+      expect(hostEl.classList.contains("is-over-crossing")).toBe(false);
+
+      // Unlock chart lines via the top-right lock toggle button
+      lockBtn.click();
+      expect(lockBtn.classList.contains("is-unlocked")).toBe(true);
+      expect(addBtn.disabled).toBe(false);
+      await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
+      await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
 
       // Hover over the crossing line -> cursor class `is-over-crossing` activates
       hostEl.dispatchEvent(
@@ -965,6 +990,93 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       expect(Math.abs(savedTs - 8_500_000) < 100_000).toBe(true);
       expect(adjCall!.args[2]).toBe(-52);
       expect(root.querySelector('[data-slot="calib"]')!.textContent).toContain("Adjusted T1 · Lap 1");
+
+      // Click `+` add-crossing button -> adds a crossing for focused timer T1 (gateId=2, slotIndex=1)
+      addBtn.click();
+      await flushMicrotasks();
+      const addCall = calls.find((c) => c.method === "addCrossing");
+      expect(addCall).toBeDefined();
+      expect(addCall!.args[0]).toBe(2);
+      expect(addCall!.args[1]).toBe(1);
+
+      // Delete crossing 11 via the `×` button on the right end of its top pill handle
+      const boxes = (chart as unknown as { crossingBoxes: Array<{ eventId: number; delX: number; delW: number; pillY: number }> }).crossingBoxes;
+      const box11 = boxes.find((b) => b.eventId === 11);
+      expect(box11).toBeDefined();
+      const delClickX = rect.left + box11!.delX + box11!.delW * 0.5;
+      const delClickY = rect.top + box11!.pillY + 9;
+      hostEl.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: delClickX,
+          clientY: delClickY,
+          pointerId: 2,
+          pointerType: "mouse",
+        })
+      );
+      hostEl.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          button: 0,
+          clientX: delClickX,
+          clientY: delClickY,
+          pointerId: 2,
+          pointerType: "mouse",
+        })
+      );
+      await flushMicrotasks();
+      const delCall = calls.find((c) => c.method === "deleteCrossing");
+      expect(delCall).toBeDefined();
+      expect(delCall!.args[0]).toBe(11);
+
+      // Multi-timer checkbox comparison: check H1 (gateId=1) while T1 (gateId=2) is already checked
+      const checkH1 = root.querySelector<HTMLElement>('[data-gate-check="1"]')!;
+      checkH1.click();
+      expect(root.querySelector('[data-gate-check="1"]')!.getAttribute("aria-checked")).toBe("true");
+      expect(root.querySelector('[data-gate-check="2"]')!.getAttribute("aria-checked")).toBe("true");
+      expect(root.querySelector('[data-slot="calib"]')!.textContent).toContain("Comparing 2 timers");
+
+      // Solo T1 again and verify live on-the-fly red invalidation when dragging a 2nd T1 crossing inside minLapSec
+      root.querySelector<HTMLButtonElement>('[data-gate-chip="2"]')!.click();
+      store.ingestCrossing(makeCrossing(15, 2, 1, 13_000_000, { isStartFinish: false, peakRssiDbm: -55 }));
+      await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
+      await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
+
+      const line15X = 46 + ((13_000_000 - 0) / 15_000_000) * plotW;
+      const tooCloseX = 46 + ((9_200_000 - 0) / 15_000_000) * plotW;
+      hostEl.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: rect.left + line15X,
+          clientY: rect.top + midY,
+          pointerId: 3,
+          pointerType: "mouse",
+        })
+      );
+      hostEl.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          clientX: rect.left + tooCloseX,
+          clientY: rect.top + midY,
+          pointerId: 3,
+          pointerType: "mouse",
+        })
+      );
+      await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
+      const liveBoxes = (chart as unknown as { crossingBoxes: Array<{ eventId: number; counted: boolean; title: string }> }).crossingBoxes;
+      const box15DuringDrag = liveBoxes.find((b) => b.eventId === 15);
+      expect(box15DuringDrag).toBeDefined();
+      expect(box15DuringDrag!.counted).toBe(false);
+      expect(box15DuringDrag!.title).toContain("Min lap");
+      hostEl.dispatchEvent(
+        new PointerEvent("pointercancel", {
+          bubbles: true,
+          pointerId: 3,
+          pointerType: "mouse",
+        })
+      );
     } finally {
       chart.destroy();
     }

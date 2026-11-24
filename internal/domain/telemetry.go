@@ -30,6 +30,9 @@ type GateCrossingEvent struct {
 	AboveEnterMs        float64 `json:"aboveEnterMs,omitempty"`        // Duration signal remained at or above enterThreshold in milliseconds
 	AboveEnterAreaDbSec float64 `json:"aboveEnterAreaDbSec,omitempty"` // Integrated area under the pass curve above enterThreshold (dB*s)
 	PassAreaDbSec       float64 `json:"passAreaDbSec,omitempty"`       // Integrated area under the pass curve above exitThreshold (dB*s)
-	IsStepBurst       bool    `json:"isStepBurst,omitempty"`   // True when burst rose/fell instantaneously out of thermal noise (Wi-Fi packet TXOP)
-	PassingNumber     uint32  `json:"passingNumber"`           // Per-gate or global passing sequence number
+	IsStepBurst         bool         `json:"isStepBurst,omitempty"`   // True when burst rose/fell instantaneously out of thermal noise (Wi-Fi packet TXOP)
+	PassingNumber       uint32       `json:"passingNumber"`           // Per-gate or global passing sequence number
+	Manual              bool         `json:"manual,omitempty"`        // True when added or adjusted manually on the Signals chart
+	InvalidReason       FilterReason `json:"invalidReason,omitempty"` // Set when timing/order rules invalidate this crossing (MIN_LAP, OUT_OF_ORDER)
+	InvalidDetail       string       `json:"invalidDetail,omitempty"` // Human-readable explanation when InvalidReason is non-empty
 }
