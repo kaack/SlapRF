@@ -1065,11 +1065,13 @@ describe("widgets/Toast & TimingRulesEditor", () => {
         })
       );
       await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
-      const liveBoxes = (chart as unknown as { crossingBoxes: Array<{ eventId: number; counted: boolean; title: string }> }).crossingBoxes;
+      const liveBoxes = (chart as unknown as { crossingBoxes: Array<{ eventId: number; counted: boolean; title: string; pillY: number }> }).crossingBoxes;
       const box15DuringDrag = liveBoxes.find((b) => b.eventId === 15);
       expect(box15DuringDrag).toBeDefined();
       expect(box15DuringDrag!.counted).toBe(false);
-      expect(box15DuringDrag!.title).toContain("Min lap");
+      expect(box15DuringDrag!.title).toBe("T1-TS");
+      expect(box15DuringDrag!.pillY > midY).toBe(true);
+      expect(root.querySelector(".scope-toolbar [data-slot='chart-actions']")).not.toBeNull();
       hostEl.dispatchEvent(
         new PointerEvent("pointercancel", {
           bubbles: true,

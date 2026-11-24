@@ -32,7 +32,7 @@ import {
   TimingHardwareMode,
   TimingRules,
 } from "../types/models";
-import { FILTER_LABELS } from "./markup";
+import { FILTER_LABELS, FILTER_SHORT_CODES } from "./markup";
 
 export interface PilotRssiChartOptions {
   /** "practice" (default) shows session lap/filtered counters; "race" shows active heat context. */
@@ -551,14 +551,13 @@ export class PilotRssiChart extends Component {
               <span class="scope-step-text-full">Next pass</span><span class="scope-step-text-short">Next</span>${icons.chevronRight(16)}
             </button>
           </div>
-        </div>
-        <div class="canvas-host canvas-host-md scope-canvas" data-slot="chart" tabindex="0"
-             aria-label="Signal chart. Space pauses, arrow keys jump between passes.">
           <div class="scope-chart-overlay-actions" data-slot="chart-actions" hidden>
             <button class="scope-chart-action-btn" type="button" data-act="add-crossing" title="Unlock chart lines to add crossings" aria-label="Add crossing" disabled>${icons.plus(15)}</button>
             <button class="scope-chart-action-btn is-locked" type="button" data-act="toggle-chart-lock" aria-pressed="false" title="Unlock chart lines to adjust thresholds or crossings" aria-label="Unlock chart lines">${icons.lock(14)}</button>
           </div>
         </div>
+        <div class="canvas-host canvas-host-md scope-canvas" data-slot="chart" tabindex="0"
+             aria-label="Signal chart. Space pauses, arrow keys jump between passes."></div>
         <div class="scope-bottom-bar">
           <div class="scope-axis-controls" data-slot="axis-controls" role="group" aria-label="X and Y axis scale controls"></div>
           <span class="scope-hint" data-slot="hint"></span>
@@ -2853,7 +2852,7 @@ export class PilotRssiChart extends Component {
           gateId: c.gateId,
           counted,
           title: !counted && c.invalidReason
-            ? `${who} · ${gateLbl} (${FILTER_LABELS[c.invalidReason] ?? c.invalidReason})`
+            ? `${who} · ${gateLbl}-${FILTER_SHORT_CODES[c.invalidReason] ?? c.invalidReason}`
             : meta?.suffix
               ? `${who} · ${gateLbl} · ${meta.suffix}`
               : `${who} · ${gateLbl}`,
@@ -2874,7 +2873,7 @@ export class PilotRssiChart extends Component {
           ts: f.timestampUs,
           gateId: f.gateId,
           counted: false,
-          title: `${p?.callsign ?? `P${f.slotIndex}`} · ${this.labelOfGate(f.gateId)} (${FILTER_LABELS[f.reason] ?? f.reason})`,
+          title: `${p?.callsign ?? `P${f.slotIndex}`} · ${this.labelOfGate(f.gateId)}-${FILTER_SHORT_CODES[f.reason] ?? f.reason}`,
           detail: f.detail,
           color: p?.color,
           slotIndex: f.slotIndex,
@@ -2921,7 +2920,7 @@ export class PilotRssiChart extends Component {
         gateId: c.gateId,
         counted,
         title: !counted && invReason
-          ? `${gateLbl} · ${FILTER_LABELS[invReason] ?? invReason}`
+          ? `${gateLbl}-${FILTER_SHORT_CODES[invReason] ?? invReason}`
           : suffix
             ? `${gateLbl} · ${suffix}`
             : gateLbl,
@@ -2941,7 +2940,7 @@ export class PilotRssiChart extends Component {
         ts: f.timestampUs,
         gateId: f.gateId,
         counted: false,
-        title: `${this.labelOfGate(f.gateId)} · not counted (${FILTER_LABELS[f.reason] ?? f.reason})`,
+        title: `${this.labelOfGate(f.gateId)}-${FILTER_SHORT_CODES[f.reason] ?? f.reason}`,
         detail: f.detail,
         slotIndex: f.slotIndex,
       });
@@ -3202,11 +3201,12 @@ export class PilotRssiChart extends Component {
         const delW = 16;
         const textW = ctx.measureText(lbl).width;
         const pillW = textW + 12 + delW;
-        const pillY = padT + 2 + row * (TAG_H + 3);
-        const rightReserve = pillY < padT + 34 ? 68 : 2;
+        const pillY = p.counted
+          ? padT + 2 + row * (TAG_H + 3)
+          : Math.max(padT + 2, padT + plotH - TAG_H - 3 - row * (TAG_H + 3));
         const pillX = Math.max(
           padL + 2,
-          Math.min(Math.max(padL + 2, padL + plotW - pillW - rightReserve), x + 4)
+          Math.min(Math.max(padL + 2, padL + plotW - pillW - 2), x + 4)
         );
         const delX = pillX + pillW - delW;
         ctx.beginPath();
@@ -3279,7 +3279,12 @@ export class PilotRssiChart extends Component {
       } else {
         ctx.fillStyle = color;
         ctx.font = font(600, 10.5);
-        ctx.fillText(lbl, x + 5, padT + 11 + row * 12);
+        const tw = ctx.measureText(lbl).width;
+        const tx = Math.max(padL + 2, Math.min(Math.max(padL + 2, padL + plotW - tw - 2), x + 4));
+        const ty = p.counted
+          ? padT + 11 + row * 12
+          : Math.max(padT + 11, padT + plotH - 5 - row * 12);
+        ctx.fillText(lbl, tx, ty);
       }
 
       if (isActiveCrossing) {
@@ -3302,7 +3307,7 @@ export class PilotRssiChart extends Component {
       const dragCounted = liveEval ? liveEval.counted : true;
       const dragTitle =
         !dragCounted && liveEval?.invalidReason
-          ? `${this.labelOfGate(this.crossingDrag.gateId)} · ${FILTER_LABELS[liveEval.invalidReason] ?? liveEval.invalidReason}`
+          ? `${this.labelOfGate(this.crossingDrag.gateId)}-${FILTER_SHORT_CODES[liveEval.invalidReason] ?? liveEval.invalidReason}`
           : this.crossingDrag.title;
       const dragDetail =
         !dragCounted && liveEval?.invalidDetail
@@ -3441,17 +3446,12 @@ export class PilotRssiChart extends Component {
   }
 
   private labelOf(p: PassMarker): string {
-    if (p.counted || (this.canEditCrossings && (p.eventId ?? 0) > 0)) {
-      return p.title;
-    }
-    return `✕ ${p.title}`;
+    return p.title;
   }
 
   /**
-   * Puts each pass label on the top row unless it would run into the previous label there,
-   * in which case it drops to the second row. Laid out over the whole history (oldest
-   * first), not just the visible window, so a label keeps its row while it scrolls past —
-   * otherwise labels jump between rows whenever an older pass leaves the view.
+   * Puts counted labels along the top of the plot and rejected (`OO`/`TS`/`TL`/`SP`) labels
+   * along the bottom of the plot so rejected tags never collide with counted lap markers.
    */
   private labelRows(ctx: CanvasRenderingContext2D, start: number, end: number): Map<string, number> {
     const lookbackStart = Math.max(0, start - this.windowUs * 2);
@@ -3467,10 +3467,10 @@ export class PilotRssiChart extends Component {
     }
 
     const rows = new Map<string, number>();
-    const rowEnd = [-Infinity, -Infinity];
+    const topRowEnd = [-Infinity, -Infinity];
+    const botRowEnd = [-Infinity, -Infinity];
     const pxPerUs = Math.max(1e-9, this.plot.w / this.windowUs);
     const baseTs = firstTs;
-    const padExtra = editMode ? 32 : 0;
     for (let i = 0; i < windowPasses.length; i++) {
       const p = windowPasses[i];
       const lbl = this.labelOf(p);
@@ -3481,8 +3481,10 @@ export class PilotRssiChart extends Component {
         this.labelWidthCache.set(lbl, width);
       }
       const x = (p.ts - baseTs) * pxPerUs;
-      const row = x > rowEnd[0] + 6 ? 0 : x > rowEnd[1] + 6 ? 1 : 0;
-      rowEnd[row] = x + width + padExtra;
+      const targetRowEnd = p.counted ? topRowEnd : botRowEnd;
+      const padExtra = editMode && (p.eventId ?? 0) > 0 ? 32 : 4;
+      const row = x > targetRowEnd[0] + 6 ? 0 : x > targetRowEnd[1] + 6 ? 1 : 0;
+      targetRowEnd[row] = x + width + padExtra;
       rows.set(PilotRssiChart.keyOf(p), row);
     }
     this.cachedLabelSig = sig;

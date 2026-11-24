@@ -11,6 +11,14 @@ export const FILTER_LABELS: Record<FilterReason, string> = {
   OUT_OF_ORDER: "Out of order",
 };
 
+/** Compact 2-letter chart codes (`T1-OO`, `T1-TS`, `T1-TL`, `T1-SP`) for rejected passes. */
+export const FILTER_SHORT_CODES: Record<FilterReason, string> = {
+  OUT_OF_ORDER: "OO",
+  MIN_LAP: "TS",
+  LAP_TOO_LONG: "TL",
+  SPIKE: "SP",
+};
+
 /** Colour chip for a section split in pilot lap tables: fastest (neon accent), normal, or >10% off best. */
 export const SPLIT_CLASS: Record<SectorBadge, string> = {
   OVERALL_BEST: "split-best",
