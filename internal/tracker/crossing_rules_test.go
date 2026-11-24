@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"math"
 	"testing"
 
 	"slaprf/internal/domain"
@@ -226,9 +227,8 @@ func TestApproachJitterNearEnterThresholdDoesNotBlockRealPeakPass(t *testing.T) 
 		BeamwidthMs:         360.0,
 	}))
 
-	// Wide cross-talk wobble on G2 (t=19.52s) while flying from G4 toward G1: long hold above exit
-	// (2121 ms, 9.66 dB*s) but shallow 0.88 dB*s above enter (-71.06 dBm). Must be rejected so it
-	// neither adds a bogus split nor blinds G2 on the next lap 4.67 s later!
+	// Wide cross-talk wobble on G2 (t=19.52s) while flying from G4 toward G1: rejected as OUT_OF_ORDER
+	// so it neither adds a bogus split nor blinds G2 on the next lap 4.67 s later!
 	r.expectAccepted(r.passWithHold(4, 18.60, 610, 12.8))
 	r.expectFiltered(r.passEvent(domain.GateCrossingEvent{
 		GateID:              2,
@@ -239,7 +239,7 @@ func TestApproachJitterNearEnterThresholdDoesNotBlockRealPeakPass(t *testing.T) 
 		AboveEnterAreaDbSec: 0.88,
 		PassAreaDbSec:       9.66,
 		BeamwidthMs:         1441.4,
-	}), domain.FilterSpike)
+	}), domain.FilterOutOfOrder)
 
 	// Finish Lap 1 at G1 (t=21.86s): all 4 genuine sections must be intact!
 	lap1 := r.passWithHold(1, 21.86, 630, 13.1)
@@ -381,5 +381,87 @@ func TestMalformedSplicedFingerprintIsRejected(t *testing.T) {
 	e := NewRealEngine()
 	if id, err := e.RegisterTimerHello("53E01C4D9C", false, "T2"); err == nil || id != 0 {
 		t.Fatalf("expected 10-hex spliced BLE fingerprint to be rejected, got id=%d err=%v", id, err)
+	}
+}
+
+func TestPowerOnNearStartGateFirstPassAndHoverSupersede(t *testing.T) {
+	// 1. Reproduce the exact Session 1 first pass at H1 (-60.44 dBm, 1.27 dB*s above enter):
+	// must be accepted cleanly (never rejected as SPIKE) so Lap 1 counts immediately!
+	r := newRig(t)
+	r.e.mu.Lock()
+	r.e.gates[0].EnterThresholds[0] = -65
+	r.e.gates[0].ExitThresholds[0] = -73
+	r.e.mu.Unlock()
+
+	r.expectAccepted(r.passEvent(domain.GateCrossingEvent{
+		GateID:              1,
+		IsStartFinish:       true,
+		TimestampUs:         175_726_508_000,
+		PeakRSSIDbm:         -60.44,
+		HoldMs:              980.0,
+		AboveEnterMs:        540.0,
+		AboveEnterAreaDbSec: 1.27,
+		PassAreaDbSec:       8.40,
+		BeamwidthMs:         420.0,
+	}))
+	r.expectAccepted(r.passWithHold(2, 175728.169, 600, 14.0))
+	r.expectAccepted(r.passWithHold(3, 175731.421, 600, 15.0))
+	r.expectAccepted(r.passWithHold(4, 175734.051, 600, 14.5))
+	lap1 := r.passWithHold(1, 175738.322, 800, 16.8)
+	r.expectAccepted(lap1)
+	if lap1.lap == nil || math.Abs(lap1.lap.LapTimeSec-11.814) > 0.01 || len(lap1.lap.Sectors) != 4 {
+		t.Fatalf("expected Lap 1 (11.814s, 4 sections) counted from first pass, got %+v", lap1.lap)
+	}
+
+	// 2. Power-on hover bump near H1 (-66 dBm) followed 2.8 s later (< MinLapSec) by the takeoff-loop
+	// start pass (-54 dBm) before any sector gate is crossed: must supersede the hover bump and
+	// anchor Lap 1's start time to the real pass!
+	r2 := newRig(t)
+	r2.e.mu.Lock()
+	r2.e.gates[0].EnterThresholds[0] = -68
+	r2.e.gates[0].ExitThresholds[0] = -76
+	r2.e.mu.Unlock()
+
+	hoverBump := domain.GateCrossingEvent{
+		GateID:              1,
+		IsStartFinish:       true,
+		StartedLap:          true,
+		TimestampUs:         10_000_000,
+		PeakRSSIDbm:         -65.5,
+		HoldMs:              1400.0,
+		AboveEnterMs:        420.0,
+		AboveEnterAreaDbSec: 0.65,
+		PassAreaDbSec:       4.20,
+		BeamwidthMs:         900.0,
+	}
+	outHover := r2.passEvent(hoverBump)
+	r2.expectAccepted(outHover)
+	r2.e.mu.Lock()
+	r2.e.crossings[len(r2.e.crossings)-1].StartedLap = true
+	r2.e.mu.Unlock()
+
+	realStart := r2.passEvent(domain.GateCrossingEvent{
+		GateID:              1,
+		IsStartFinish:       true,
+		TimestampUs:         12_800_000,
+		PeakRSSIDbm:         -54.1,
+		HoldMs:              1180.0,
+		AboveEnterMs:        880.0,
+		AboveEnterAreaDbSec: 4.60,
+		PassAreaDbSec:       16.80,
+		BeamwidthMs:         400.0,
+	})
+	r2.expectAccepted(realStart)
+	if realStart.supersededEventID == 0 || realStart.note == nil || realStart.note.Reason != domain.FilterSpike {
+		t.Fatalf("expected hover bump at H1 to be superseded with SPIKE note, got %+v", realStart)
+	}
+
+	r2.expectAccepted(r2.passWithHold(2, 15.5, 600, 14.0))
+	r2.expectAccepted(r2.passWithHold(3, 18.0, 600, 15.0))
+	r2.expectAccepted(r2.passWithHold(4, 20.5, 600, 14.5))
+	fin := r2.passWithHold(1, 24.3, 700, 16.0)
+	r2.expectAccepted(fin)
+	if fin.lap == nil || math.Abs(fin.lap.LapTimeSec-11.5) > 0.01 {
+		t.Fatalf("expected Lap 1 anchored to 12.8s start pass (11.5s lap), got %+v", fin.lap)
 	}
 }

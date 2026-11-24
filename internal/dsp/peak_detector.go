@@ -129,6 +129,17 @@ func (d *ChannelDetector) RollbackRejectedSpike() {
 	d.awaitingRearm = false
 }
 
+// MarkRecoveredCrossing synchronizes detector lockout state when auto-calibration retroactively
+// recovers a post-lull Start/Finish takeoff pass that peaked just below the prior threshold.
+func (d *ChannelDetector) MarkRecoveredCrossing(tsUs uint64) {
+	d.prevLastCrossingUs = d.lastCrossingUs
+	d.prevHasCrossed = d.hasCrossed
+	d.lastCrossingUs = tsUs
+	d.hasCrossed = true
+	d.inGate = false
+	d.awaitingRearm = false
+}
+
 func (d *ChannelDetector) resetFilterState(rssi float32, tsUs uint64) {
 	d.stage1RSSI = rssi
 	d.smoothedRSSI = rssi
@@ -330,7 +341,8 @@ func (d *ChannelDetector) ProcessSample(
 	if !exited && s <= enterThresholdDbm-3.0 && (d.peakRSSI-s) >= 10.0 && medCenterTs >= d.peakTimestampUs+500_000 {
 		exited = true
 	}
-	if !exited && timestampUs-d.enterTimeUs > 8_000_000 {
+	if !exited && timestampUs-d.enterTimeUs > 8_000_000 &&
+		(medCenterTs >= d.peakTimestampUs+3_000_000 || timestampUs-d.enterTimeUs > 14_000_000) {
 		if d.peakRSSI >= enterThresholdDbm+3.0 && s <= enterThresholdDbm-2.0 && (d.peakRSSI-s) >= 6.0 {
 			exited = true
 		} else {

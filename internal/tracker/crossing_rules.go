@@ -100,17 +100,45 @@ func (e *Engine) applyCrossingLocked(pilot domain.PilotSlot, gate domain.TrackGa
 
 	// 3. Minimum lap time. At Start/Finish it is measured from the lap start; every timer also
 	// enforces MinLapSec independently against its own previous accepted crossing for that pilot.
-	// Safety net on sector gates: if a weak approach ripple or distant cross-talk bump barely
-	// slipped through earlier and the real much-stronger gate pass arrives < MinLapSec later,
-	// supersede the premature bump instead of locking out the real pass.
-	if isSF && prog.lapStartUs != 0 {
-		if lapSec := seconds(prog.lapStartUs, ev.TimestampUs); lapSec < r.MinLapSec {
-			return reject(domain.FilterMinLap, "Lap would be %.2fs (min lap %.1fs)", lapSec, r.MinLapSec)
-		}
-	}
+	// Safety net:
+	//   - At Start/Finish on an uncompleted initial takeoff (`StartedLap` with no sector gates crossed
+	//     yet), if powering on / hovering near the start gate triggered a weak bump and the pilot loops
+	//     through Start/Finish `< MinLapSec` later with a clearly stronger pass spike, supersede the
+	//     pre-start hover bump and re-anchor `lapStartUs` to the real pass.
+	//   - On sector gates, if a weak approach ripple barely slipped through earlier and the real
+	//     much-stronger gate pass arrives `< MinLapSec` later, supersede the premature bump.
 	var supersededNote *domain.FilteredDetection
 	var supersededID uint64
-	if sinceSameGate >= 0 && sinceSameGate < r.MinLapSec {
+	if isSF && prog.lapStartUs != 0 {
+		if lapSec := seconds(prog.lapStartUs, ev.TimestampUs); lapSec < r.MinLapSec {
+			if prog.lastGateID == gate.GateID && len(prog.currentSectors) == 0 {
+				if prevEv := e.findAcceptedCrossingLocked(gate.GateID, pilot.SlotIndex, prog.lapStartUs); prevEv != nil &&
+					prevEv.StartedLap &&
+					ev.PeakRSSIDbm < 0 && prevEv.PeakRSSIDbm < 0 &&
+					ev.PeakRSSIDbm >= prevEv.PeakRSSIDbm+5.0 &&
+					(ev.PassAreaDbSec >= 1.5*math.Max(0.5, prevEv.PassAreaDbSec) ||
+						ev.AboveEnterAreaDbSec >= 2.0*math.Max(0.2, prevEv.AboveEnterAreaDbSec)) {
+					supersededID = prevEv.EventID
+					supersededNote = &domain.FilteredDetection{
+						TimestampUs: prevEv.TimestampUs,
+						GateID:      gate.GateID,
+						SlotIndex:   pilot.SlotIndex,
+						Callsign:    pilot.Callsign,
+						Reason:      domain.FilterSpike,
+						Detail:      fmt.Sprintf("Superseded pre-start takeoff bump %.1f dBm at %s by %.1f dBm pass", prevEv.PeakRSSIDbm, e.gateLabelLocked(gate.GateID), ev.PeakRSSIDbm),
+						PeakRSSIDbm: prevEv.PeakRSSIDbm,
+					}
+					prog.lapStartUs = 0
+					prog.lastGateID = 0
+					prog.lastGateTimeUs = 0
+				}
+			}
+			if supersededNote == nil {
+				return reject(domain.FilterMinLap, "Lap would be %.2fs (min lap %.1fs)", lapSec, r.MinLapSec)
+			}
+		}
+	}
+	if supersededNote == nil && sinceSameGate >= 0 && sinceSameGate < r.MinLapSec {
 		if isSF {
 			return reject(domain.FilterMinLap, "Lap would be %.2fs (min lap %.1fs)", sinceSameGate, r.MinLapSec)
 		}
@@ -310,8 +338,8 @@ func (e *Engine) checkSpikeRejectionLocked(
 		if aboveEnterArea <= 0 && ev.AboveEnterMs > 0 && ev.PeakRSSIDbm > enterDbm {
 			aboveEnterArea = 0.5 * float64(ev.PeakRSSIDbm-enterDbm) * (ev.AboveEnterMs / 1000.0)
 		}
-		if ev.PeakRSSIDbm < enterDbm+6.0 {
-			minAboveMs := math.Max(140.0, minHoldMs)
+		if ev.PeakRSSIDbm < enterDbm+4.5 {
+			minAboveMs := math.Max(120.0, minHoldMs)
 			if ev.AboveEnterMs < minAboveMs {
 				return fmt.Sprintf(
 					"Brief %.0f ms jitter near threshold at %s (%.1f dBm, min %.0f ms above enter)",
@@ -321,7 +349,7 @@ func (e *Engine) checkSpikeRejectionLocked(
 					minAboveMs,
 				)
 			}
-			minEnterAreaDbSec := math.Max(1.30, minCrossingSec*10.5)
+			minEnterAreaDbSec := math.Max(0.18, minCrossingSec*1.5)
 			if aboveEnterArea < minEnterAreaDbSec {
 				return fmt.Sprintf(
 					"Shallow %.2f dB*s jitter near threshold at %s (%.1f dBm, min %.2f dB*s above enter)",

@@ -561,3 +561,107 @@ func (c *countingSubscriber) OnPracticeUpdated(domain.PracticeManagerState) {
 		c.onPractice()
 	}
 }
+
+func TestPowerOnNearStartGateAfterLullCountsFirstLapOnMultiGateTrack(t *testing.T) {
+	// 4-gate BLE Hub + Spokes track (H1, T1, T2, T3) starting uncalibrated (default Enter = -58 dBm).
+	// Pilot sits unplugged (-91 dBm lull), powers on near H1 (-69 dBm hover for 6 s), loops and
+	// spikes through H1 at -60.4 dBm (< -58 dBm default!), then flies T1 -> T2 -> T3 -> H1.
+	// H1 must lock onto the post-lull takeoff pass AND retroactively start Lap 1 so the very first
+	// lap around the course is counted!
+	e := NewRealEngine()
+	e.SetTimingHardwareMode(domain.HardwareModeSlapRFBLE, false)
+	hubID, err := e.ProvisionGate(ProvisionRequest{Role: "hub", Label: "H1", Fingerprint: "EFE44224"})
+	if err != nil {
+		t.Fatalf("ProvisionGate H1: %v", err)
+	}
+	t1ID, err := e.ProvisionGate(ProvisionRequest{Role: "spoke", Label: "T1", Fingerprint: "D3FEDE5D"})
+	if err != nil {
+		t.Fatalf("ProvisionGate T1: %v", err)
+	}
+	t2ID, err := e.ProvisionGate(ProvisionRequest{Role: "spoke", Label: "T2", Fingerprint: "7B1C4D9C"})
+	if err != nil {
+		t.Fatalf("ProvisionGate T2: %v", err)
+	}
+	t3ID, err := e.ProvisionGate(ProvisionRequest{Role: "spoke", Label: "T3", Fingerprint: "53E049F7"})
+	if err != nil {
+		t.Fatalf("ProvisionGate T3: %v", err)
+	}
+	if _, err := e.AddGate("", t1ID, 1); err != nil {
+		t.Fatalf("AddGate T1: %v", err)
+	}
+	if _, err := e.AddGate("", t2ID, 2); err != nil {
+		t.Fatalf("AddGate T2: %v", err)
+	}
+	if _, err := e.AddGate("", t3ID, 3); err != nil {
+		t.Fatalf("AddGate T3: %v", err)
+	}
+	if err := e.UpdatePilotSlot(domain.PilotSlot{
+		SlotIndex:      1,
+		Callsign:       "OneEye",
+		Band:           domain.BandRaceband,
+		Channel:        7,
+		EnterThreshold: -58,
+		ExitThreshold:  -68,
+		Enabled:        true,
+	}); err != nil {
+		t.Fatalf("UpdatePilotSlot: %v", err)
+	}
+
+	const stepUs = 20_000 // 50 Hz
+	for ts := uint64(1_000_000); ts <= 32_000_000; ts += stepUs {
+		sec := float64(ts) / 1e6
+		feedTimer := func(tid uint8, dbm float32) {
+			var rssi [domain.MaxPilotPoolSize]float32
+			for k := range rssi {
+				rssi[k] = -92
+			}
+			rssi[0] = dbm
+			e.IngestTelemetryFrame(domain.TimerTelemetryFrame{
+				TimerID:       tid,
+				TimestampUs:   ts,
+				RSSI:          rssi,
+				BatteryMv:     4100,
+				NoiseFloorDbm: -91.5,
+			})
+		}
+
+		// H1 waveform:
+		// - 1..9s: -91.5 dBm (unplugged lull)
+		// - 9..15.2s: -69.5 dBm ("a little bit of signal" powered on near H1, dipping slightly on loop)
+		// - 16.0s: -60.4 dBm first-pass spike (< -58 dBm default!)
+		// - 16.8..27.0s: -82 dBm flying around course
+		// - 28.0s: -56.0 dBm finish pass completing Lap 1!
+		var h1 float32 = -91.5
+		if sec >= 9.0 && sec < 15.2 {
+			h1 = -69.5
+		} else if sec >= 15.2 {
+			h1 = gaussianPass(ts, -82.0, -60.4, []float64{16.0}, 0.30)
+			if sec < 16.0 && h1 < -71.0 {
+				h1 = -71.0
+			}
+			finPass := gaussianPass(ts, -82.0, -56.0, []float64{28.0}, 0.32)
+			if finPass > h1 {
+				h1 = finPass
+			}
+		}
+		feedTimer(hubID, h1)
+		feedTimer(t1ID, gaussianPass(ts, -86.0, -56.5, []float64{19.0}, 0.30))
+		feedTimer(t2ID, gaussianPass(ts, -86.0, -55.5, []float64{22.0}, 0.30))
+		feedTimer(t3ID, gaussianPass(ts, -86.0, -56.0, []float64{25.0}, 0.30))
+	}
+
+	_, gatesOut, lapsOut, crossingsOut, _ := e.StateSnapshot()
+	e.mu.RLock()
+	filteredOut := append([]domain.FilteredDetection(nil), e.filtered...)
+	e.mu.RUnlock()
+	if gatesOut[0].EnterThresholds[0] == 0 || gatesOut[0].EnterThresholds[0] >= -60.4 {
+		t.Fatalf("expected H1 threshold calibrated below -60.4 dBm after Pass #1, got %v", gatesOut[0].EnterThresholds[0])
+	}
+	if len(lapsOut) != 1 {
+		t.Fatalf("expected Lap 1 counted on the very first loop (h1Enter=%v h1Exit=%v crossings=%+v filtered=%+v), got %d laps: %+v",
+			gatesOut[0].EnterThresholds[0], gatesOut[0].ExitThresholds[0], crossingsOut, filteredOut, len(lapsOut), lapsOut)
+	}
+	if math.Abs(lapsOut[0].LapTimeSec-12.0) > 0.25 || len(lapsOut[0].Sectors) != 4 {
+		t.Fatalf("expected ~12.0s Lap 1 with all 4 sections (S1..S4), got %+v", lapsOut[0])
+	}
+}

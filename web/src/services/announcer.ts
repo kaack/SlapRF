@@ -1007,10 +1007,10 @@ export class Announcer {
 
       const minCrossSec = gateCfg.minCrossingSec;
       const hasGenuinePassEnergy =
-        (st.peakRssi >= enterDbm + 5.5 &&
+        (st.peakRssi >= enterDbm + 4.2 &&
           st.aboveEnterUs >= Math.max(80_000, minCrossSec * 650_000)) ||
-        (st.aboveEnterUs >= Math.max(140_000, minCrossSec * 1_000_000) &&
-          st.aboveEnterAreaDbSec >= Math.max(1.3, minCrossSec * 10.5));
+        (st.aboveEnterUs >= Math.max(120_000, minCrossSec * 1_000_000) &&
+          st.aboveEnterAreaDbSec >= Math.max(0.18, minCrossSec * 1.5));
 
       // In "peak" mode, trigger right as the genuine pass crest turns the corner over the gate and starts dropping away.
       if (gateCfg.beepMode === "peak" && !st.peakBeepFired && hasGenuinePassEnergy) {

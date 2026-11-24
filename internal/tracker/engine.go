@@ -774,12 +774,15 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 		frame.RSSI[i] = det.SmoothedRSSI()
 
 		if isSlapRFMode && e.raceArmed && pilot.Enabled && pilot.Channel > 0 {
-			if chg, sfChg := e.recordAutoCalibSampleLocked(gate, i, pilot, det, frame.RSSI[i], frame.TimestampUs, candidate != nil); chg {
+			if chg, sfChg, recovered := e.recordAutoCalibSampleLocked(gate, i, pilot, det, frame.RSSI[i], frame.TimestampUs, candidate != nil); chg {
 				autoCalibChanged = true
 				if sfChg {
 					autoCalibSFChanged = true
 				}
 				enter, exit = thresholdsFor(gate, i, pilot)
+				if candidate == nil && recovered != nil {
+					candidate = recovered
+				}
 			}
 		}
 
