@@ -27952,6 +27952,18 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
     flex: 1 1 50%;
   }
 
+  .ai-detector-row .segmented {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .ai-detector-row .segmented > button {
+    flex: 1 1 50%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .ai-scorecard-grid {
     grid-template-columns: 1fr;
   }

@@ -367,7 +367,7 @@ export class PracticeAITrainingPanel extends Component {
                 class="${ml.config.detectorMode === "ai" ? "is-active" : ""}"
                 data-ai-act="set-detector-mode"
                 data-mode="ai"
-              >AI Detector (${esc(activeModel?.name || "AI Base v0")})</button>
+              >AI Detector (v${activeModel?.version ?? 0})</button>
             </div>
             <label class="ai-check-label">
               <input
