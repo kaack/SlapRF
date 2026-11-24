@@ -416,27 +416,18 @@ function currentFrameDims(): { w: number; h: number } {
   return { w, h };
 }
 
-function fmtCamTelemetry(ci: CameraStatus): string {
+function fmtCamHudTop(ci: CameraStatus, sync: SyncStatus): string {
   const parts: string[] = [`${Math.round(ci.actualFps)}fps`];
-  if (ci.exposureUs && ci.exposureUs > 0) {
-    if (ci.exposureUs <= 8000) {
-      parts.push(`1/${Math.max(100, Math.round(1_000_000 / ci.exposureUs))}s`);
-    } else {
-      parts.push(`${(ci.exposureUs / 1000).toFixed(1)}ms`);
-    }
+  if (ci.exposureUs && ci.exposureUs > 0 && ci.exposureUs <= 8000) {
+    parts.push(`1/${Math.max(100, Math.round(1_000_000 / ci.exposureUs))}s`);
   }
-  if (ci.ringSpanMs > 0) {
+  const rssi = sync.liveRssi ?? [];
+  if (rssi.length > 0) {
+    parts.push(`${rssi[0].callsign} ${rssi[0].rssiDbm.toFixed(0)}dBm`);
+  } else if (ci.ringSpanMs > 0) {
     parts.push(`${(ci.ringSpanMs / 1000).toFixed(1)}s`);
   }
   return parts.join(" · ");
-}
-
-function fmtStartGateRssi(sync: SyncStatus): string {
-  const items = sync.liveRssi ?? [];
-  if (items.length > 0) {
-    return items.map((r) => `${esc(r.callsign)} <span class="mono">${r.rssiDbm.toFixed(0)} dBm</span>`).join(" · ");
-  }
-  return sync.connected ? "Start Gate ready" : "Waiting for SlapRF";
 }
 
 function gateGeometrySVG(g: GateLine, interactive: boolean, W = 640, H = 360): string {
@@ -669,72 +660,61 @@ function renderLiveView(): string {
               ${gateGeometrySVG(g, true, fw, fh)}
             </svg>
             <div class="vf-hud-top">
-              <span class="vf-chip mono" data-hud-ring>${esc(fmtCamTelemetry(ci))}</span>
-            </div>
-            <div class="vf-hud-bottom">
-              <span class="vf-chip" data-hud-rssi>${fmtStartGateRssi(state.sync)}</span>
+              <span class="vf-chip mono" data-hud-ring>${esc(fmtCamHudTop(ci, state.sync))}</span>
               <div class="vf-actions">
+                ${
+                  hasUltraWide && !isHighSpeed
+                    ? `<button type="button" class="vf-btn mono" data-zoom="${isUltra ? "1.0" : minZoom.toFixed(2)}" title="Toggle Ultra-Wide / 1x">${isUltra ? "0.5x" : "1x"}</button>`
+                    : ""
+                }
                 <button type="button" class="vf-btn" data-act="flip-dir" title="Flip flight direction">
-                  ${icons.flip(14)}
-                  <span>Dir</span>
+                  ${icons.flip(13)}
                 </button>
                 <button type="button" class="vf-btn ${g.locked ? "is-locked" : ""}" data-act="toggle-lock" title="Lock gate sightline">
-                  ${g.locked ? icons.lock(14) : icons.unlock(14)}
+                  ${g.locked ? icons.lock(13) : icons.unlock(13)}
                   <span>${g.locked ? "Locked" : "Line"}</span>
                 </button>
               </div>
             </div>
-          </div>
-        </div>
-
-        <div class="cam-toolbar">
-          <div class="cam-toolbar-row">
-            <div class="ctrl-cluster">
-              <div class="segmented" role="group" aria-label="Capture frame rate">
+            <div class="vf-hud-bottom">
+              <div class="vf-seg" role="group" aria-label="Focus distance">
+                <button type="button" class="${curFocusMode === "gate" ? "is-active" : ""}" data-focus-val="gate">3m</button>
+                <button type="button" class="${curFocusMode === "near" ? "is-active" : ""}" data-focus-val="near">1m</button>
+                <button type="button" class="${curFocusMode === "inf" ? "is-active" : ""}" data-focus-val="inf">∞</button>
+                ${curFocusMode === "tap" ? `<button type="button" class="is-active" data-act="lock-af">Spot</button>` : ""}
+              </div>
+              <div class="vf-seg mono" role="group" aria-label="Capture frame rate">
                 <button type="button" class="${cam.targetFps === 60 ? "is-active" : ""}" data-fps="60">60</button>
                 ${supFps.includes(120) ? `<button type="button" class="${cam.targetFps === 120 ? "is-active" : ""}" data-fps="120">120</button>` : ""}
                 ${supFps.includes(240) ? `<button type="button" class="${cam.targetFps === 240 ? "is-active" : ""}" data-fps="240">240</button>` : ""}
               </div>
-              <span class="ctrl-label">fps</span>
             </div>
-
-            ${
-              hasUltraWide
-                ? `<div class="ctrl-cluster">
-                     <div class="segmented" role="group" aria-label="Lens field of view">
-                       <button type="button" class="${isUltra ? "is-active" : ""}" data-zoom="${minZoom.toFixed(2)}">0.5x</button>
-                       <button type="button" class="${!isUltra ? "is-active" : ""}" data-zoom="1.0">1x</button>
-                     </div>
-                   </div>`
-                : ""
-            }
-          </div>
-
-          <div class="cam-toolbar-row">
-            <div class="ctrl-cluster">
-              <span class="ctrl-label">Focus</span>
-              <div class="segmented" role="group" aria-label="Focus distance">
-                <button type="button" class="${curFocusMode === "gate" ? "is-active" : ""}" data-focus-val="gate">3m</button>
-                <button type="button" class="${curFocusMode === "near" ? "is-active" : ""}" data-focus-val="near">1m</button>
-                <button type="button" class="${curFocusMode === "inf" ? "is-active" : ""}" data-focus-val="inf">Inf</button>
-                ${curFocusMode === "tap" ? `<button type="button" class="is-active" data-act="lock-af">Spot</button>` : ""}
-              </div>
-            </div>
-
-            ${
-              !isHighSpeed
-                ? `<div class="ctrl-cluster">
-                     <div class="segmented" role="group" aria-label="Shutter speed">
-                       <button type="button" class="${cam.shutterUs === 0 ? "is-active" : ""}" data-shutter-val="0">Auto</button>
-                       <button type="button" class="${cam.shutterUs === 1000 ? "is-active" : ""}" data-shutter-val="1000">1/1000</button>
-                       <button type="button" class="${cam.shutterUs === 500 ? "is-active" : ""}" data-shutter-val="500">1/2000</button>
-                       <button type="button" class="${cam.shutterUs === 250 ? "is-active" : ""}" data-shutter-val="250">1/4000</button>
-                     </div>
-                   </div>`
-                : `<span class="ctrl-label mono">ISO ${ci.iso ?? "--"}</span>`
-            }
           </div>
         </div>
+
+        ${
+          !isHighSpeed
+            ? `<div class="cam-toolbar">
+                 <div class="cam-toolbar-row">
+                   <span class="ctrl-label">Shutter</span>
+                   <div class="segmented mono" role="group" aria-label="Shutter speed">
+                     <button type="button" class="${cam.shutterUs === 0 ? "is-active" : ""}" data-shutter-val="0">Auto</button>
+                     <button type="button" class="${cam.shutterUs === 1000 ? "is-active" : ""}" data-shutter-val="1000">1/1000</button>
+                     <button type="button" class="${cam.shutterUs === 500 ? "is-active" : ""}" data-shutter-val="500">1/2000</button>
+                     <button type="button" class="${cam.shutterUs === 250 ? "is-active" : ""}" data-shutter-val="250">1/4000</button>
+                   </div>
+                   ${
+                     hasUltraWide
+                       ? `<div class="segmented mono" role="group" aria-label="Lens field of view">
+                            <button type="button" class="${isUltra ? "is-active" : ""}" data-zoom="${minZoom.toFixed(2)}">0.5x</button>
+                            <button type="button" class="${!isUltra ? "is-active" : ""}" data-zoom="1.0">1x</button>
+                          </div>`
+                       : ""
+                   }
+                 </div>
+               </div>`
+            : ""
+        }
       </div>
 
       <aside class="feed-pane">
@@ -1634,13 +1614,9 @@ function connectLiveWS(): void {
       } else if (msg.type === "hud" && msg.payload && state) {
         state.camInfo = msg.payload.camera;
         state.sync = msg.payload.sync;
-        const rssiEl = document.querySelector("[data-hud-rssi]");
-        if (rssiEl) {
-          rssiEl.innerHTML = fmtStartGateRssi(state.sync);
-        }
         const ringEl = document.querySelector("[data-hud-ring]");
         if (ringEl) {
-          ringEl.textContent = fmtCamTelemetry(state.camInfo);
+          ringEl.textContent = fmtCamHudTop(state.camInfo, state.sync);
         }
       } else if ((msg.type === "pass_added" || msg.type === "pass_updated") && state) {
         void refreshStateSilently().then(() => {
