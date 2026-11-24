@@ -17,6 +17,7 @@ export interface SlapRFAndroidBridge {
   speak(text: string, rate: number, volume: number, flush: boolean): void;
   stopSpeech(): void;
   isSpeaking(): boolean;
+  playBeep?(freqHz: number, durationMs: number, volume: number): void;
   setKeepScreenOn(enabled: boolean): void;
   setThemeMode(mode: string): void;
   getLanStatusJson(): string;

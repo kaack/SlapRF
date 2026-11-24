@@ -30,6 +30,7 @@
         android:usesCleartextTraffic="true"
         android:hardwareAccelerated="true"
         android:allowBackup="true"
+        android:allowAudioPlaybackCapture="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
         <activity

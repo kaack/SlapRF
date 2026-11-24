@@ -17,6 +17,8 @@ import android.content.pm.ServiceInfo;
 import android.graphics.Color;
 import android.graphics.Insets;
 import android.media.AudioAttributes;
+import android.media.AudioFormat;
+import android.media.AudioTrack;
 import android.net.Uri;
 import android.net.wifi.WifiManager;
 import android.os.Build;
@@ -51,6 +53,8 @@ import org.json.JSONObject;
 import java.io.OutputStream;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -134,6 +138,84 @@ public final class SlapRFHost extends Activity {
         dispatchKeyboardOffsetPx(kbPhysicalPx, 120L, showing);
     }
 
+    private static final ExecutorService beepExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "slaprf-beep");
+        t.setDaemon(true);
+        return t;
+    });
+
+    private static void playCapturableGateBeep(final double freqHz, final int durationMs, final float volume) {
+        final double safeFreq = Math.max(220.0, Math.min(8000.0, freqHz));
+        final int safeDurMs = Math.max(20, Math.min(500, durationMs));
+        final float safeVol = Math.max(0.05f, Math.min(1.0f, volume));
+        beepExecutor.execute(() -> {
+            final int sampleRate = 48000;
+            final int totalSamples = Math.max(240, (sampleRate * safeDurMs) / 1000);
+            final int attackSamples = Math.max(1, (sampleRate * 5) / 1000);
+            final int releaseSamples = Math.max(1, (sampleRate * 18) / 1000);
+            final int sustainEnd = Math.max(attackSamples, totalSamples - releaseSamples);
+            final short[] pcm = new short[totalSamples];
+            final double peakAmp = 32767.0 * 0.42 * safeVol;
+            for (int i = 0; i < totalSamples; i++) {
+                double phase = (i * safeFreq / sampleRate) % 1.0;
+                double tri = phase < 0.5 ? (4.0 * phase - 1.0) : (3.0 - 4.0 * phase);
+                double env;
+                if (i < attackSamples) {
+                    env = (double) i / (double) attackSamples;
+                } else if (i < sustainEnd) {
+                    env = 1.0;
+                } else {
+                    double relFrac = (double) (i - sustainEnd) / (double) releaseSamples;
+                    env = Math.exp(-5.0 * relFrac);
+                }
+                int val = (int) Math.round(tri * env * peakAmp);
+                if (val > 32767) val = 32767;
+                else if (val < -32768) val = -32768;
+                pcm[i] = (short) val;
+            }
+
+            AudioAttributes.Builder attrBuilder = new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC);
+            if (Build.VERSION.SDK_INT >= 29) {
+                attrBuilder.setAllowedCapturePolicy(AudioAttributes.ALLOW_CAPTURE_BY_ALL);
+            }
+            AudioFormat fmt = new AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(sampleRate)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build();
+            AudioTrack track = null;
+            try {
+                AudioTrack.Builder tb = new AudioTrack.Builder()
+                        .setAudioAttributes(attrBuilder.build())
+                        .setAudioFormat(fmt)
+                        .setTransferMode(AudioTrack.MODE_STATIC)
+                        .setBufferSizeInBytes(totalSamples * 2);
+                if (Build.VERSION.SDK_INT >= 26) {
+                    // Standard mixer path guarantees Android AudioPlaybackCapture (screen/phone audio recorders) can tap the stream.
+                    tb.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_NONE);
+                }
+                track = tb.build();
+                track.write(pcm, 0, totalSamples);
+                track.play();
+                SystemClock.sleep(safeDurMs + 40L);
+            } catch (Exception ignored) {
+            } finally {
+                if (track != null) {
+                    try {
+                        track.stop();
+                    } catch (Exception ignored) {
+                    }
+                    try {
+                        track.release();
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
+        });
+    }
+
     private static synchronized void ensureTtsInitialized(Context context) {
         if (sharedTts != null) {
             return;
@@ -143,11 +225,13 @@ public final class SlapRFHost extends Activity {
             if (status == TextToSpeech.SUCCESS && sharedTts != null) {
                 try {
                     sharedTts.setLanguage(Locale.US);
-                    sharedTts.setAudioAttributes(
-                            new AudioAttributes.Builder()
-                                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                                    .build());
+                    AudioAttributes.Builder ttsAttr = new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH);
+                    if (Build.VERSION.SDK_INT >= 29) {
+                        ttsAttr.setAllowedCapturePolicy(AudioAttributes.ALLOW_CAPTURE_BY_ALL);
+                    }
+                    sharedTts.setAudioAttributes(ttsAttr.build());
                 } catch (Exception ignored) {
                 }
                 ttsReady = true;
@@ -612,6 +696,11 @@ public final class SlapRFHost extends Activity {
             } catch (Exception e) {
                 return false;
             }
+        }
+
+        @JavascriptInterface
+        public void playBeep(double freqHz, int durationMs, float volume) {
+            playCapturableGateBeep(freqHz, durationMs, volume);
         }
 
         @JavascriptInterface

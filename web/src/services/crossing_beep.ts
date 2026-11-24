@@ -1,3 +1,4 @@
+import { getAndroidBridge } from "../core/android_bridge";
 import { AppStore } from "../state/store";
 import { CrossingBeepMode } from "../types/models";
 
@@ -60,14 +61,24 @@ function resolveGateFreqHz(store: AppStore, gateId: number): number {
   return GATE_TONE_FREQS_HZ[rawOrder % GATE_TONE_FREQS_HZ.length];
 }
 
-/** Plays an instant, crisp single crossing beep on the hardware WebAudio mixer thread. */
+/** Plays an instant, crisp single crossing beep on the hardware WebAudio mixer thread (or capturable Android AudioTrack). */
 export function playShortCrossingBeep(store: AppStore, gateId: number, volume = 0.9): void {
+  const freqHz = resolveGateFreqHz(store, gateId);
+  const clampedVol = Math.max(0.08, Math.min(1, volume));
+  const androidBridge = getAndroidBridge();
+  if (androidBridge && typeof androidBridge.playBeep === "function") {
+    try {
+      androidBridge.playBeep(freqHz, Math.round(BEEP_DURATION_SEC * 1000), clampedVol);
+      return;
+    } catch {
+      // Fall back to WebAudio if bridge call fails
+    }
+  }
   const ctx = warmCrossingBeepAudio();
   if (!ctx) return;
   try {
     const now = ctx.currentTime;
-    const peakGain = Math.max(0.08, Math.min(1, volume)) * 0.34;
-    const freqHz = resolveGateFreqHz(store, gateId);
+    const peakGain = clampedVol * 0.34;
     const attackEnd = now + 0.005;
     const sustainEnd = now + BEEP_DURATION_SEC - 0.018;
 
