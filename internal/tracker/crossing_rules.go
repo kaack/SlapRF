@@ -144,8 +144,8 @@ func (e *Engine) applyCrossingLocked(pilot domain.PilotSlot, gate domain.TrackGa
 		}
 		if prevEv := e.findAcceptedCrossingLocked(gate.GateID, pilot.SlotIndex, e.lastAcceptedUs[ckey]); prevEv != nil &&
 			ev.PeakRSSIDbm < 0 && prevEv.PeakRSSIDbm < 0 &&
-			ev.PeakRSSIDbm >= prevEv.PeakRSSIDbm+7.5 &&
-			ev.PassAreaDbSec >= 2.2*math.Max(0.5, prevEv.PassAreaDbSec) {
+			ev.PeakRSSIDbm >= prevEv.PeakRSSIDbm+5.5 &&
+			ev.PassAreaDbSec >= 1.5*math.Max(0.5, prevEv.PassAreaDbSec) {
 			if prog.lapStartUs != 0 && prevEv.TimestampUs < prog.lapStartUs {
 				supersededID = prevEv.EventID
 				supersededNote = &domain.FilteredDetection{

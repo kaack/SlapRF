@@ -85,6 +85,11 @@ type ChannelDetector struct {
 	hasCrossed         bool
 	prevHasCrossed     bool
 	awaitingRearm      bool
+	typicalPeakRSSI    float32
+	prevTypicalPeak    float32
+	lastConfirmedPeak  float32
+	prevConfirmedPeak  float32
+	prevMedVal         float32
 	windowSamples      []samplePoint // Smoothed envelope samples (for -6 dB beamwidth)
 	passMedSamples     []samplePoint // Delay-centered median samples (for zero-phase peak timing)
 }
@@ -126,6 +131,8 @@ func (d *ChannelDetector) RearmIfBelow(exitThresholdDbm float32) {
 func (d *ChannelDetector) RollbackRejectedSpike() {
 	d.lastCrossingUs = d.prevLastCrossingUs
 	d.hasCrossed = d.prevHasCrossed
+	d.typicalPeakRSSI = d.prevTypicalPeak
+	d.lastConfirmedPeak = d.prevConfirmedPeak
 	d.awaitingRearm = false
 }
 
@@ -287,8 +294,10 @@ func (d *ChannelDetector) ProcessSample(
 		if d.awaitingRearm {
 			rearmed := s <= effectiveExit ||
 				(s <= enterThresholdDbm-3.0 && timestampUs >= d.lastCrossingUs+600_000) ||
-				(s < enterThresholdDbm && timestampUs >= d.lastCrossingUs+rearmTimeoutUs)
+				(s < enterThresholdDbm && timestampUs >= d.lastCrossingUs+rearmTimeoutUs) ||
+				(enterThresholdDbm < 0 && d.lastConfirmedPeak < 0 && s >= d.lastConfirmedPeak+5.5 && timestampUs >= d.lastCrossingUs+300_000)
 			if !rearmed {
+				d.prevMedVal = medVal
 				d.pushPrePassSample(medPt)
 				return nil
 			}
@@ -300,6 +309,7 @@ func (d *ChannelDetector) ProcessSample(
 			d.peakRSSI = s
 			d.peakTimestampUs = medCenterTs
 			d.enterTimeUs = timestampUs
+			d.prevMedVal = medVal
 			d.windowSamples = d.windowSamples[:0]
 			d.windowSamples = append(d.windowSamples, samplePoint{timestampUs: timestampUs, rssiDbm: s})
 
@@ -316,6 +326,7 @@ func (d *ChannelDetector) ProcessSample(
 			d.prePassCount = 0
 			d.prePassHead = 0
 		} else {
+			d.prevMedVal = medVal
 			d.pushPrePassSample(medPt)
 		}
 		return nil
@@ -331,13 +342,24 @@ func (d *ChannelDetector) ProcessSample(
 		d.peakTimestampUs = medCenterTs
 	}
 
-	// 4. Check gate exit (dual-threshold Schmitt hysteresis):
-	// Confirm the crossing when the signal drops to or below the configured exit threshold.
-	// If indoor reflections or close adjacent gates keep the inter-pass valley slightly above
-	// exitThreshold, confirm once the drone has clearly exited the entry zone (>= 10 dB below
-	// pass peak, >= 3 dB below enterThreshold, and >= 500 ms past closest approach).
+	// 4. Check gate exit (dual-threshold Schmitt hysteresis + fast post-peak departure):
+	// On compact tracks a drone can stay above exitThreshold for 1.5-2.2 s while cruising to the
+	// next gate. Once a genuine pass crest has turned over and dropped >= 6.0 dB on the median
+	// curve (>= 4.2 dB smoothed) >= 260 ms past closest approach, confirm immediately so the
+	// crossing marker and announcer fire in real time while `awaitingRearm` guards the departure tail.
 	exitedBelowThreshold := s <= effectiveExit
 	exited := exitedBelowThreshold
+	if !exited && enterThresholdDbm < 0 &&
+		d.peakRSSI >= enterThresholdDbm+5.0 &&
+		(d.typicalPeakRSSI == 0 || d.peakRSSI >= d.typicalPeakRSSI-8.0 || d.peakRSSI >= enterThresholdDbm+10.0) &&
+		timestampUs >= d.enterTimeUs+240_000 &&
+		medCenterTs >= d.peakTimestampUs+260_000 &&
+		(d.peakRSSI-medVal) >= 6.0 &&
+		(d.peakRSSI-s) >= 4.2 &&
+		medVal <= d.prevMedVal+0.25 &&
+		!d.hasAbruptStepUp() {
+		exited = true
+	}
 	if !exited && s <= enterThresholdDbm-3.0 && (d.peakRSSI-s) >= 10.0 && medCenterTs >= d.peakTimestampUs+500_000 {
 		exited = true
 	}
@@ -347,9 +369,11 @@ func (d *ChannelDetector) ProcessSample(
 			exited = true
 		} else {
 			d.inGate = false
+			d.prevMedVal = medVal
 			return nil
 		}
 	}
+	d.prevMedVal = medVal
 
 	if exited {
 		d.inGate = false
@@ -364,16 +388,26 @@ func (d *ChannelDetector) ProcessSample(
 		if zeroPhasePeak > d.peakRSSI {
 			d.peakRSSI = zeroPhasePeak
 		}
+		isStepBurst := enterThresholdDbm < 0 && d.isRectangularStepBurst()
 		d.prevLastCrossingUs = d.lastCrossingUs
 		d.prevHasCrossed = d.hasCrossed
+		d.prevTypicalPeak = d.typicalPeakRSSI
+		d.prevConfirmedPeak = d.lastConfirmedPeak
 		d.lastCrossingUs = refinedTimeUs
 		d.hasCrossed = true
-		// Only wait for a subsequent re-arm drop when exiting early above effectiveExit (high-valley
-		// fallback); when s <= effectiveExit already, Schmitt hysteresis is already satisfied.
+		d.lastConfirmedPeak = d.peakRSSI
+		if enterThresholdDbm < 0 && !isStepBurst {
+			if d.typicalPeakRSSI == 0 {
+				d.typicalPeakRSSI = d.peakRSSI
+			} else {
+				d.typicalPeakRSSI = 0.7*d.typicalPeakRSSI + 0.3*d.peakRSSI
+			}
+		}
+		// Only wait for a subsequent re-arm drop when exiting early above effectiveExit (post-peak or
+		// high-valley confirmation); when s <= effectiveExit already, Schmitt hysteresis is satisfied.
 		d.awaitingRearm = !exitedBelowThreshold
 
 		beamwidthMs, speedMph := d.estimateBeamwidthAndSpeed()
-		isStepBurst := enterThresholdDbm < 0 && d.isRectangularStepBurst()
 
 		// Convert dBm (-85..-20 dBm) to ImmersionRC LapRF peak height scale (approx 600..3600)
 		laprfHeight := float32(math.Max(400, math.Min(3900, float64(d.peakRSSI+95.0)*46.0)))
@@ -641,6 +675,42 @@ func (d *ChannelDetector) measurePassHoldAndArea(enterThresholdDbm, effectiveExi
 		math.Round(aboveEnterMs*10) / 10,
 		math.Round(aboveEnterAreaDbSec*100) / 100,
 		math.Round(areaDbSec*100) / 100
+}
+
+// hasAbruptStepUp reports whether `passMedSamples` began from thermal noise (<= -87.5 dBm) with a
+// non-physical >= 20 dB step-on jump in <= 85 ms (characteristic of a 5 GHz Wi-Fi TXOP burst).
+func (d *ChannelDetector) hasAbruptStepUp() bool {
+	pts := d.passMedSamples
+	n := len(pts)
+	if n < 5 {
+		return false
+	}
+	quietCount := 0
+	lastQuietIdx := -1
+	for i := 0; i < n && i < 8; i++ {
+		if i > 0 && pts[i].timestampUs-pts[i-1].timestampUs > 35_000 {
+			return false
+		}
+		if pts[i].rssiDbm <= -87.5 {
+			quietCount++
+			lastQuietIdx = i
+		} else {
+			break
+		}
+	}
+	if quietCount < 2 || lastQuietIdx < 1 {
+		return false
+	}
+	baseDbm := pts[lastQuietIdx].rssiDbm
+	for i := lastQuietIdx + 1; i < n; i++ {
+		if pts[i].timestampUs-pts[lastQuietIdx].timestampUs > 85_000 {
+			break
+		}
+		if pts[i].rssiDbm >= baseDbm+20.0 {
+			return true
+		}
+	}
+	return false
 }
 
 // isRectangularStepBurst detects a 5 GHz Wi-Fi TXOP / digital packet burst on an unused FPV

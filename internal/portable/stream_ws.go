@@ -119,7 +119,7 @@ func (f *engineStreamForwarder) OnTelemetryFrame(frame domain.TimerTelemetryFram
 	f.pending = append(f.pending, frame)
 	count := len(f.pending)
 	f.mu.Unlock()
-	if count >= 8 {
+	if count >= 4 {
 		f.flushTelemetry()
 	}
 }
@@ -211,10 +211,10 @@ func newStreamHub(simEngine, realEngine *tracker.Engine, isSim func() bool, appL
 	h.simFwd = newEngineStreamForwarder(h, simEngine, appLog, true, isSim)
 	h.realFwd = newEngineStreamForwarder(h, realEngine, appLog, false, func() bool { return !isSim() })
 
-	// Flush pending telemetry batches at 50 Hz (20 ms) so UI graphs run at silky 50-60 FPS
-	// with minimal WebSocket frame overhead.
+	// Flush pending telemetry batches every 12 ms (~83 Hz) so UI graphs and crossing markers
+	// update in real time with minimal WebSocket frame overhead.
 	go func() {
-		ticker := time.NewTicker(20 * time.Millisecond)
+		ticker := time.NewTicker(12 * time.Millisecond)
 		defer ticker.Stop()
 		for {
 			select {

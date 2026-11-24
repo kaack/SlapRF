@@ -64,7 +64,8 @@ public final class SlapRFBleShim {
     private static final long OPEN_SCAN_TIMEOUT_MS = 8000L;
     private static final long CONNECT_TIMEOUT_MS = 10000L;
     private static final long GATT_OP_TIMEOUT_MS = 3000L;
-    private static final int MAX_BUFFERED_RX = 1 << 20;
+    private static final long PRIORITY_RENEW_MS = 15000L;
+    private static final int MAX_BUFFERED_RX = 16384;
     // Handles live in their own range so they can never collide with SlapRFUsbShim handles.
     private static final AtomicInteger nextHandle = new AtomicInteger(0x40000001);
 
@@ -122,9 +123,10 @@ public final class SlapRFBleShim {
 
         final ReentrantLock rxLock = new ReentrantLock();
         final Condition rxAvail = rxLock.newCondition();
-        byte[] rxBuf = new byte[8192];
+        byte[] rxBuf = new byte[MAX_BUFFERED_RX];
         int rxHead = 0;
         int rxLen = 0;
+        volatile long lastPriorityRenewMs = 0L;
 
         Session(int handle, String fp) {
             this.handle = handle;
@@ -188,30 +190,25 @@ public final class SlapRFBleShim {
             }
             rxLock.lock();
             try {
+                if (data.length >= MAX_BUFFERED_RX) {
+                    System.arraycopy(data, data.length - MAX_BUFFERED_RX, rxBuf, 0, MAX_BUFFERED_RX);
+                    rxHead = 0;
+                    rxLen = MAX_BUFFERED_RX;
+                    rxAvail.signalAll();
+                    return;
+                }
                 int need = rxLen + data.length;
                 if (need > MAX_BUFFERED_RX) {
-                    // Reader stalled: drop the oldest bytes to stay bounded.
+                    // Reader stalled: drop the oldest bytes so telemetry stays real-time without multi-second lag.
                     int drop = need - MAX_BUFFERED_RX;
                     rxHead = (rxHead + drop) % rxBuf.length;
                     rxLen -= Math.min(drop, rxLen);
-                    need = rxLen + data.length;
-                }
-                if (need > rxBuf.length) {
-                    int cap = rxBuf.length;
-                    while (cap < need) {
-                        cap *= 2;
-                    }
-                    byte[] grown = new byte[cap];
-                    for (int i = 0; i < rxLen; i++) {
-                        grown[i] = rxBuf[(rxHead + i) % rxBuf.length];
-                    }
-                    rxBuf = grown;
-                    rxHead = 0;
                 }
                 int tail = (rxHead + rxLen) % rxBuf.length;
-                for (byte b : data) {
-                    rxBuf[tail] = b;
-                    tail = (tail + 1) % rxBuf.length;
+                int first = Math.min(data.length, rxBuf.length - tail);
+                System.arraycopy(data, 0, rxBuf, tail, first);
+                if (first < data.length) {
+                    System.arraycopy(data, first, rxBuf, 0, data.length - first);
                 }
                 rxLen += data.length;
                 rxAvail.signalAll();
@@ -335,9 +332,18 @@ public final class SlapRFBleShim {
         }
 
         @Override
+        @SuppressLint("MissingPermission")
         public void onCharacteristicChanged(BluetoothGatt g, BluetoothGattCharacteristic c, byte[] value) {
             if (c != null && TX_UUID.equals(c.getUuid())) {
                 appendRx(value);
+                long nowMs = SystemClock.uptimeMillis();
+                if (g != null && nowMs - lastPriorityRenewMs >= PRIORITY_RENEW_MS) {
+                    lastPriorityRenewMs = nowMs;
+                    try {
+                        g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH);
+                    } catch (Exception ignored) {
+                    }
+                }
             }
         }
 
@@ -720,8 +726,10 @@ public final class SlapRFBleShim {
                 }
             }
             int n = Math.min(cap, s.rxLen);
-            for (int i = 0; i < n; i++) {
-                rxBuf[i] = s.rxBuf[(s.rxHead + i) % s.rxBuf.length];
+            int first = Math.min(n, s.rxBuf.length - s.rxHead);
+            System.arraycopy(s.rxBuf, s.rxHead, rxBuf, 0, first);
+            if (first < n) {
+                System.arraycopy(s.rxBuf, 0, rxBuf, first, n - first);
             }
             s.rxHead = (s.rxHead + n) % s.rxBuf.length;
             s.rxLen -= n;

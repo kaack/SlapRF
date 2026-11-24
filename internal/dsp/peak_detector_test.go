@@ -285,3 +285,117 @@ func TestBriefExitNadirAndRejectedSpikeNeverSwallowFollowingPass(t *testing.T) {
 		t.Fatalf("expected real pass peak near -52.5 dBm, got %.1f dBm", realPass[0].PeakRSSIDbm)
 	}
 }
+
+func TestCompactTrackNearBaselineConfirmsPostPeakWithoutWaitingForExit(t *testing.T) {
+	det := NewChannelDetector(1, 0)
+	const frameUs = 20_000 // 50 Hz BLE Hub rate
+	ts := uint64(1_000_000)
+
+	feedVal := func(rssi float32) (*CrossingCandidate, uint64) {
+		sampleTs := ts
+		c := det.ProcessSample(rssi, sampleTs, -70, -76, 1_500_000)
+		ts += frameUs
+		return c, sampleTs
+	}
+
+	// Settle ambient floor at -82 dBm.
+	for i := 0; i < 20; i++ {
+		_, _ = feedVal(-82.0)
+	}
+
+	runCompactPass := func(peakDbm float32) (cand *CrossingCandidate, emitDelayUs uint64, truePeakTs uint64, extras int) {
+		// 300 ms approach climb (-78 -> peakDbm), 80 ms crest, 260 ms descent to -68.5 dBm,
+		// then 2.2 seconds cruising near the track at -68.5 dBm (7.5 dB ABOVE -76 dBm exit!).
+		for i := 0; i < 15; i++ {
+			frac := float32(i+1) / 15.0
+			v := -78.0 + frac*(peakDbm - -78.0)
+			if c, sampleTs := feedVal(v); c != nil && cand == nil {
+				cand = c
+				emitDelayUs = sampleTs
+			}
+		}
+		crestStart := ts
+		for i := 0; i < 4; i++ {
+			if c, sampleTs := feedVal(peakDbm); c != nil {
+				if cand == nil {
+					cand = c
+					emitDelayUs = sampleTs
+				} else {
+					extras++
+				}
+			}
+		}
+		crestEnd := ts - frameUs
+		truePeakTs = crestStart + (crestEnd-crestStart)/2
+
+		// 13 samples (260 ms) descending from peakDbm to -68.5 dBm.
+		for i := 0; i < 13; i++ {
+			frac := float32(i+1) / 13.0
+			v := peakDbm + frac*(-68.5-peakDbm)
+			if c, sampleTs := feedVal(v); c != nil {
+				if cand == nil {
+					cand = c
+					emitDelayUs = sampleTs - truePeakTs
+				} else {
+					extras++
+				}
+			}
+		}
+
+		// 110 samples (2.2 seconds) staying at -68.5 dBm above exitThreshold (-76 dBm).
+		for i := 0; i < 110; i++ {
+			if c, sampleTs := feedVal(-68.5); c != nil {
+				if cand == nil {
+					cand = c
+					emitDelayUs = sampleTs - truePeakTs
+				} else {
+					extras++
+				}
+			}
+		}
+
+		// Far side of track drops to -81 dBm for 1.0 s before next lap.
+		for i := 0; i < 50; i++ {
+			if c, sampleTs := feedVal(-81.0); c != nil {
+				if cand == nil {
+					cand = c
+					emitDelayUs = sampleTs - truePeakTs
+				} else {
+					extras++
+				}
+			}
+		}
+		return cand, emitDelayUs, truePeakTs, extras
+	}
+
+	c1, delay1Us, peak1Ts, extras1 := runCompactPass(-53.0)
+	if c1 == nil {
+		t.Fatalf("expected Pass 1 (-53.0 dBm) to emit a crossing candidate")
+	}
+	if extras1 != 0 {
+		t.Fatalf("expected zero duplicate crossings on 2.2 s near-track tail, got %d", extras1)
+	}
+	if delay1Us > 420_000 {
+		t.Fatalf("expected Pass 1 to confirm in real time (<= 420 ms post-peak), got %.1f ms", float64(delay1Us)/1000.0)
+	}
+	diff1Ms := float64(int64(c1.TimestampUs)-int64(peak1Ts)) / 1000.0
+	if diff1Ms < -45.0 || diff1Ms > 45.0 {
+		t.Fatalf("expected Pass 1 refined peak timestamp within +-45 ms of crest, got %+.1f ms", diff1Ms)
+	}
+
+	// Pass 2 on a wider line (-58.5 dBm, 5.5 dB below Pass 1) should also confirm in real time.
+	c2, delay2Us, peak2Ts, extras2 := runCompactPass(-58.5)
+	if c2 == nil {
+		t.Fatalf("expected Pass 2 (-58.5 dBm) to emit a crossing candidate")
+	}
+	if extras2 != 0 {
+		t.Fatalf("expected zero duplicate crossings on Pass 2 tail, got %d", extras2)
+	}
+	if delay2Us > 420_000 {
+		t.Fatalf("expected Pass 2 (-58.5 dBm) to confirm in real time (<= 420 ms post-peak), got %.1f ms", float64(delay2Us)/1000.0)
+	}
+	diff2Ms := float64(int64(c2.TimestampUs)-int64(peak2Ts)) / 1000.0
+	if diff2Ms < -45.0 || diff2Ms > 45.0 {
+		t.Fatalf("expected Pass 2 refined peak timestamp within +-45 ms of crest, got %+.1f ms", diff2Ms)
+	}
+}

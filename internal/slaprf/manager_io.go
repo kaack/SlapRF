@@ -1442,7 +1442,7 @@ func (m *Manager) synthesizeHubStatusLocked(slot *connSlot, nowMs int64) map[str
 	if slot.hubOwnFrames == 0 && !hasH1 {
 		return nil
 	}
-	if slot.lastStatus != nil && nowMs-slot.lastStatusAtMs < 500 && !slot.probing && len(slot.waiters) == 0 {
+	if slot.lastStatus != nil && nowMs-slot.lastStatusAtMs < 2000 && !slot.probing && len(slot.waiters) == 0 {
 		return nil
 	}
 	fp := h1.fp

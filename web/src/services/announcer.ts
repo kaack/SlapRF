@@ -1595,10 +1595,11 @@ export class Announcer {
       (this.activeVoiceURI() === ANDROID_SYSTEM_VOICE_URI || !("speechSynthesis" in window))
     ) {
       const token = ++this.utteranceToken;
+      const flushIdle = !this.neuralSpeaking && this.queue.length === 0;
       this.neuralSpeaking = true;
       const startedAt = Date.now();
       const maxDurationMs = Math.max(12_000, cleaned.length * 220);
-      androidBridge.speak(cleaned, this.prefs.rate, this.prefs.volume, false);
+      androidBridge.speak(cleaned, this.prefs.rate, this.prefs.volume, flushIdle);
 
       const pollDone = () => {
         if (this.utteranceToken !== token) return;

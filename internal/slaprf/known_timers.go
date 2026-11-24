@@ -349,11 +349,13 @@ func (r *KnownTimerRegistry) Upsert(entry KnownHardwareTimer) {
 		}
 		parentHub = newestHub.FP
 	}
+	slotCleared := false
 	if role == "spoke" && slot >= 2 {
 		for k, other := range r.timers {
 			if k != fp && other.Role == "spoke" && other.Slot == slot && (parentHub == "" || other.ParentHubFP == parentHub) {
 				other.Slot = 0
 				r.timers[k] = other
+				slotCleared = true
 			}
 		}
 	}
@@ -374,17 +376,34 @@ func (r *KnownTimerRegistry) Upsert(entry KnownHardwareTimer) {
 		PairedBLE:   pairedBLE,
 		LastSeenMs:  entry.LastSeenMs,
 	}
+	metadataChanged := !hadPrev ||
+		slotCleared ||
+		prev.Role != merged.Role ||
+		prev.Label != merged.Label ||
+		prev.FW != merged.FW ||
+		prev.MAC != merged.MAC ||
+		prev.Slot != merged.Slot ||
+		prev.Channel != merged.Channel ||
+		prev.ParentHubFP != merged.ParentHubFP ||
+		prev.PairedBLE != merged.PairedBLE
+
 	r.timers[fp] = merged
+	if !metadataChanged {
+		r.mu.Unlock()
+		return
+	}
 
 	list := make([]KnownHardwareTimer, 0, len(r.timers))
 	for _, kt := range r.timers {
 		list = append(list, kt)
 	}
+	hostKey := r.hostKey
+	store := r.store
 	r.mu.Unlock()
 
-	if r.store != nil {
-		_ = r.store.PutJSON(kvKnownTimersKey, list)
-		_ = r.store.PutJSON(kvHostAuthKey, r.HostAuthKey())
+	if store != nil {
+		_ = store.PutJSON(kvKnownTimersKey, list)
+		_ = store.PutJSON(kvHostAuthKey, hostKey)
 	}
 }
 

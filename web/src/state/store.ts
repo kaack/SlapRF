@@ -1588,15 +1588,18 @@ export class AppStore {
         ? 230_000
         : 195_000;
     const targetUs = Math.max(0, streamClockUs - baseLookbackUs * speedMult);
-    if (this._playheadUs === 0 || Math.abs(targetUs - this._playheadUs) > 700_000 * speedMult) {
+    if (this._playheadUs === 0 || Math.abs(targetUs - this._playheadUs) > 350_000 * speedMult) {
       this._playheadUs = Math.min(latest, targetUs);
       return Math.round(this._playheadUs);
     }
     // Advance at the active engine clock rate (`dtUs`), with a tiny +-2.5% PLL trim so zoomed-in
-    // 1-2 s signal windows scroll at steady VSync speed without 1 Hz batch velocity whips.
+    // 1-2 s signal windows scroll at steady VSync speed without 1 Hz batch velocity whips, while
+    // catching up briskly if the tab lagged > 180 ms behind the stream clock.
     const errorUs = targetUs - (this._playheadUs + dtUs);
-    const maxCorrectionUs = dtUs * 0.025;
-    const correctionUs = Math.max(-maxCorrectionUs, Math.min(maxCorrectionUs, errorUs * 0.02));
+    const maxRate = Math.abs(errorUs) > 180_000 * speedMult ? 0.15 : 0.025;
+    const gain = Math.abs(errorUs) > 180_000 * speedMult ? 0.08 : 0.02;
+    const maxCorrectionUs = dtUs * maxRate;
+    const correctionUs = Math.max(-maxCorrectionUs, Math.min(maxCorrectionUs, errorUs * gain));
     this._playheadUs = Math.min(latest, this._playheadUs + dtUs + correctionUs);
     return Math.round(this._playheadUs);
   }
