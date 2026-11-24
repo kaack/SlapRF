@@ -63,6 +63,10 @@ function fmtKpiFramesHtml(frames: number, rate: number): string {
   return `<span class="net-metric-pair"><span class="net-num-slot is-frames">${fmtCompactFrameCount(frames)}</span> <span class="note">(<span class="net-metric-pair"><span class="net-num-slot is-rate">${clamped.toFixed(1)}</span> <span>pkt/s</span></span>)</span></span>`;
 }
 
+function fmtEngineReceivedHtml(samples: number): string {
+  return `<span class="net-metric-pair"><span class="net-num-slot is-frames">${fmtCompactFrameCount(samples)}</span> <span>samples</span></span>`;
+}
+
 function fmtMsAgoHtml(ms: number): string {
   const clamped = Math.min(9999, Math.max(0, Math.round(ms)));
   return `<span class="net-metric-pair"><span class="net-num-slot is-ms">${clamped}</span> <span>ms ago</span></span>`;
@@ -78,8 +82,8 @@ interface TopologyHubInfo {
   ch: number;
   viaUsb: boolean;
   emergencyMode: boolean;
-  gateLabel?: string;
   serverFrames?: number;
+  engineFrames?: number;
   dbm?: number[];
   statusNote: string;
 }
@@ -102,7 +106,6 @@ interface TopologySpokeInfo {
   dbm?: number[];
   ratePktPerSec: number;
   serverFrames: number;
-  serverGateLabel?: string;
   serverRssi?: number[];
   sourceNote: string;
 }
@@ -1421,12 +1424,9 @@ export class NetworkView extends Component {
     const ch = hubUsbStatus?.channel || s?.channel || 1;
     const nowMs = performance.now();
 
-    const formatTrackPos = (g: { trackOrder: number; role: string }) =>
-      `Track #${g.trackOrder + 1}${g.role === "START_FINISH" ? " (Start)" : ""}`;
-
     const hubGate = this.store.nodes.find((g) => (g.assignedTimerId ?? g.gateId) === 1);
-    const hubGateName = hubGate ? formatTrackPos(hubGate) : undefined;
     const hubServerTimer = detectedTimers.find((t) => t.isHub || t.timerId === 1);
+    const hubEngineFrames = Math.max(hubServerTimer?.framesRxCount ?? 0, hubGate?.framesRxCount ?? 0);
 
     const isBleLink =
       this.store.timingHardwareMode === "slaprf_ble" || activeHubConsole.transportLabel === "Bluetooth";
@@ -1469,8 +1469,8 @@ export class NetworkView extends Component {
         ch,
         viaUsb: true,
         emergencyMode: Boolean(hubUsbStatus.emergencyMode),
-        gateLabel: hubGateName,
         serverFrames: hubFrames,
+        engineFrames: hubEngineFrames,
         dbm: liveDbm,
         statusNote: hubUsbStatus.emergencyMode
           ? "Emergency mode"
@@ -1517,8 +1517,8 @@ export class NetworkView extends Component {
         ch,
         viaUsb: true,
         emergencyMode: false,
-        gateLabel: hubGateName,
         serverFrames: hubFrames,
+        engineFrames: hubEngineFrames,
         dbm: liveDbm,
         statusNote: isBleLink ? "Bluetooth · Active" : `${activeHubConsole.transportLabel} · Beacon master`,
       };
@@ -1550,8 +1550,8 @@ export class NetworkView extends Component {
         ch,
         viaUsb: false,
         emergencyMode: false,
-        gateLabel: linked ? hubGateName : undefined,
-        serverFrames: linked ? Math.max(hubGate?.framesRxCount ?? 0, hubServerTimer?.framesRxCount ?? 0) : 0,
+        serverFrames: linked ? hubEngineFrames : 0,
+        engineFrames: linked ? hubEngineFrames : 0,
         dbm: liveEngineDbm,
         statusNote: linked ? `Sync beacon locked` : hasSlot ? "Beacon lost" : "Not connected",
       };
@@ -1622,7 +1622,6 @@ export class NetworkView extends Component {
             this.spokeRateTracker.set(sp.slot, { frames, atMs: nowMs, ratePktPerSec: frames > 0 ? 25 : 0 });
           }
           const activelyReceiving = frames > 0 && (msAgo === undefined || msAgo < 2500);
-          const gateName = gate ? formatTrackPos(gate) : undefined;
           const cleanSpLabel = isFallbackFp ? "" : sp.label;
           const simSpokeDbm = activelyReceiving
             ? this.mapSimPilotRssiToFreqs(
@@ -1656,8 +1655,7 @@ export class NetworkView extends Component {
             seq: slotLive?.seq ?? sp.seq,
             dbm: liveSpokeDbm ?? sp.dbm,
             ratePktPerSec,
-            serverFrames: gate?.framesRxCount ?? matchedDt?.framesRxCount ?? 0,
-            serverGateLabel: gateName,
+            serverFrames: Math.max(matchedDt?.framesRxCount ?? 0, gate?.framesRxCount ?? 0),
             serverRssi: liveSpokeDbm,
             sourceNote,
           });
@@ -1678,7 +1676,6 @@ export class NetworkView extends Component {
       const sFp = (spStatus.fp || "").toUpperCase();
       const matchedDt = sFp ? detectedTimers.find((t) => (t.fingerprint || "").toUpperCase() === sFp) : undefined;
       const gate = matchedDt ? this.store.nodes.find((g) => g.assignedTimerId === matchedDt.timerId) : undefined;
-      const gateName = gate ? formatTrackPos(gate) : undefined;
       const existingFromHub = spokes.get(slotNum);
       const isCurrentConsole = s === spStatus;
       const rfActive = !spStatus.emergencyMode && spStatus.rf?.enabled !== false && !spStatus.scanLive;
@@ -1713,8 +1710,7 @@ export class NetworkView extends Component {
                 ? spStatus.dbm
                 : existingFromHub?.dbm,
         ratePktPerSec: existingFromHub?.ratePktPerSec ?? (linked ? 25 : 0),
-        serverFrames: gate?.framesRxCount ?? matchedDt?.framesRxCount ?? 0,
-        serverGateLabel: gateName,
+        serverFrames: Math.max(matchedDt?.framesRxCount ?? 0, gate?.framesRxCount ?? 0),
         serverRssi: liveSpokeDbm,
         sourceNote: spStatus.emergencyMode
           ? `Emergency mode · ${c.transportLabel}`
@@ -2337,16 +2333,11 @@ export class NetworkView extends Component {
     }
 
     const connectedSnaps = snaps.filter((s) => s.connected);
-
-    const gateByTimer = new Map<number, string>();
-    for (const g of this.store.nodes) {
-      if (g.assignedTimerId > 0) {
-        gateByTimer.set(
-          g.assignedTimerId,
-          `Track #${g.trackOrder + 1}${g.role === "START_FINISH" ? " (Start)" : ""}`
-        );
-      }
-    }
+    const engineRxForTimer = (timerId: number): number => {
+      const dt = this.store.detectedTimers.find((t) => t.timerId === timerId);
+      const gate = this.store.nodes.find((g) => g.assignedTimerId === timerId);
+      return Math.max(dt?.framesRxCount ?? 0, gate?.framesRxCount ?? 0);
+    };
 
     const structSig = JSON.stringify({
       usb: isUSBMode ? 1 : 0,
@@ -2356,7 +2347,6 @@ export class NetworkView extends Component {
         ep: s.endpoint,
         tr: s.transport,
         conn: s.connected,
-        gate: gateByTimer.get(s.timerId) || "",
         freqs: s.slotFreqsMhz ?? [],
         thresholds: s.slotThresholds ?? [],
       })),
@@ -2384,6 +2374,10 @@ export class NetworkView extends Component {
             ? `Synced (${snap.rtcOffsetMs >= 0 ? "+" : ""}${Math.round(snap.rtcOffsetMs)} ms)`
             : "Syncing…";
         if (rtcEl && rtcEl.textContent !== rtcText) rtcEl.textContent = rtcText;
+
+        const rxEl = card.querySelector<HTMLElement>('[data-laprf-kpi="engine-rx"]');
+        const rxHtml = fmtEngineReceivedHtml(engineRxForTimer(snap.timerId));
+        if (rxEl && rxEl.innerHTML !== rxHtml) rxEl.innerHTML = rxHtml;
 
         for (let idx = 0; idx < 8; idx++) {
           const freq = snap.slotFreqsMhz?.[idx] ?? 0;
@@ -2448,8 +2442,8 @@ export class NetworkView extends Component {
                 <strong class="debug-net-inspector-kpi-val mono" data-laprf-kpi="rtc">—</strong>
               </div>
               <div class="debug-net-inspector-kpi">
-                <span class="debug-net-inspector-kpi-label">Track position</span>
-                <strong class="debug-net-inspector-kpi-val">—</strong>
+                <span class="debug-net-inspector-kpi-label">Engine received</span>
+                <strong class="debug-net-inspector-kpi-val mono">—</strong>
               </div>
             </div>
 
@@ -2474,7 +2468,7 @@ export class NetworkView extends Component {
         ${connectedSnaps
           .map((snap) => {
             const color = timerColor(this.store, snap.timerId);
-            const assignedGate = gateByTimer.get(snap.timerId);
+            const engineRxHtml = fmtEngineReceivedHtml(engineRxForTimer(snap.timerId));
             const voltText = snap.voltageMv > 0 ? `${(snap.voltageMv / 1000).toFixed(1)} V` : "—";
             const gateText = !snap.connected ? "Offline" : snap.gateArmed ? "Armed" : "Standby";
             const rtcText = !snap.connected
@@ -2520,7 +2514,6 @@ export class NetworkView extends Component {
                     </span>
                   </span>
                   <div class="debug-connect-actions">
-                    <span class="badge net-device-laprf-track-badge">${assignedGate ? esc(assignedGate) : "Unassigned"}</span>
                     ${
                       !isUSBMode
                         ? `<button class="btn net-conn-btn" type="button" data-action="laprf-disconnect" data-timer-id="${snap.timerId}">
@@ -2545,8 +2538,8 @@ export class NetworkView extends Component {
                     <strong class="debug-net-inspector-kpi-val mono" data-laprf-kpi="rtc">${rtcText}</strong>
                   </div>
                   <div class="debug-net-inspector-kpi">
-                    <span class="debug-net-inspector-kpi-label">Track position</span>
-                    <strong class="debug-net-inspector-kpi-val">${assignedGate ? esc(assignedGate) : `<span class="note">Off track</span>`}</strong>
+                    <span class="debug-net-inspector-kpi-label">Engine received</span>
+                    <strong class="debug-net-inspector-kpi-val mono" data-laprf-kpi="engine-rx">${engineRxHtml}</strong>
                   </div>
                 </div>
 
@@ -2850,37 +2843,28 @@ export class NetworkView extends Component {
     }
 
     const connectedSnaps = snaps.filter((s) => s.connected);
-
-    const gateByTimer = new Map<number, { gateId: number; label: string }>();
-    for (const g of this.store.nodes) {
-      if (g.assignedTimerId > 0) {
-        gateByTimer.set(g.assignedTimerId, {
-          gateId: g.gateId,
-          label: `Track #${g.trackOrder + 1}${g.role === "START_FINISH" ? " (Start)" : ""}`,
-        });
-      }
-    }
+    const engineRxForTimer = (timerId: number): number => {
+      const dt = this.store.detectedTimers.find((t) => t.timerId === timerId);
+      const gate = this.store.nodes.find((g) => g.assignedTimerId === timerId);
+      return Math.max(dt?.framesRxCount ?? 0, gate?.framesRxCount ?? 0);
+    };
 
     const pctRssi = (val: number) => Math.max(0, Math.min(100, (val / 255) * 100));
 
     const structSig = JSON.stringify({
-      snaps: connectedSnaps.map((s) => {
-        const gMeta = gateByTimer.get(s.timerId);
-        return {
-          id: s.timerId,
-          label: s.label,
-          ep: s.endpoint,
-          conn: s.connected,
-          authOk: s.authOk,
-          authKnown: s.authKnown,
-          ver: s.serverVersion,
-          nodes: s.nodeCount,
-          gate: gMeta?.label || "",
-          freqs: s.nodeFreqsMhz ?? [],
-          enters: s.nodeEnterLevels ?? [],
-          exits: s.nodeExitLevels ?? [],
-        };
-      }),
+      snaps: connectedSnaps.map((s) => ({
+        id: s.timerId,
+        label: s.label,
+        ep: s.endpoint,
+        conn: s.connected,
+        authOk: s.authOk,
+        authKnown: s.authKnown,
+        ver: s.serverVersion,
+        nodes: s.nodeCount,
+        freqs: s.nodeFreqsMhz ?? [],
+        enters: s.nodeEnterLevels ?? [],
+        exits: s.nodeExitLevels ?? [],
+      })),
     });
 
     if (!focusedInsideTimers && structSig === this.lastRhTimersStructSig && connectedSnaps.length > 0) {
@@ -2898,6 +2882,10 @@ export class NetworkView extends Component {
             ? `Synced (${Math.abs(snap.clockOffsetMs) < 0.5 ? "<1" : snap.clockOffsetMs.toFixed(1)} ms RTT)`
             : "Syncing…";
         if (clkEl && clkEl.textContent !== clkText) clkEl.textContent = clkText;
+
+        const rxEl = card.querySelector<HTMLElement>('[data-rh-kpi="engine-rx"]');
+        const rxHtml = fmtEngineReceivedHtml(engineRxForTimer(snap.timerId));
+        if (rxEl && rxEl.innerHTML !== rxHtml) rxEl.innerHTML = rxHtml;
 
         const nodeCount = Math.max(1, Math.min(8, snap.nodeCount || 8));
         for (let idx = 0; idx < nodeCount; idx++) {
@@ -2981,8 +2969,8 @@ export class NetworkView extends Component {
                 <strong class="debug-net-inspector-kpi-val mono" data-rh-kpi="clock">—</strong>
               </div>
               <div class="debug-net-inspector-kpi">
-                <span class="debug-net-inspector-kpi-label">Track position</span>
-                <strong class="debug-net-inspector-kpi-val">—</strong>
+                <span class="debug-net-inspector-kpi-label">Engine received</span>
+                <strong class="debug-net-inspector-kpi-val mono">—</strong>
               </div>
             </div>
 
@@ -3007,8 +2995,7 @@ export class NetworkView extends Component {
         ${connectedSnaps
           .map((snap) => {
             const color = timerColor(this.store, snap.timerId);
-            const gMeta = gateByTimer.get(snap.timerId);
-            const assignedGate = gMeta?.label;
+            const engineRxHtml = fmtEngineReceivedHtml(engineRxForTimer(snap.timerId));
             const nodeCount = Math.max(1, Math.min(8, snap.nodeCount || 8));
             const rawSnapLbl = snap.label?.trim() || "";
             const snapLabel = rawSnapLbl
@@ -3084,7 +3071,6 @@ export class NetworkView extends Component {
                   <div class="net-device-head-badges">
                     ${authBadge}
                     <span class="badge">${nodeCount} nodes</span>
-                    <span class="badge net-device-rh-track-badge">${assignedGate ? esc(assignedGate) : "Unassigned"}</span>
                   </div>
                   <div class="net-device-head-btn">
                     <button class="btn net-conn-btn" type="button" data-action="rh-disconnect" data-timer-id="${snap.timerId}">
@@ -3107,8 +3093,8 @@ export class NetworkView extends Component {
                     <strong class="debug-net-inspector-kpi-val mono" data-rh-kpi="clock">${clkText}</strong>
                   </div>
                   <div class="debug-net-inspector-kpi">
-                    <span class="debug-net-inspector-kpi-label">Track position</span>
-                    <strong class="debug-net-inspector-kpi-val">${assignedGate ? esc(assignedGate) : `<span class="note">Off track</span>`}</strong>
+                    <span class="debug-net-inspector-kpi-label">Engine received</span>
+                    <strong class="debug-net-inspector-kpi-val mono" data-rh-kpi="engine-rx">${engineRxHtml}</strong>
                   </div>
                 </div>
 
@@ -3152,35 +3138,27 @@ export class NetworkView extends Component {
     const errText = this.rhError || sharedRHLink.errorMessage || "";
     this.patchNetConnSubbar(errText ? `<div class="sim-error-note">${esc(errText)}</div>` : "");
 
-    const gateByTimer = new Map<number, { gateId: number; label: string }>();
-    for (const g of this.store.nodes) {
-      if (g.assignedTimerId > 0) {
-        gateByTimer.set(g.assignedTimerId, {
-          gateId: g.gateId,
-          label: `Track #${g.trackOrder + 1}${g.role === "START_FINISH" ? " (Start)" : ""}`,
-        });
-      }
-    }
+    const engineRxForTimer = (timerId: number): number => {
+      const dt = this.store.detectedTimers.find((t) => t.timerId === timerId);
+      const gate = this.store.nodes.find((g) => g.assignedTimerId === timerId);
+      return Math.max(dt?.framesRxCount ?? 0, gate?.framesRxCount ?? 0);
+    };
 
     const pctRssi = (val: number) => Math.max(0, Math.min(100, (val / 255) * 100));
     const structSig = JSON.stringify({
-      snaps: snaps.map((s) => {
-        const gMeta = gateByTimer.get(s.timerId);
-        return {
-          id: s.timerId,
-          label: s.label,
-          ep: s.portName || s.endpoint,
-          baud: s.baudRate || 115200,
-          api: s.apiLevel || 36,
-          conn: s.connected,
-          ver: s.serverVersion,
-          nodes: s.nodeCount,
-          gate: gMeta?.label || "",
-          freqs: s.nodeFreqsMhz ?? [],
-          enters: s.nodeEnterLevels ?? [],
-          exits: s.nodeExitLevels ?? [],
-        };
-      }),
+      snaps: snaps.map((s) => ({
+        id: s.timerId,
+        label: s.label,
+        ep: s.portName || s.endpoint,
+        baud: s.baudRate || 115200,
+        api: s.apiLevel || 36,
+        conn: s.connected,
+        ver: s.serverVersion,
+        nodes: s.nodeCount,
+        freqs: s.nodeFreqsMhz ?? [],
+        enters: s.nodeEnterLevels ?? [],
+        exits: s.nodeExitLevels ?? [],
+      })),
     });
 
     if (structSig === this.lastRhUsbTimersStructSig && snaps.length > 0) {
@@ -3198,6 +3176,10 @@ export class NetworkView extends Component {
             ? `Synced (${Math.abs(snap.clockOffsetMs) < 0.5 ? "<1" : snap.clockOffsetMs.toFixed(1)} ms RTT)`
             : "Syncing…";
         if (clkEl && clkEl.textContent !== clkText) clkEl.textContent = clkText;
+
+        const rxEl = card.querySelector<HTMLElement>('[data-rh-kpi="engine-rx"]');
+        const rxHtml = fmtEngineReceivedHtml(engineRxForTimer(snap.timerId));
+        if (rxEl && rxEl.innerHTML !== rxHtml) rxEl.innerHTML = rxHtml;
 
         const nodeCount = Math.max(1, Math.min(8, snap.nodeCount || 8));
         for (let idx = 0; idx < nodeCount; idx++) {
@@ -3274,8 +3256,8 @@ export class NetworkView extends Component {
                 <strong class="debug-net-inspector-kpi-val mono" data-rh-kpi="clock">—</strong>
               </div>
               <div class="debug-net-inspector-kpi">
-                <span class="debug-net-inspector-kpi-label">Track position</span>
-                <strong class="debug-net-inspector-kpi-val">—</strong>
+                <span class="debug-net-inspector-kpi-label">Engine received</span>
+                <strong class="debug-net-inspector-kpi-val mono">—</strong>
               </div>
             </div>
 
@@ -3300,8 +3282,7 @@ export class NetworkView extends Component {
         ${snaps
           .map((snap) => {
             const color = timerColor(this.store, snap.timerId);
-            const gMeta = gateByTimer.get(snap.timerId);
-            const assignedGate = gMeta?.label;
+            const engineRxHtml = fmtEngineReceivedHtml(engineRxForTimer(snap.timerId));
             const nodeCount = Math.max(1, Math.min(8, snap.nodeCount || 8));
             const rawSnapLbl = snap.label?.trim() || "";
             const snapLabel = rawSnapLbl
@@ -3367,7 +3348,6 @@ export class NetworkView extends Component {
                   <div class="net-device-head-badges">
                     ${snap.connected ? `<span class="badge badge-good mono">API ${apiLvl}</span>` : `<span class="badge">Offline</span>`}
                     <span class="badge">${nodeCount} nodes</span>
-                    <span class="badge net-device-rh-track-badge">${assignedGate ? esc(assignedGate) : "Unassigned"}</span>
                   </div>
                 </div>
 
@@ -3385,8 +3365,8 @@ export class NetworkView extends Component {
                     <strong class="debug-net-inspector-kpi-val mono" data-rh-kpi="clock">${clkText}</strong>
                   </div>
                   <div class="debug-net-inspector-kpi">
-                    <span class="debug-net-inspector-kpi-label">Track position</span>
-                    <strong class="debug-net-inspector-kpi-val">${assignedGate ? esc(assignedGate) : `<span class="note">Off track</span>`}</strong>
+                    <span class="debug-net-inspector-kpi-label">Engine received</span>
+                    <strong class="debug-net-inspector-kpi-val mono" data-rh-kpi="engine-rx">${engineRxHtml}</strong>
                   </div>
                 </div>
 
@@ -3446,7 +3426,7 @@ export class NetworkView extends Component {
         </div>
         <div class="debug-topo-node-foot">
           <span>${esc(cardStatusText)}</span>
-          ${sp.serverGateLabel ? `<span class="mono">${esc(sp.serverGateLabel)}</span>` : `<span class="mono">${esc(sp.fw)}</span>`}
+          <span class="mono">${esc(sp.fw)}</span>
         </div>
       </button>`;
   }
@@ -3607,7 +3587,7 @@ export class NetworkView extends Component {
       hub.statusNote,
       ...[2, 3, 4, 5, 6, 7].map((n) => {
         const sp = spokes.get(n)!;
-        return `${n}:${sp.populated ? 1 : 0}:${sp.espNowActive ? 1 : 0}:${sp.inHubStatus ? 1 : 0}:${sp.viaUsb ? 1 : 0}:${sp.label}:${sp.fp}:${sp.fw}:${sp.serverGateLabel ?? ""}`;
+        return `${n}:${sp.populated ? 1 : 0}:${sp.espNowActive ? 1 : 0}:${sp.inHubStatus ? 1 : 0}:${sp.viaUsb ? 1 : 0}:${sp.label}:${sp.fp}:${sp.fw}`;
       }),
     ].join("|");
 
@@ -3893,8 +3873,7 @@ export class NetworkView extends Component {
       kpiFramesHtml: string;
       lastFrameHtml: string;
       seqText: string;
-      trackPosHtml: string;
-      kvTrackPosHtml?: string;
+      engineRxHtml: string;
       sourceLabel: string;
       dbmSource: number[] | null | undefined;
     }
@@ -3914,13 +3893,8 @@ export class NetworkView extends Component {
     if (kpiLast && kpiLast.innerHTML !== opts.lastFrameHtml) kpiLast.innerHTML = opts.lastFrameHtml;
     const kpiSeq = host.querySelector<HTMLElement>('[data-net-kpi="seq"]');
     if (kpiSeq && kpiSeq.textContent !== opts.seqText) kpiSeq.textContent = opts.seqText;
-    const kpiPos = host.querySelector<HTMLElement>('[data-net-kpi="track-pos"]');
-    if (kpiPos && kpiPos.innerHTML !== opts.trackPosHtml) kpiPos.innerHTML = opts.trackPosHtml;
-
-    if (opts.kvTrackPosHtml !== undefined) {
-      const kvPos = host.querySelector<HTMLElement>('[data-net-kv="track-pos"]');
-      if (kvPos && kvPos.innerHTML !== opts.kvTrackPosHtml) kvPos.innerHTML = opts.kvTrackPosHtml;
-    }
+    const kpiEngineRx = host.querySelector<HTMLElement>('[data-net-kpi="engine-rx"]');
+    if (kpiEngineRx && kpiEngineRx.innerHTML !== opts.engineRxHtml) kpiEngineRx.innerHTML = opts.engineRxHtml;
 
     const barSource = host.querySelector<HTMLElement>("[data-net-bar-source]");
     if (barSource && barSource.textContent !== opts.sourceLabel) barSource.textContent = opts.sourceLabel;
@@ -4040,12 +4014,7 @@ export class NetworkView extends Component {
         populatedSpokes.length > 0
           ? `${activeSpokes.length}/${populatedSpokes.length} active (${populatedSpokes.map((c) => esc(c.label)).join(", ")})`
           : "None tied yet";
-      const trackPosHtml = hub.gateLabel
-        ? `${esc(hub.gateLabel)} <span class="note mono">· ${hub.serverFrames ?? 0} samples</span>`
-        : `<span class="note">Off track</span>`;
-      const kvTrackPosHtml = hub.gateLabel
-        ? `${esc(hub.gateLabel)} <span class="note mono">· ${hub.serverFrames ?? 0} samples</span>`
-        : `<span class="note">Off track (collector-only mode)</span>`;
+      const hubEngineRxHtml = fmtEngineReceivedHtml(hub.engineFrames ?? 0);
       const structKey = [
         "slot1",
         getAppTheme(),
@@ -4077,8 +4046,7 @@ export class NetworkView extends Component {
           kpiFramesHtml: hubKpiFramesHtml,
           lastFrameHtml,
           seqText: hubSweepSeq,
-          trackPosHtml,
-          kvTrackPosHtml,
+          engineRxHtml: hubEngineRxHtml,
           sourceLabel,
           dbmSource: hub.dbm,
         })
@@ -4122,8 +4090,8 @@ export class NetworkView extends Component {
             <strong class="debug-net-inspector-kpi-val mono" data-net-kpi="seq">${hubSweepSeq}</strong>
           </div>
           <div class="debug-net-inspector-kpi">
-            <span class="debug-net-inspector-kpi-label">Track position &amp; engine rx</span>
-            <strong class="debug-net-inspector-kpi-val" data-net-kpi="track-pos">${trackPosHtml}</strong>
+            <span class="debug-net-inspector-kpi-label">Engine received</span>
+            <strong class="debug-net-inspector-kpi-val mono" data-net-kpi="engine-rx">${hubEngineRxHtml}</strong>
           </div>
         </div>
 
@@ -4172,10 +4140,6 @@ export class NetworkView extends Component {
                        <dd>${childSummaryHtml}</dd>
                      </div>`
               }
-              <div class="debug-kv-row">
-                <dt>Track position</dt>
-                <dd data-net-kv="track-pos">${kvTrackPosHtml}</dd>
-              </div>
               <div class="debug-kv-row">
                 <dt>Firmware &amp; MAC</dt>
                 <dd><span class="mono">${esc(hub.fw)}</span> <span class="note mono">· ${esc(hub.mac)}</span></dd>
@@ -4243,9 +4207,7 @@ export class NetworkView extends Component {
         ? fmtMsAgoHtml(sp.msAgo)
         : "No frames yet";
     const seqText = sp.seq !== undefined && frames > 0 ? `#${sp.seq}` : "—";
-    const trackPosHtml = sp.serverGateLabel
-      ? `${esc(sp.serverGateLabel)} <span class="note mono">· ${sp.serverFrames ?? 0} samples</span>`
-      : `<span class="note">Off track</span>`;
+    const spEngineRxHtml = fmtEngineReceivedHtml(sp.serverFrames ?? 0);
     const idBtnHtml = this.renderIdentifyButton(sp.fp, sp.espNowActive, sp.label);
     const structKey = [
       `slot${sp.slot}`,
@@ -4276,7 +4238,7 @@ export class NetworkView extends Component {
         kpiFramesHtml: spKpiFramesHtml,
         lastFrameHtml,
         seqText,
-        trackPosHtml,
+        engineRxHtml: spEngineRxHtml,
         sourceLabel,
         dbmSource,
       })
@@ -4318,8 +4280,8 @@ export class NetworkView extends Component {
           <strong class="debug-net-inspector-kpi-val mono" data-net-kpi="seq">${seqText}</strong>
         </div>
         <div class="debug-net-inspector-kpi">
-          <span class="debug-net-inspector-kpi-label">Track position &amp; engine rx</span>
-          <strong class="debug-net-inspector-kpi-val" data-net-kpi="track-pos">${trackPosHtml}</strong>
+          <span class="debug-net-inspector-kpi-label">Engine received</span>
+          <strong class="debug-net-inspector-kpi-val mono" data-net-kpi="engine-rx">${spEngineRxHtml}</strong>
         </div>
       </div>
 

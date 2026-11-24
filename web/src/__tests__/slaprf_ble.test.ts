@@ -950,6 +950,51 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       await flushMicrotasks();
       expect(getSelect().disabled).toBe(true);
 
+      // Connected Hub + Spoke renders "Engine received" KPI without any "Track position" / "Track #1" copy
+      usbPool.applyBackendPoolSnapshot({
+        debugSlotIndex: 0,
+        slots: [
+          {
+            slotIndex: 0,
+            connected: true,
+            portName: "ble:BE7C0001",
+            probing: false,
+            reconnecting: false,
+            reconnectAttempt: 0,
+            maxReconnectAttempts: 5,
+            reconnectFailed: false,
+            isOtherDevice: false,
+            lastStatus: {
+              t: "status",
+              fw: "0.4.0",
+              role: 1,
+              fp: "BE7C0001",
+              label: "H1",
+              uptimeMs: 5000,
+              reset: "pwr",
+              boots: 1,
+              heapFree: 48000,
+              heapMin: 40000,
+              sweepHz: 50,
+              sweeps: 250,
+              sweepUs: 4600,
+              sweepUsMax: 5200,
+              sweepBudgetUs: 6000,
+              channel: 1,
+              slot: 1,
+              spokes: [{ slot: 2, fp: "CAFE0002", label: "T1", frames: 180, msAgo: 12, seq: 44 }],
+            } as any,
+          },
+        ],
+        knownTimers: [],
+      });
+      await flushMicrotasks();
+      const timerDetailTxt = netRoot.querySelector('[data-slot="timer-detail"]')!.textContent || "";
+      expect(timerDetailTxt).toContain("Engine received");
+      expect(timerDetailTxt).not.toContain("Track position");
+      expect(timerDetailTxt).not.toContain("Track #");
+      expect(netRoot.querySelector('[data-net-kpi="engine-rx"]')?.textContent || "").toContain("samples");
+
       // Cancel / disconnect -> dropdown immediately unlocks again
       usbPool.applyBackendPoolSnapshot({ debugSlotIndex: 0, slots: [], knownTimers: [] });
       await flushMicrotasks();
@@ -1011,6 +1056,8 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       await flushMicrotasks();
       expect(getSelect().value).toBe("rotorhazard");
       expect(getSelect().disabled).toBe(true);
+      expect(netRoot.querySelector('[data-rh-kpi="engine-rx"]')?.textContent?.replace(/\s+/g, " ").trim()).toBe("120 samples");
+      expect(netRoot.querySelector('[data-rh-card="1"]')!.textContent || "").not.toContain("Track position");
       expect(netRoot.querySelector('[data-slot="external-conn-actions"] .badge')).toBeNull();
       expect(netRoot.querySelector('[data-action="network-disconnect-active"]')).toBeNull();
       const cardDisconnectBtn = netRoot.querySelector<HTMLButtonElement>('[data-rh-card="1"] [data-action="rh-disconnect"]')!;
