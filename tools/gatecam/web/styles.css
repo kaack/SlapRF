@@ -997,7 +997,53 @@ html.is-native-underlay.route-live .viewfinder-stage {
   line-height: 1.55;
 }
 
-/* Scrollable Page Container (Passes, Accuracy, Settings) ------------------- */
+/* Non-Scrolling Fixed Views (Passes, Accuracy, Speeds) + Scrollable Settings */
+.page-fit {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 16px 20px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.page-fit-inner {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.report-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+
+.report-header h2 {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.report-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .page-scroll {
   flex: 1 1 auto;
   min-height: 0;
@@ -1451,6 +1497,14 @@ html[data-theme="light"] .more-tile {
   color: var(--text-2);
 }
 
+.more-tile.is-active {
+  border-color: var(--accent);
+}
+
+.more-tile.is-active svg {
+  color: var(--accent);
+}
+
 .more-theme-bar {
   display: flex;
   align-items: center;
@@ -1582,6 +1636,10 @@ html[data-theme="light"] .more-tile {
     min-width: 0;
   }
 
+  .sidebar .nav-item.is-mobile-secondary {
+    display: none !important;
+  }
+
   .mobile-more-tab-btn {
     display: flex;
   }
@@ -1652,6 +1710,10 @@ html[data-theme="light"] .more-tile {
 
   .stat-value {
     font-size: 15px;
+  }
+
+  .page-fit {
+    padding: 6px 12px calc(78px + env(safe-area-inset-bottom, 0px));
   }
 
   .page-scroll {

@@ -186,6 +186,7 @@ const icons = {
       s
     ),
   chart: (s = 18) => svg(`<path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/>`, s),
+  speeds: (s = 18) => svg(`<path d="M8 20V10M16 20V4M4 20h16"/>`, s),
   settings: (s = 18) =>
     svg(
       `<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>`,
@@ -230,11 +231,11 @@ if (isNativeUnderlay) {
   document.body.classList.add("is-native-underlay");
 }
 
-type RouteId = "live" | "passes" | "inspector" | "stats" | "settings";
+type RouteId = "live" | "passes" | "inspector" | "stats" | "speeds" | "settings";
 
 let state: AppState | null = null;
 let route: RouteId = "live";
-let prevRouteBeforeInspect: "live" | "passes" | "stats" = "live";
+let prevRouteBeforeInspect: "live" | "passes" | "stats" | "speeds" = "live";
 let inspectPassId = 0;
 let inspectPass: PassRecord | null = null;
 let inspectFrameIdx = 0;
@@ -258,6 +259,37 @@ let pilotDropdownOpen = false;
 let moreDrawerOpen = false;
 let discoverBusy = false;
 let discoverNote = "";
+let linkDebounceTimer: number | null = null;
+
+function passListSignature(s: AppState | null): string {
+  if (!s) return "";
+  const p0 = s.passes[0];
+  return `${s.passes.length}:${s.stats.validPasses}:${p0?.passId ?? 0}:${p0?.status ?? ""}:${p0?.gateBiasMs ?? 0}`;
+}
+
+async function applyLinkDraftNow(): Promise<void> {
+  if (!state) return;
+  const cleanUrl = settingsDraftUrl.trim();
+  if (!cleanUrl) return;
+  state = await apiJSON<AppState>("PUT", "/v1/gatecam/link", {
+    slaprfUrl: cleanUrl,
+    basicAuth: settingsDraftAuth,
+    gateFilter: 0,
+    pilotFilter: settingsDraftPilot,
+    exposeLan: false,
+  });
+  patchTopBarLinkPill();
+}
+
+function scheduleApplyLinkDraft(): void {
+  if (linkDebounceTimer !== null) {
+    clearTimeout(linkDebounceTimer);
+  }
+  linkDebounceTimer = window.setTimeout(() => {
+    linkDebounceTimer = null;
+    void applyLinkDraftNow();
+  }, 450);
+}
 
 function loadSettingsDraftFromState(): void {
   if (!state) return;
@@ -323,7 +355,7 @@ function syncRouteFromHash(): void {
   if (h.startsWith("#/pass/")) {
     const id = parseInt(h.slice("#/pass/".length), 10);
     if (id > 0) {
-      if (route === "live" || route === "passes" || route === "stats") {
+      if (route === "live" || route === "passes" || route === "stats" || route === "speeds") {
         prevRouteBeforeInspect = route;
       }
       route = "inspector";
@@ -341,6 +373,8 @@ function syncRouteFromHash(): void {
     route = "passes";
   } else if (h === "#/stats") {
     route = "stats";
+  } else if (h === "#/speeds") {
+    route = "speeds";
   } else if (h === "#/settings") {
     route = "settings";
     discoverNote = "";
@@ -562,11 +596,15 @@ function renderSidebar(): string {
             ${icons.chart(20)}
             <span>Accuracy</span>
           </button>
-          <button type="button" class="nav-item ${activeTab === "settings" ? "is-active" : ""}" data-nav="#/settings">
+          <button type="button" class="nav-item ${activeTab === "speeds" ? "is-active" : ""}" data-nav="#/speeds">
+            ${icons.speeds(20)}
+            <span>Speeds</span>
+          </button>
+          <button type="button" class="nav-item is-mobile-secondary ${activeTab === "settings" ? "is-active" : ""}" data-nav="#/settings">
             ${icons.settings(20)}
             <span>Settings</span>
           </button>
-          <button type="button" class="nav-item mobile-more-tab-btn ${moreDrawerOpen ? "is-active" : ""}" data-act="toggle-more" aria-expanded="${moreDrawerOpen ? "true" : "false"}" aria-label="More options">
+          <button type="button" class="nav-item mobile-more-tab-btn ${moreDrawerOpen || activeTab === "settings" ? "is-active" : ""}" data-act="toggle-more" aria-expanded="${moreDrawerOpen ? "true" : "false"}" aria-label="More options">
             ${icons.moreHorizontal(20)}
             <span>More</span>
           </button>
@@ -598,13 +636,13 @@ function renderMoreDrawer(): string {
           <span class="more-drawer-grip"></span>
         </button>
         <div class="more-grid">
+          <button type="button" class="more-tile ${route === "settings" ? "is-active" : ""}" data-nav="#/settings">
+            ${icons.settings(22)}
+            <span>Settings</span>
+          </button>
           <a class="more-tile" href="/v1/gatecam/export.zip" download>
             ${icons.download(22)}
             <span>Export ZIP</span>
-          </a>
-          <a class="more-tile" href="/v1/gatecam/report.csv" download>
-            ${icons.download(22)}
-            <span>Export CSV</span>
           </a>
           <button type="button" class="more-tile" data-act="clear-passes">
             ${icons.trash(22)}
@@ -627,6 +665,27 @@ function renderMoreDrawer(): string {
   `;
 }
 
+function patchTopBarLinkPill(): void {
+  if (!state) return;
+  const sync = state.sync;
+  const isUp = sync.connected && sync.clockLocked;
+  const dotCls = isUp ? "is-up" : sync.connected ? "is-warn" : "";
+  const linkSummary = isUp ? `±${sync.syncErrorBoundMs.toFixed(1)} ms` : sync.connected ? "Syncing" : "Offline";
+  const pill = document.querySelector<HTMLElement>("[data-topbar-link-pill]");
+  if (pill) {
+    pill.classList.toggle("is-up", isUp);
+    pill.title = sync.lastError || sync.slaprfUrl;
+  }
+  const dot = document.querySelector<HTMLElement>("[data-topbar-link-dot]");
+  if (dot) {
+    dot.className = `status-dot ${dotCls}`;
+  }
+  const txt = document.querySelector<HTMLElement>("[data-topbar-link-txt]");
+  if (txt) {
+    txt.textContent = linkSummary;
+  }
+}
+
 function renderTopBar(): string {
   if (!state) return "";
   const sync = state.sync;
@@ -635,7 +694,13 @@ function renderTopBar(): string {
   const linkSummary = isUp ? `±${sync.syncErrorBoundMs.toFixed(1)} ms` : sync.connected ? "Syncing" : "Offline";
 
   const backHash =
-    prevRouteBeforeInspect === "passes" ? "#/passes" : prevRouteBeforeInspect === "stats" ? "#/stats" : "#/";
+    prevRouteBeforeInspect === "passes"
+      ? "#/passes"
+      : prevRouteBeforeInspect === "stats"
+        ? "#/stats"
+        : prevRouteBeforeInspect === "speeds"
+          ? "#/speeds"
+          : "#/";
 
   let leftHtml = "";
   if (route === "inspector") {
@@ -653,9 +718,11 @@ function renderTopBar(): string {
         ? "Passes"
         : route === "stats"
           ? "Accuracy"
-          : route === "settings"
-            ? "Settings"
-            : "GateCam";
+          : route === "speeds"
+            ? "Speeds"
+            : route === "settings"
+              ? "Settings"
+              : "GateCam";
     leftHtml = `
       <div class="topbar-mobile-brand">
         <div class="brand-mark">${icons.slaprf(19)}</div>
@@ -673,9 +740,9 @@ function renderTopBar(): string {
             ? `<button type="button" class="btn btn-sm btn-armed" data-act="sim-pass">${icons.plus(14)}<span>Sim Pass</span></button>`
             : ""
         }
-        <button type="button" class="pill ${isUp ? "is-up" : ""}" data-nav="#/settings" title="${esc(sync.lastError || sync.slaprfUrl)}">
-          <span class="status-dot ${dotCls}"></span>
-          <span class="mono">${esc(linkSummary)}</span>
+        <button type="button" class="pill ${isUp ? "is-up" : ""}" data-topbar-link-pill data-nav="#/settings" title="${esc(sync.lastError || sync.slaprfUrl)}">
+          <span class="status-dot ${dotCls}" data-topbar-link-dot></span>
+          <span class="mono" data-topbar-link-txt>${esc(linkSummary)}</span>
         </button>
       </div>
     </header>
@@ -749,7 +816,7 @@ function renderLiveView(): string {
                 </button>
                 <button type="button" class="vf-btn ${g.locked ? "is-locked" : ""}" data-act="toggle-lock" title="Lock gate sightline">
                   ${g.locked ? icons.lock(13) : icons.unlock(13)}
-                  <span>${g.locked ? "Locked" : "Line"}</span>
+                  <span>Line</span>
                 </button>
               </div>
             </div>
@@ -780,14 +847,6 @@ function renderLiveView(): string {
                      <button type="button" class="${cam.shutterUs === 500 ? "is-active" : ""}" data-shutter-val="500">1/2000</button>
                      <button type="button" class="${cam.shutterUs === 250 ? "is-active" : ""}" data-shutter-val="250">1/4000</button>
                    </div>
-                   ${
-                     hasUltraWide
-                       ? `<div class="segmented mono" role="group" aria-label="Lens field of view">
-                            <button type="button" class="${isUltra ? "is-active" : ""}" data-zoom="${minZoom.toFixed(2)}">0.5x</button>
-                            <button type="button" class="${!isUltra ? "is-active" : ""}" data-zoom="1.0">1x</button>
-                          </div>`
-                       : ""
-                   }
                  </div>
                </div>`
             : ""
@@ -842,9 +901,9 @@ function renderPassesView(): string {
   });
 
   return `
-    <div class="page-scroll">
-      <div class="page-inner">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+    <div class="page-fit">
+      <div class="page-fit-inner">
+        <div class="report-header">
           <div class="segmented" role="group" aria-label="Pass filter">
             <button type="button" class="${passFilter === "all" ? "is-active" : ""}" data-pass-filter="all">All (${state.passes.length})</button>
             <button type="button" class="${passFilter === "valid" ? "is-active" : ""}" data-pass-filter="valid">Valid (${state.stats.validPasses})</button>
@@ -852,17 +911,19 @@ function renderPassesView(): string {
           </div>
           ${
             state.passes.length > 0
-              ? `<button type="button" class="btn btn-sm btn-danger" data-act="clear-passes">${icons.trash(14)}<span>Clear All</span></button>`
+              ? `<button type="button" class="btn btn-sm btn-danger" data-act="clear-passes">${icons.trash(14)}<span>Clear</span></button>`
               : ""
           }
         </div>
 
-        <div class="card" style="padding:10px;">
-          ${
-            filtered.length === 0
-              ? `<div class="empty-state">No Start Gate passes match this filter yet.</div>`
-              : `<div style="display:flex;flex-direction:column;gap:6px;">${filtered.map(renderPassCard).join("")}</div>`
-          }
+        <div class="feed-card">
+          <div class="pass-list">
+            ${
+              filtered.length === 0
+                ? `<div class="empty-state">No Start Gate passes match this filter yet.</div>`
+                : filtered.map(renderPassCard).join("")
+            }
+          </div>
         </div>
       </div>
     </div>
@@ -1111,34 +1172,32 @@ function renderInspectorDynamicOnly(): void {
   }
 }
 
+function renderExportActions(): string {
+  return `
+    <div class="report-actions">
+      <a class="btn btn-sm btn-primary" href="/v1/gatecam/export.zip" download>
+        ${icons.download(14)}
+        <span>ZIP</span>
+      </a>
+      <a class="btn btn-sm" href="/v1/gatecam/report.csv" download>
+        ${icons.download(14)}
+        <span>CSV</span>
+      </a>
+    </div>
+  `;
+}
+
 function renderStatsView(): string {
   if (!state) return "";
   const st = state.stats;
   const maxBin = Math.max(1, ...st.histogram.map((b) => b.count));
 
   return `
-    <div class="page-scroll stats-scroll">
-      <div class="page-inner">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-          <div>
-            <h2 style="font-size:15px;font-weight:650;">GateCam Verification Report</h2>
-            <p style="font-size:12px;color:var(--text-3);margin-top:2px;">Start Gate RF vs high-speed optical crossing accuracy</p>
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <a class="btn btn-sm btn-primary" href="/v1/gatecam/export.zip" download>
-              ${icons.download(14)}
-              <span>Export ZIP</span>
-            </a>
-            <a class="btn btn-sm" href="/v1/gatecam/report.csv" download>
-              ${icons.download(14)}
-              <span>CSV</span>
-            </a>
-            ${
-              st.totalPasses > 0
-                ? `<button type="button" class="btn btn-sm btn-danger" data-act="clear-passes">${icons.trash(14)}<span>Reset</span></button>`
-                : ""
-            }
-          </div>
+    <div class="page-fit stats-scroll">
+      <div class="page-fit-inner">
+        <div class="report-header">
+          <h2>Verification Report</h2>
+          ${renderExportActions()}
         </div>
 
         <div class="stat-row cols-4">
@@ -1164,80 +1223,83 @@ function renderStatsView(): string {
           </div>
         </div>
 
-        <div class="two-col">
-          <div class="card">
-            <div class="card-head"><h2>Start Bias Distribution</h2></div>
-            ${st.histogram
-              .map(
-                (b) => `
-              <div class="hist-row mono">
-                <span>${esc(b.label)}</span>
-                <div class="hist-track"><div class="hist-fill" style="width:${((b.count / maxBin) * 100).toFixed(1)}%"></div></div>
-                <span class="num">${b.count}</span>
-              </div>`
-              )
-              .join("")}
-          </div>
+        <div class="card">
+          <div class="card-head"><h2>Start Bias Distribution</h2></div>
+          ${st.histogram
+            .map(
+              (b) => `
+            <div class="hist-row mono">
+              <span>${esc(b.label)}</span>
+              <div class="hist-track"><div class="hist-fill" style="width:${((b.count / maxBin) * 100).toFixed(1)}%"></div></div>
+              <span class="num">${b.count}</span>
+            </div>`
+            )
+            .join("")}
+        </div>
+      </div>
+    </div>
+  `;
+}
 
-          <div class="card">
-            <div class="card-head"><h2>Bias by Drone Speed</h2></div>
-            <div class="table-wrap">
-              <table class="table">
-                <thead>
-                  <tr><th>Speed Band</th><th class="num">Passes</th><th class="num">Mean Bias</th><th class="num">Jitter</th></tr>
-                </thead>
-                <tbody class="mono">
-                  ${st.speedBuckets
-                    .map(
-                      (sb) => `
-                    <tr>
-                      <td style="font-family:var(--font-sans)">${esc(sb.label)}</td>
-                      <td class="num">${sb.count}</td>
-                      <td class="num">${sb.count > 0 ? fmtSigned(sb.meanBiasMs, 2) : "--"}</td>
-                      <td class="num">${sb.count > 1 ? `±${sb.stdBiasMs.toFixed(2)} ms` : "--"}</td>
-                    </tr>`
-                    )
-                    .join("")}
-                </tbody>
-              </table>
-            </div>
-          </div>
+function renderSpeedsView(): string {
+  if (!state) return "";
+  const st = state.stats;
+
+  return `
+    <div class="page-fit speeds-view">
+      <div class="page-fit-inner">
+        <div class="report-header">
+          <h2>Speed & Lap Consistency</h2>
+          ${renderExportActions()}
         </div>
 
-        <div class="card" style="padding:0;overflow:hidden;">
-          <div class="card-head" style="padding:14px 16px 0;"><h2>Start Gate Pass Log</h2></div>
+        <div class="card">
+          <div class="card-head"><h2>Bias by Drone Speed</h2></div>
           <div class="table-wrap">
             <table class="table">
               <thead>
-                <tr>
-                  <th>#</th><th>Time</th><th>Pilot</th><th>Status</th><th class="num">Peak dBm</th>
-                  <th class="num">Bias</th><th class="num">Lap</th><th class="num">SlapRF</th><th class="num">Camera</th><th class="num">Delta</th>
-                </tr>
+                <tr><th>Speed Band</th><th class="num">Passes</th><th class="num">Mean Bias</th><th class="num">Jitter</th></tr>
               </thead>
               <tbody class="mono">
-                ${
-                  state.passes.length === 0
-                    ? `<tr><td colspan="10" style="text-align:center;color:var(--text-3);padding:20px;font-family:var(--font-sans);">No Start Gate passes recorded yet.</td></tr>`
-                    : state.passes
-                        .map(
-                          (p) => `
-                        <tr class="clickable" data-open-pass="${p.passId}">
-                          <td>#${p.passId}</td>
-                          <td>${esc(p.createdAt)}</td>
-                          <td style="font-family:var(--font-sans);font-weight:600;">${esc(p.callsign)}</td>
-                          <td>${renderStatusBadge(p.status, p.confidence)}</td>
-                          <td class="num">${p.peakRssiDbm.toFixed(1)}</td>
-                          <td class="num"><strong>${fmtSigned(p.gateBiasMs, 2)}</strong></td>
-                          <td class="num">${p.lapNumber || "--"}</td>
-                          <td class="num">${p.lapRfSec !== undefined ? `${p.lapRfSec.toFixed(3)}s` : "--"}</td>
-                          <td class="num">${p.lapCamSec !== undefined ? `${p.lapCamSec.toFixed(3)}s` : "--"}</td>
-                          <td class="num">${fmtSigned(p.lapDeltaMs, 2)}</td>
-                        </tr>`
-                        )
-                        .join("")
-                }
+                ${st.speedBuckets
+                  .map(
+                    (sb) => `
+                  <tr>
+                    <td style="font-family:var(--font-sans)">${esc(sb.label)}</td>
+                    <td class="num">${sb.count}</td>
+                    <td class="num">${sb.count > 0 ? fmtSigned(sb.meanBiasMs, 2) : "--"}</td>
+                    <td class="num">${sb.count > 1 ? `±${sb.stdBiasMs.toFixed(2)} ms` : "--"}</td>
+                  </tr>`
+                  )
+                  .join("")}
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Start-to-Start Lap Summary</h2></div>
+          <div class="kv-list">
+            <div class="kv-row">
+              <span>Paired Start Gate Laps</span>
+              <strong class="mono">${st.lapCount}</strong>
+            </div>
+            <div class="kv-row">
+              <span>Mean Lap Delta (RF - Camera)</span>
+              <span class="mono">${st.lapCount > 0 ? fmtSigned(st.meanLapDeltaMs, 2) : "--"}</span>
+            </div>
+            <div class="kv-row">
+              <span>Lap Duration Error</span>
+              <strong class="mono">${st.lapCount > 1 ? `±${st.stdLapDeltaMs.toFixed(2)} ms` : "--"}</strong>
+            </div>
+            <div class="kv-row">
+              <span>95th Percentile |Lap Delta|</span>
+              <span class="mono">${st.lapCount > 0 ? `${st.p95AbsLapDeltaMs.toFixed(2)} ms` : "--"}</span>
+            </div>
+            <div class="kv-row">
+              <span>Max |Lap Delta|</span>
+              <span class="mono">${st.lapCount > 0 ? `${st.maxAbsLapDeltaMs.toFixed(2)} ms` : "--"}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -1357,13 +1419,6 @@ function renderSettingsView(): string {
             </div>
           </div>
         </div>
-
-        <div style="display:flex;justify-content:flex-end;">
-          <button type="button" class="btn btn-primary" data-act="save-setup" style="height:38px;padding:0 18px;">
-            ${icons.check(15)}
-            <span>Save Settings</span>
-          </button>
-        </div>
       </div>
     </div>
   `;
@@ -1381,9 +1436,11 @@ function render(): void {
         ? renderPassesView()
         : route === "stats"
           ? renderStatsView()
-          : route === "settings"
-            ? renderSettingsView()
-            : renderLiveView();
+          : route === "speeds"
+            ? renderSpeedsView()
+            : route === "settings"
+              ? renderSettingsView()
+              : renderLiveView();
 
   appRoot.innerHTML = `
     <div class="app-shell ${route === "inspector" ? "is-subpage" : ""}">
@@ -1547,6 +1604,7 @@ appRoot.addEventListener("click", async (e) => {
     settingsDraftPilot = parseInt(pilotOpt, 10) || 0;
     pilotDropdownOpen = false;
     render();
+    await applyLinkDraftNow();
     return;
   }
 
@@ -1592,13 +1650,13 @@ appRoot.addEventListener("click", async (e) => {
   const cfgLb = el.getAttribute("data-cfg-lb");
   if (cfgLb) {
     settingsDraftLookback = parseInt(cfgLb, 10) || 450;
-    render();
+    await updateCamera({ ...state.camera, lookbackHalfMs: settingsDraftLookback });
     return;
   }
   const cfgModel = el.getAttribute("data-cfg-model");
   if (cfgModel) {
     settingsDraftModel = cfgModel;
-    render();
+    await updateCamera({ ...state.camera, motionModel: settingsDraftModel });
     return;
   }
   const stepAttr = el.getAttribute("data-insp-step");
@@ -1722,24 +1780,6 @@ appRoot.addEventListener("click", async (e) => {
       state = await apiJSON<AppState>("POST", "/v1/gatecam/passes:clear", {});
       render();
       break;
-    case "save-setup": {
-      await apiJSON("PUT", "/v1/gatecam/camera", {
-        ...state.camera,
-        lookbackHalfMs: settingsDraftLookback,
-        motionModel: settingsDraftModel,
-        sensitivity: settingsDraftSens,
-        rollingShutterComp: settingsDraftRsComp,
-      });
-      state = await apiJSON<AppState>("PUT", "/v1/gatecam/link", {
-        slaprfUrl: settingsDraftUrl.trim(),
-        basicAuth: settingsDraftAuth,
-        gateFilter: 0,
-        pilotFilter: settingsDraftPilot,
-        exposeLan: false,
-      });
-      window.location.hash = "#/";
-      break;
-    }
   }
 });
 
@@ -1748,8 +1788,10 @@ appRoot.addEventListener("input", (e) => {
   if (!t) return;
   if (t.id === "cfg-url") {
     settingsDraftUrl = t.value;
+    scheduleApplyLinkDraft();
   } else if (t.id === "cfg-auth") {
     settingsDraftAuth = t.value;
+    scheduleApplyLinkDraft();
   } else if (t.id === "cfg-sens") {
     settingsDraftSens = parseFloat(t.value) || 16;
     const lbl = document.getElementById("sens-lbl");
@@ -1757,10 +1799,21 @@ appRoot.addEventListener("input", (e) => {
   }
 });
 
-appRoot.addEventListener("change", (e) => {
+appRoot.addEventListener("change", async (e) => {
   const t = e.target as HTMLInputElement | null;
-  if (t?.id === "cfg-rsshutter") {
+  if (!t || !state) return;
+  if (t.id === "cfg-rsshutter") {
     settingsDraftRsComp = t.checked;
+    await updateCamera({ ...state.camera, rollingShutterComp: settingsDraftRsComp });
+  } else if (t.id === "cfg-sens") {
+    settingsDraftSens = parseFloat(t.value) || 16;
+    await updateCamera({ ...state.camera, sensitivity: settingsDraftSens });
+  } else if (t.id === "cfg-url" || t.id === "cfg-auth") {
+    if (linkDebounceTimer !== null) {
+      clearTimeout(linkDebounceTimer);
+      linkDebounceTimer = null;
+    }
+    await applyLinkDraftNow();
   }
 });
 
@@ -1779,11 +1832,17 @@ function connectLiveWS(): void {
     try {
       const msg = JSON.parse(String(ev.data));
       if (msg.type === "status" && msg.payload) {
+        const prevSig = passListSignature(state);
         state = msg.payload as AppState;
-        if (!dragHandle && route !== "settings") render();
+        patchTopBarLinkPill();
+        const nextSig = passListSignature(state);
+        if (prevSig !== nextSig && !dragHandle && route !== "inspector" && route !== "settings") {
+          render();
+        }
       } else if (msg.type === "hud" && msg.payload && state) {
         state.camInfo = msg.payload.camera;
         state.sync = msg.payload.sync;
+        patchTopBarLinkPill();
         const ringEl = document.querySelector("[data-hud-ring]");
         if (ringEl) {
           ringEl.textContent = fmtCamHudTop(state.camInfo, state.sync);

@@ -99,16 +99,24 @@ func TestGateCamLiveAlignmentInspectorAndStatsE2E(t *testing.T) {
 		t.Fatalf("expected MANUAL badge after pinning frame: %v", err)
 	}
 
-	// 4. Open Stats Report and verify KPIs & Histogram render
-	if err := page.Locator("[data-nav='#/stats']").Click(); err != nil {
+	// 4. Open Accuracy (#/stats) and Speeds (#/speeds) reports and verify headers & inline ZIP/CSV
+	if err := page.Locator(".sidebar [data-nav='#/stats']").Click(); err != nil {
 		t.Fatalf("navigate to #/stats: %v", err)
 	}
 	txt, err := page.Locator(".stats-scroll").InnerText()
-	if err != nil || !strings.Contains(txt, "GateCam Verification Report") {
+	if err != nil || !strings.Contains(txt, "Verification Report") || strings.Contains(txt, "GateCam Verification Report") {
 		t.Fatalf("unexpected stats view text (err=%v): %s", err, txt)
 	}
+	if err := page.Locator(".sidebar [data-nav='#/speeds']").Click(); err != nil {
+		t.Fatalf("navigate to #/speeds: %v", err)
+	}
+	speedsTxt, err := page.Locator(".speeds-view").InnerText()
+	if err != nil || !strings.Contains(speedsTxt, "Bias by Drone Speed") || !strings.Contains(speedsTxt, "Start-to-Start Lap Summary") {
+		t.Fatalf("unexpected speeds view text (err=%v): %s", err, speedsTxt)
+	}
 
-	// 5. Verify Passes & Settings main navigation routes in mobile portrait viewport
+	// 5. Verify mobile portrait layout: zero vertical page scroll on Camera/Passes/Accuracy/Speeds,
+	// constant "Line" lock label, 60fps shutter bar without zoom duplicate, and instant Settings
 	mobCtx, err := suiteBrowser.NewContext(playwright.BrowserNewContextOptions{
 		Viewport:          &playwright.Size{Width: 412, Height: 915},
 		DeviceScaleFactor: playwright.Float(2.0),
@@ -132,16 +140,98 @@ func TestGateCamLiveAlignmentInspectorAndStatsE2E(t *testing.T) {
 	if err := mobPage.Locator("[data-open-pass='1']").WaitFor(); err != nil {
 		t.Fatalf("mobile pass card #1 missing: %v", err)
 	}
+
+	assertNoPageScroll := func(label string) {
+		t.Helper()
+		overflow, err := mobPage.Evaluate(`() => {
+			const docEl = document.scrollingElement || document.documentElement;
+			const fitEl = document.querySelector('.page-fit-inner');
+			return {
+				docOverflow: docEl.scrollHeight - docEl.clientHeight,
+				fitOverflow: fitEl ? (fitEl.scrollHeight - fitEl.clientHeight) : 0,
+			};
+		}`)
+		if err != nil {
+			t.Fatalf("%s evaluate overflow: %v", label, err)
+		}
+		m := overflow.(map[string]interface{})
+		if v, ok := m["docOverflow"].(int); ok && v > 1 {
+			t.Fatalf("%s has unexpected vertical page scroll overflow: %d px", label, v)
+		}
+		if v, ok := m["docOverflow"].(float64); ok && v > 1 {
+			t.Fatalf("%s has unexpected vertical page scroll overflow: %.1f px", label, v)
+		}
+		if v, ok := m["fitOverflow"].(int); ok && v > 1 {
+			t.Fatalf("%s has unexpected .page-fit-inner vertical clip overflow: %d px", label, v)
+		}
+		if v, ok := m["fitOverflow"].(float64); ok && v > 1 {
+			t.Fatalf("%s has unexpected .page-fit-inner vertical clip overflow: %.1f px", label, v)
+		}
+	}
+
+	// Verify "Line" lock button keeps exact text "Line" when locked and unlocked
+	lockBtn := mobPage.Locator("[data-act='toggle-lock']")
+	lockTxtBefore, err := lockBtn.InnerText()
+	if err != nil || strings.TrimSpace(lockTxtBefore) != "Line" {
+		t.Fatalf("expected lock button text 'Line' before click, got %q (err=%v)", lockTxtBefore, err)
+	}
+	if err := lockBtn.Click(); err != nil {
+		t.Fatalf("click toggle-lock: %v", err)
+	}
+	if err := mobPage.Locator("[data-act='toggle-lock'].is-locked").WaitFor(); err != nil {
+		t.Fatalf("expected .is-locked class after clicking Line lock: %v", err)
+	}
+	lockTxtAfter, err := lockBtn.InnerText()
+	if err != nil || strings.TrimSpace(lockTxtAfter) != "Line" {
+		t.Fatalf("expected lock button text to remain 'Line' when locked, got %q (err=%v)", lockTxtAfter, err)
+	}
+	// Unlock again
+	if err := lockBtn.Click(); err != nil {
+		t.Fatalf("click toggle-lock to unlock: %v", err)
+	}
+
+	// Switch to 60 fps and verify Shutter bar has no zoom selector and fits on one line
+	if err := mobPage.Locator("[data-fps='60']").Click(); err != nil {
+		t.Fatalf("click 60 fps: %v", err)
+	}
+	if err := mobPage.Locator(".cam-toolbar [data-shutter-val='1000']").WaitFor(); err != nil {
+		t.Fatalf("60 fps shutter toolbar did not appear: %v", err)
+	}
+	if zCnt, _ := mobPage.Locator(".cam-toolbar [data-zoom]").Count(); zCnt != 0 {
+		t.Fatalf("expected zero zoom selectors in .cam-toolbar, found %d", zCnt)
+	}
+	toolbarOverflow, err := mobPage.Evaluate(`() => {
+		const row = document.querySelector('.cam-toolbar-row');
+		return row ? (row.scrollWidth - row.clientWidth) : 999;
+	}`)
+	if err != nil {
+		t.Fatalf("evaluate .cam-toolbar-row overflow: %v", err)
+	}
+	switch v := toolbarOverflow.(type) {
+	case int:
+		if v > 1 {
+			t.Fatalf("60 fps shutter row overflows horizontally by %d px", v)
+		}
+	case float64:
+		if v > 1 {
+			t.Fatalf("60 fps shutter row overflows horizontally by %.1f px", v)
+		}
+	}
+
+	assertNoPageScroll("Camera (60 fps)")
 	shotDir := strings.TrimSpace(os.Getenv("SLAPRF_GATECAM_SCREENSHOT_DIR"))
 	if shotDir != "" {
 		_, _ = mobPage.Screenshot(playwright.PageScreenshotOptions{Path: playwright.String(filepath.Join(shotDir, "ui_mobile_live.png"))})
 	}
+
+	// Passes tab
 	if err := mobPage.Locator(".sidebar [data-nav='#/passes']").Click(); err != nil {
 		t.Fatalf("mobile click Passes tab: %v", err)
 	}
 	if err := mobPage.Locator("[data-pass-filter='valid']").WaitFor(); err != nil {
 		t.Fatalf("mobile Passes filter bar missing: %v", err)
 	}
+	assertNoPageScroll("Passes")
 	if err := mobPage.Locator("[data-open-pass='1']").Click(); err != nil {
 		t.Fatalf("mobile open pass #1: %v", err)
 	}
@@ -154,14 +244,73 @@ func TestGateCamLiveAlignmentInspectorAndStatsE2E(t *testing.T) {
 	if err := mobPage.Locator(".topbar [data-nav]").First().Click(); err != nil {
 		t.Fatalf("mobile click Back from inspector: %v", err)
 	}
+
+	// Accuracy (#/stats) tab: verify Verification Report + inline top-right ZIP & CSV + zero vertical scroll
 	if err := mobPage.Locator(".sidebar [data-nav='#/stats']").Click(); err != nil {
 		t.Fatalf("mobile click Accuracy tab: %v", err)
 	}
+	if err := mobPage.Locator(".stats-scroll .report-header h2").WaitFor(); err != nil {
+		t.Fatalf("mobile Accuracy header missing: %v", err)
+	}
+	headerAligned, err := mobPage.Evaluate(`() => {
+		const h2 = document.querySelector('.stats-scroll .report-header h2');
+		const zip = document.querySelector('.stats-scroll .report-actions a[href="/v1/gatecam/export.zip"]');
+		const csv = document.querySelector('.stats-scroll .report-actions a[href="/v1/gatecam/report.csv"]');
+		if (!h2 || !zip || !csv) return { ok: false, reason: 'missing elements' };
+		const hr = h2.getBoundingClientRect();
+		const zr = zip.getBoundingClientRect();
+		const cr = csv.getBoundingClientRect();
+		return {
+			ok: Math.abs(hr.top - zr.top) < 12 && Math.abs(zr.top - cr.top) < 4 && zr.left > hr.right - 2,
+			h2Text: h2.textContent.trim(),
+			zipText: zip.textContent.trim(),
+			csvText: csv.textContent.trim(),
+		};
+	}`)
+	if err != nil {
+		t.Fatalf("evaluate Accuracy header alignment: %v", err)
+	}
+	hm := headerAligned.(map[string]interface{})
+	if hm["ok"] != true || hm["h2Text"] != "Verification Report" || hm["zipText"] != "ZIP" || hm["csvText"] != "CSV" {
+		t.Fatalf("unexpected Accuracy header layout/labels: %+v", hm)
+	}
+	assertNoPageScroll("Accuracy")
 	if shotDir != "" {
 		_, _ = mobPage.Screenshot(playwright.PageScreenshotOptions{Path: playwright.String(filepath.Join(shotDir, "ui_mobile_stats.png"))})
 	}
-	if err := mobPage.Locator(".sidebar [data-nav='#/settings']").Click(); err != nil {
-		t.Fatalf("mobile click Settings tab: %v", err)
+
+	// Speeds (#/speeds) tab: verify zero vertical scroll
+	if err := mobPage.Locator(".sidebar [data-nav='#/speeds']").Click(); err != nil {
+		t.Fatalf("mobile click Speeds tab: %v", err)
+	}
+	if err := mobPage.Locator(".speeds-view").WaitFor(); err != nil {
+		t.Fatalf("mobile Speeds view missing: %v", err)
+	}
+	assertNoPageScroll("Speeds")
+	if shotDir != "" {
+		_, _ = mobPage.Screenshot(playwright.PageScreenshotOptions{Path: playwright.String(filepath.Join(shotDir, "ui_mobile_speeds.png"))})
+	}
+
+	// Open More drawer -> Settings, verify no Save button and immediate settings persistence
+	if err := mobPage.Locator("[data-act='toggle-more']").Click(); err != nil {
+		t.Fatalf("open More drawer: %v", err)
+	}
+	if err := mobPage.Locator(".more-drawer-sheet .more-theme-bar").WaitFor(); err != nil {
+		t.Fatalf("More drawer theme bar did not appear: %v", err)
+	}
+	if err := mobPage.Locator(".more-drawer-sheet [data-theme-set='light']").Click(); err != nil {
+		t.Fatalf("click Light theme in More drawer: %v", err)
+	}
+	if err := mobPage.Locator(".more-drawer-sheet [data-theme-set='dark']").Click(); err != nil {
+		t.Fatalf("click Dark theme in More drawer: %v", err)
+	}
+	_, _ = mobPage.Evaluate(`() => new Promise(r => setTimeout(r, 240))`)
+	if shotDir != "" {
+		_, _ = mobPage.Screenshot(playwright.PageScreenshotOptions{Path: playwright.String(filepath.Join(shotDir, "ui_mobile_more.png"))})
+	}
+
+	if err := mobPage.Locator(".more-drawer-sheet [data-nav='#/settings']").Click(); err != nil {
+		t.Fatalf("click Settings tile in More drawer: %v", err)
 	}
 	if err := mobPage.Locator("#cfg-url").WaitFor(); err != nil {
 		t.Fatalf("mobile Settings #cfg-url missing: %v", err)
@@ -169,6 +318,28 @@ func TestGateCamLiveAlignmentInspectorAndStatsE2E(t *testing.T) {
 	if selCnt, _ := mobPage.Locator("select").Count(); selCnt != 0 {
 		t.Fatalf("expected zero native <select> elements, found %d", selCnt)
 	}
+	if saveCnt, _ := mobPage.Locator("button:has-text('Save')").Count(); saveCnt != 0 {
+		t.Fatalf("expected zero Save Settings buttons, found %d", saveCnt)
+	}
+	if err := mobPage.Locator("[data-cfg-lb='300']").Click(); err != nil {
+		t.Fatalf("click 300ms lookback: %v", err)
+	}
+	if err := mobPage.Locator("[data-cfg-model='knn']").Click(); err != nil {
+		t.Fatalf("click KNN motion model: %v", err)
+	}
+	persistedCfg, err := mobPage.Evaluate(`async () => {
+		const r = await fetch('/v1/gatecam/state');
+		const s = await r.json();
+		return { lb: s.camera.lookbackHalfMs, model: s.camera.motionModel };
+	}`)
+	if err != nil {
+		t.Fatalf("fetch /v1/gatecam/state after instant settings change: %v", err)
+	}
+	pm := persistedCfg.(map[string]interface{})
+	if pm["model"] != "knn" {
+		t.Fatalf("expected instant motionModel='knn', got %+v", pm)
+	}
+
 	if err := mobPage.Locator("[data-act='discover-link']").Click(); err != nil {
 		t.Fatalf("click Discover button: %v", err)
 	}
@@ -183,23 +354,6 @@ func TestGateCamLiveAlignmentInspectorAndStatsE2E(t *testing.T) {
 	}
 	if err := mobPage.Locator("[data-pilot-opt='0']").Click(); err != nil {
 		t.Fatalf("select All Active Pilots option: %v", err)
-	}
-	if err := mobPage.Locator("[data-act='toggle-more']").Click(); err != nil {
-		t.Fatalf("open More drawer: %v", err)
-	}
-	if err := mobPage.Locator(".more-drawer-sheet .more-theme-bar").WaitFor(); err != nil {
-		t.Fatalf("More drawer theme bar did not appear: %v", err)
-	}
-	// Click Light then Dark inside the More drawer to verify live theme switching
-	if err := mobPage.Locator(".more-drawer-sheet [data-theme-set='light']").Click(); err != nil {
-		t.Fatalf("click Light theme in More drawer: %v", err)
-	}
-	if err := mobPage.Locator(".more-drawer-sheet [data-theme-set='dark']").Click(); err != nil {
-		t.Fatalf("click Dark theme in More drawer: %v", err)
-	}
-	_, _ = mobPage.Evaluate(`() => new Promise(r => setTimeout(r, 240))`)
-	if shotDir != "" {
-		_, _ = mobPage.Screenshot(playwright.PageScreenshotOptions{Path: playwright.String(filepath.Join(shotDir, "ui_mobile_more.png"))})
 	}
 
 	if len(pageErrs) > 0 {
