@@ -484,7 +484,7 @@ export class TopBar extends Component {
       </button>`;
 
     let actions = simBtn;
-    if (meta.id === "sim" || meta.id === "practice") {
+    if (meta.id === "sim" || meta.id === "practice" || meta.id === "ai") {
       actions += `
         <button class="btn ${voiceOn ? "btn-armed" : "btn-ghost"}" data-action="announcer" title="${voiceOn ? "Mute" : "Enable"} lap-time callouts" aria-label="${voiceOn ? "Mute" : "Enable"} lap-time callouts">
           ${voiceOn ? icons.speaker(19) : icons.speakerOff(19)}<span class="topbar-btn-label">Announcer</span>
@@ -650,7 +650,7 @@ export class TopBar extends Component {
                       ? "SlapRF Bluetooth Hub wireless connection, pairing status, and live 8-channel 5.8 GHz RSSI"
                       : meta.subtitle;
 
-    const hideTopLevelSubtitle = meta.id === "races" || meta.id === "practice";
+    const hideTopLevelSubtitle = meta.id === "races" || meta.id === "practice" || meta.id === "ai";
     const titleMarkup =
       this.activeCrumbItems.length > 0
         ? `<nav class="${breadcrumbClass}" ${breadcrumbAttr} aria-label="${esc(breadcrumbAria)}">

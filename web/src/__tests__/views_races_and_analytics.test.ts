@@ -1,7 +1,9 @@
 import { dispatchRacesTopBarCommand, replaceAppHash, Router, setAnalyticsScope } from "../core/router";
 import { TopBar } from "../layout/TopBar";
 import { Announcer } from "../services/announcer";
+import { AITrainingView } from "../views/AITrainingView";
 import { PracticeView } from "../views/PracticeView";
+import { TimingRulesEditor } from "../widgets/TimingRulesEditor";
 import { focusAnalyticsPilotForScope, PilotView } from "../views/PilotView";
 import {
   computeBinPackedControlLayout,
@@ -2580,32 +2582,25 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       { timerId: 2, seqNum: 1, timestampUs: 15_800_000, rssi: [-64.2, -127], batteryMv: 4100, noiseFloorDbm: -91 },
     ]);
 
-    replaceAppHash("#/practice");
-    const host = mountHtml(`<div></div>`);
+    replaceAppHash("#/ai");
+    const root = mountHtml(`<div id="ai-host"></div><div id="rules-host"></div>`);
+    const host = root.querySelector<HTMLElement>("#ai-host")!;
+    const rulesHost = root.querySelector<HTMLElement>("#rules-host")!;
     const mock = makeMockApiClient(store);
-    const view = new PracticeView(host, store, mock.api);
+    const view = new AITrainingView(host, store, mock.api);
+    const rulesEditor = new TimingRulesEditor(rulesHost, store, mock.api);
     try {
-      const aiTabBtn = host.querySelector<HTMLButtonElement>('[data-practice-act="set-dir-mode"][data-dir-mode="ai-training"]');
-      expect(aiTabBtn).not.toBeNull();
-      aiTabBtn!.click();
-      await flushMicrotasks();
+      // 1. Collect tab renders Hands-Free Pack Loop & recorded packs
+      expect(host.textContent ?? "").toContain("Hands-Free Back-to-Back Pack Loop");
+      expect(host.textContent ?? "").toContain("OneEye");
 
-      expect(host.textContent ?? "").toContain("Hands-Free Pack Loop");
-      expect(host.textContent ?? "").toContain("On-Device Base Model Trainer");
-
-      // Switch detector mode to AI
-      const aiModeBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="set-detector-mode"][data-mode="ai"]');
-      expect(aiModeBtn).not.toBeNull();
-      aiModeBtn!.click();
-      await flushMicrotasks();
-      expect(store.mlStatus.config.detectorMode).toBe("ai");
-
-      // Open Review Unverified Pack and verify T1-OOO borderline event shows up
+      // 2. Open Review tab via Review Unverified Pack CTA and verify T1-OOO borderline event shows up
       const reviewBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="review-next-unverified"]');
       expect(reviewBtn).not.toBeNull();
       reviewBtn!.click();
       await flushMicrotasks();
 
+      expect(location.hash).toBe("#/ai/review/pack-1");
       expect(host.textContent ?? "").toContain("T1-OOO");
       const verifyBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="toggle-verify-pack"]');
       expect(verifyBtn).not.toBeNull();
@@ -2618,7 +2613,22 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
           (c.args[0] as { action?: string })?.action === "set_training_verified"
       );
       expect(verifyCalls.length).toBe(1);
+
+      // Verifying the last unverified pack auto-advances to the Train tab!
+      expect(location.hash).toBe("#/ai/train");
+      expect(host.textContent ?? "").toContain("On-Device Base Model Trainer");
+
+      // 3. Switch detector mode to AI inside Race/Practice TimingRulesEditor and verify both sync
+      const rulesAiBtn = rulesHost.querySelector<HTMLButtonElement>(
+        '[data-ml-detector-mode="ai"]'
+      );
+      expect(rulesAiBtn).not.toBeNull();
+      rulesAiBtn!.click();
+      await flushMicrotasks();
+      expect(store.mlStatus.config.detectorMode).toBe("ai");
+      expect(rulesHost.querySelector("[data-ml-model-select]")).not.toBeNull();
     } finally {
+      rulesEditor.destroy();
       view.destroy();
     }
   });

@@ -4,6 +4,7 @@ import { icons } from "./icons";
 export type RouteId =
   | "practice"
   | "races"
+  | "ai"
   | "pilot"
   | "pilots"
   | "laprf-emulator"
@@ -13,6 +14,13 @@ export type RouteId =
   | "flasher"
   | "debug"
   | "about";
+
+export type AITrainingTab = "collect" | "review" | "train";
+
+export interface AITrainingRouteTarget {
+  tab: AITrainingTab;
+  sessionId?: string;
+}
 
 export type RacesViewTab =
   | "pilots"
@@ -74,6 +82,7 @@ export interface ParsedHashState {
   races?: RacesRouteTarget;
   practice?: PracticeRouteTarget;
   live?: PracticeRouteTarget;
+  ai?: AITrainingRouteTarget;
   analytics?: AnalyticsScope | null;
   sectionAnchor?: string;
 }
@@ -112,6 +121,14 @@ let currentPracticeContext: PracticeTopBarContext = {
 const practiceContextListeners = new Set<() => void>();
 const practiceCommandListeners = new Set<(cmd: PracticeTopBarCommand) => void>();
 const practiceRouteListeners = new Set<(target: PracticeRouteTarget) => void>();
+const aiRouteListeners = new Set<(target: AITrainingRouteTarget) => void>();
+
+export function onAITrainingRouteTargetChange(
+  fn: (target: AITrainingRouteTarget) => void
+): () => void {
+  aiRouteListeners.add(fn);
+  return () => aiRouteListeners.delete(fn);
+}
 
 const sectionAnchorListeners = new Set<(anchor: string, route: RouteId) => void>();
 
@@ -369,6 +386,13 @@ export const ROUTES: RouteMeta[] = [
     title: "Practice",
     subtitle: "Create & tag practice sessions, assign pilots, and review recorded laps & section splits",
     icon: () => icons.flag(20),
+  },
+  {
+    id: "ai",
+    label: "AI Training",
+    title: "AI Training",
+    subtitle: "Record back-to-back flight packs, verify passes, and train the on-device crossing model",
+    icon: () => icons.ai(20),
   },
   {
     id: "pilots",
@@ -642,6 +666,21 @@ export function parseHashState(hash: string): ParsedHashState | null {
     return { route: "practice", practice: target, live: target };
   }
 
+  if (id === "ai" || id === "ai-training") {
+    const p1 = safeDecode(parts[1]).toLowerCase();
+    const p2 = safeDecode(parts[2]);
+    if (p1 === "review") {
+      return {
+        route: "ai",
+        ai: p2 ? { tab: "review", sessionId: p2 } : { tab: "review" },
+      };
+    }
+    if (p1 === "train") {
+      return { route: "ai", ai: { tab: "train" } };
+    }
+    return { route: "ai", ai: { tab: "collect" } };
+  }
+
   if (id === "pilot" || id === "analytics") {
     const p1 = safeDecode(parts[1]);
     const p2 = safeDecode(parts[2]);
@@ -713,6 +752,14 @@ export function buildPracticeHash(tab: PracticeViewTab, sessionId?: string): str
   if (tab === "directory") return "#/practice";
   if (sessionId) return `#/practice/${encodeURIComponent(sessionId)}`;
   return "#/practice/session";
+}
+
+export function buildAITrainingHash(tab: AITrainingTab, sessionId?: string): string {
+  if (tab === "collect") return "#/ai";
+  if (tab === "review") {
+    return sessionId ? `#/ai/review/${encodeURIComponent(sessionId)}` : "#/ai/review";
+  }
+  return "#/ai/train";
 }
 
 export function buildAnalyticsHash(scope?: AnalyticsScope | null, sectionAnchor?: string): string {
@@ -814,6 +861,8 @@ function notifyParsedSubRouteListeners(parsed: ParsedHashState, crossRoute = fal
   } else if (parsed.route === "practice" && (parsed.practice || parsed.live)) {
     const target = (parsed.practice ?? parsed.live)!;
     practiceRouteListeners.forEach((fn) => fn(target));
+  } else if (parsed.route === "ai" && parsed.ai) {
+    aiRouteListeners.forEach((fn) => fn(parsed.ai!));
   } else if (!crossRoute) {
     sectionAnchorListeners.forEach((fn) => fn(parsed.sectionAnchor ?? "", parsed.route));
   }

@@ -16,6 +16,7 @@ import {
   FilterReason,
   GateRuleKey,
   GateRuleOverrides,
+  isSlapRFMode,
   NumericGateRuleKey,
   TimingRules,
   TrackNode,
@@ -139,6 +140,17 @@ export class TimingRulesEditor extends Component {
     this.listen(el, "change", (e) => {
       if (this.isReadOnlyFn()) return;
       const target = e.target;
+      if (target instanceof HTMLSelectElement && target.hasAttribute("data-ml-model-select")) {
+        const modelId = target.value;
+        if (modelId) {
+          void this.api.updateMLConfig({ detectorMode: "ai", activeModelId: modelId });
+        }
+        return;
+      }
+      if (target instanceof HTMLInputElement && target.hasAttribute("data-ml-live-tune")) {
+        void this.api.updateMLConfig({ liveTuneEnabled: target.checked });
+        return;
+      }
       if (target instanceof HTMLInputElement && target.dataset.tuneInput) {
         if (target.value.trim() === "") return;
         const key = target.dataset.tuneInput as NumericGateRuleKey;
@@ -249,6 +261,13 @@ export class TimingRulesEditor extends Component {
 
     this.listen(el, "click", (e) => {
       const target = e.target as HTMLElement;
+      const mlModeBtn = target.closest<HTMLButtonElement>("[data-ml-detector-mode]");
+      if (mlModeBtn) {
+        if (this.isReadOnlyFn() || mlModeBtn.disabled) return;
+        const nextMode = mlModeBtn.dataset.mlDetectorMode === "ai" ? "ai" : "classic";
+        void this.api.updateMLConfig({ detectorMode: nextMode });
+        return;
+      }
       const tuneBtn = target.closest<HTMLElement>(
         "[data-tune-act], [data-tune-step], [data-tune-reset-key], [data-beep-mode]"
       );
@@ -395,10 +414,14 @@ export class TimingRulesEditor extends Component {
         }
       }
       const active = document.activeElement;
-      const editing = active instanceof HTMLInputElement && this.el.contains(active);
+      const editing =
+        (active instanceof HTMLInputElement || active instanceof HTMLSelectElement) &&
+        this.el.contains(active);
       if (!editing) this.render();
     };
-    this.onDispose(store.subscribe(["rules", "config", "status", "practice", "race"], refreshIfIdle));
+    this.onDispose(
+      store.subscribe(["rules", "config", "status", "practice", "race", "ml"], refreshIfIdle)
+    );
     const unsubPool = usbPool.onChange(refreshIfIdle);
     const unsubSlots = usbPool.slots.map((c) =>
       c.subscribe({
@@ -614,7 +637,9 @@ export class TimingRulesEditor extends Component {
     const readOnly = this.isReadOnlyFn();
 
     const globalBeepMode = resolveCrossingBeepMode(r.beepMode, r.beepOnCross);
-    let globalOvrCount = globalBeepMode !== "off" ? 1 : 0;
+    const slaprfHw = isSlapRFMode(this.store.timingHardwareMode);
+    const isAiGlobal = slaprfHw && this.store.mlStatus?.config?.detectorMode === "ai";
+    let globalOvrCount = (globalBeepMode !== "off" ? 1 : 0) + (isAiGlobal ? 1 : 0);
     for (const s of RULES) {
       if (Math.abs(r[s.key] - DEFAULT_RULES[s.key]) > 1e-6) globalOvrCount++;
     }
@@ -688,6 +713,9 @@ export class TimingRulesEditor extends Component {
         </div>`;
     }).join("");
 
+    const detectorRow =
+      !gate && slaprfHw ? this.renderGlobalDetectorRow(readOnly ? "disabled" : "") : "";
+
     const beepRow = gate
       ? this.renderGateBeepRow(gate, r, overrides)
       : this.renderGlobalBeepRow(r);
@@ -706,6 +734,7 @@ export class TimingRulesEditor extends Component {
       </div>
       <form class="rules ${readOnly ? "is-readonly-rules" : ""}">
         <fieldset ${readOnly ? "disabled" : ""} style="border:0;margin:0;padding:0;min-width:0;display:contents">
+          ${detectorRow}
           ${rows}
           ${beepRow}
           <div class="rules-foot">${foot}</div>
@@ -824,6 +853,11 @@ export class TimingRulesEditor extends Component {
         </div>`;
     }).join("");
 
+    const detectorCardHtml =
+      isGlobalScope && isSlapRFMode(this.store.timingHardwareMode)
+        ? this.renderMobileDetectorCard(disAttr)
+        : "";
+
     const headDotHtml = isGlobalScope
       ? `<span class="dot channel-all-dot"></span>`
       : `<span class="dot" style="--c:${color}"></span>`;
@@ -850,6 +884,7 @@ export class TimingRulesEditor extends Component {
         </div>
       </div>
       <div class="scope-tune-grid">
+        ${detectorCardHtml}
         ${cardsHtml}
         ${beepCardHtml}
       </div>`;
@@ -899,6 +934,94 @@ export class TimingRulesEditor extends Component {
     }
     this.syncScopeFocusClasses();
     grid.classList.add("is-mobile-stacked");
+  }
+
+  private renderDetectorModelOptionsHtml(): string {
+    const ml = this.store.mlStatus;
+    const models = ml?.models ?? [];
+    if (models.length === 0) {
+      return `<option value="ai-base-v0" selected>AI Base v0 (Pretrained)</option>`;
+    }
+    const activeId = ml.config?.activeModelId || models[0].modelId;
+    return models
+      .map((m) => {
+        const sel = m.modelId === activeId ? "selected" : "";
+        const f1Pct = m.aiMetrics ? ` · F1 ${(m.aiMetrics.f1 * 100).toFixed(1)}%` : "";
+        const shortName = m.builtIn ? `AI Base v${m.version} (Pretrained)` : `AI Base v${m.version}${f1Pct}`;
+        return `<option value="${esc(m.modelId)}" ${sel}>${esc(shortName)}</option>`;
+      })
+      .join("");
+  }
+
+  private renderGlobalDetectorRow(disAttr = ""): string {
+    const ml = this.store.mlStatus;
+    const isAi = ml?.config?.detectorMode === "ai";
+    const liveTuneOn = ml?.config?.liveTuneEnabled ?? true;
+    return `
+      <div class="rule-row ${isAi ? "is-overridden" : ""}" data-detector-rule-row>
+        <div class="rule-text">
+          <div class="rule-label">Crossing detector</div>
+          <div class="rule-help">Select Classic Schmitt DSP or a trained 1D TCN crossing model (<a href="#/ai/train">AI Training</a>).</div>
+        </div>
+        <div class="rule-input rule-detector-controls">
+          <div class="scope-tune-seg detector-mode-seg" role="radiogroup" aria-label="Crossing detector">
+            <button type="button" role="radio" aria-checked="${!isAi}" class="scope-tune-seg-btn ${!isAi ? "is-active" : ""}" data-ml-detector-mode="classic" ${disAttr}>Classic</button>
+            <button type="button" role="radio" aria-checked="${isAi}" class="scope-tune-seg-btn ${isAi ? "is-active" : ""}" data-ml-detector-mode="ai" ${disAttr}>AI Model</button>
+          </div>
+          ${
+            isAi
+              ? `<div class="rule-detector-subrow">
+                   <select class="input rule-detector-select" data-ml-model-select aria-label="Trained AI model" ${disAttr}>
+                     ${this.renderDetectorModelOptionsHtml()}
+                   </select>
+                   <label class="ai-check-label rule-detector-live-tune">
+                     <input type="checkbox" data-ml-live-tune ${liveTuneOn ? "checked" : ""} ${disAttr} />
+                     <span>Live 2-lap tune</span>
+                   </label>
+                 </div>`
+              : ""
+          }
+        </div>
+      </div>`;
+  }
+
+  private renderMobileDetectorCard(disAttr = ""): string {
+    const ml = this.store.mlStatus;
+    const isAi = ml?.config?.detectorMode === "ai";
+    const liveTuneOn = ml?.config?.liveTuneEnabled ?? true;
+    return `
+      <div class="scope-tune-card is-detector-card ${isAi ? "is-overridden" : ""}" data-tune-card="detectorMode">
+        <div class="scope-tune-card-info">
+          <div class="scope-tune-card-title-row">
+            <span class="scope-tune-card-label">Crossing detector</span>
+            ${
+              isAi
+                ? `<span class="scope-tune-custom-icon" title="AI Model active" aria-label="AI Model active">${icons.ai(12)}</span>`
+                : ""
+            }
+          </div>
+          <div class="scope-tune-card-help">Run Classic DSP or pick a trained model from <a href="#/ai/train">AI Training</a>.</div>
+        </div>
+        <div class="scope-tune-card-controls is-detector-controls">
+          <div class="scope-tune-seg detector-mode-seg" role="radiogroup" aria-label="Crossing detector">
+            <button type="button" role="radio" aria-checked="${!isAi}" class="scope-tune-seg-btn ${!isAi ? "is-active" : ""}" data-ml-detector-mode="classic" ${disAttr}>Classic</button>
+            <button type="button" role="radio" aria-checked="${isAi}" class="scope-tune-seg-btn ${isAi ? "is-active" : ""}" data-ml-detector-mode="ai" ${disAttr}>AI Model</button>
+          </div>
+          ${
+            isAi
+              ? `<div class="rule-detector-subrow">
+                   <select class="input rule-detector-select" data-ml-model-select aria-label="Trained AI model" ${disAttr}>
+                     ${this.renderDetectorModelOptionsHtml()}
+                   </select>
+                   <label class="ai-check-label rule-detector-live-tune">
+                     <input type="checkbox" data-ml-live-tune ${liveTuneOn ? "checked" : ""} ${disAttr} />
+                     <span>Live 2-lap tune</span>
+                   </label>
+                 </div>`
+              : ""
+          }
+        </div>
+      </div>`;
   }
 
   private renderBeepModeSegHtml(activeMode: CrossingBeepMode, disAttr = ""): string {

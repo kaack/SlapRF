@@ -30,6 +30,7 @@ import {
 import { sharedLapRFEmulatorRelay } from "../services/laprf_emulator_relay";
 import { AppStore } from "../state/store";
 import { PracticeView } from "../views/PracticeView";
+import { AITrainingView } from "../views/AITrainingView";
 import { LapRFEmulatorView } from "../views/LapRFEmulatorView";
 import { PilotView } from "../views/PilotView";
 import { PilotsView } from "../views/PilotsView";
@@ -1192,6 +1193,8 @@ export class AppShell extends Component {
         return new PracticeView(host, this.store, this.api);
       case "races":
         return new RacesView(host, this.store, this.api, this.announcer);
+      case "ai":
+        return new AITrainingView(host, this.store, this.api);
       case "pilot":
         return new PilotView(host, this.store);
       case "pilots":

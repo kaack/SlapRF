@@ -303,4 +303,9 @@ export const icons = {
       `<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>`,
       s
     ),
+  ai: (s?: number) =>
+    svg(
+      `<circle cx="5" cy="7" r="2"/><circle cx="5" cy="17" r="2"/><circle cx="12" cy="12" r="2.2"/><circle cx="19" cy="7" r="2"/><circle cx="19" cy="17" r="2"/><path d="m6.7 8.1 3.5 2.6M6.7 15.9l3.5-2.6M13.8 10.7l3.5-2.6M13.8 13.3l3.5 2.6"/>`,
+      s
+    ),
 };
