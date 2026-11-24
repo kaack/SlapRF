@@ -945,6 +945,20 @@ func (e *Engine) HasDetectedTimer(timerID uint8) bool {
 	return ok
 }
 
+// HasDetectedTimerFingerprint reports whether `timerID` exists in `e.detected` AND still belongs
+// to the board with `fingerprint` (case-insensitive). Checking `timerID` alone is insufficient
+// across storage wipes, imports, or timer deletions where a freed `timerID` can be reassigned to a
+// different Spoke board.
+func (e *Engine) HasDetectedTimerFingerprint(timerID uint8, fingerprint string) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	d, ok := e.detected[timerID]
+	if !ok || d == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(d.Fingerprint), strings.TrimSpace(fingerprint))
+}
+
 // SetDetectedTimerOnline immediately marks a physical/simulated timer online or offline.
 func (e *Engine) SetDetectedTimerOnline(timerID uint8, online bool) {
 	e.mu.Lock()

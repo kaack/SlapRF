@@ -45,6 +45,7 @@ func WindowFrameLenFor(samples int) int {
 // slotInfo is what the decoder learned about a Hub TDMA slot from its Hello frame.
 type slotInfo struct {
 	fingerprint uint32
+	fpHex       string
 	label       string
 	timerID     uint8  // Stable app-side timer ID (engine)
 	intervalUs  uint64 // Sweep interval reported in this timer's Hello
@@ -201,6 +202,24 @@ func (r *HubFrameDecoder) Reset() {
 	lg.Debugf("%s Decoder state reset", tag)
 }
 
+// ClearSlotBindings drops cached `TDMA slot -> Engine timerID` bindings and sequence/timeline
+// watermarks while keeping `lastHello` board identities intact, so an already-connected Hub stream
+// immediately re-registers all live timers with fresh Engine IDs after a storage reset or import.
+func (r *HubFrameDecoder) ClearSlotBindings() {
+	r.mu.Lock()
+	lg := r.appLog
+	tag := r.logTagLocked()
+	r.slots = make(map[uint8]slotInfo)
+	r.seenSeq = make(map[uint8]uint8)
+	r.hasSeq = make(map[uint8]bool)
+	r.lastTs = make(map[uint8]uint64)
+	r.lastArrival = make(map[uint8]uint64)
+	r.timelines = make(map[uint8]*tsTracker)
+	r.lastChanHex = ""
+	r.mu.Unlock()
+	lg.Debugf("%s Cleared TDMA slot-to-timerID bindings", tag)
+}
+
 // OnTelemetryFrame implements tracker.EventSubscriber.
 func (r *HubFrameDecoder) OnTelemetryFrame(domain.TimerTelemetryFrame) {}
 
@@ -281,14 +300,16 @@ func (r *HubFrameDecoder) IngestPacket(raw []byte, nowUs uint64) int {
 	}
 	if len(raw) >= 4 && raw[0] == FrameMagic0 && (raw[1] == FrameMagicWindow || raw[1] == FrameMagicSingle) && validCRC8(raw) {
 		slot := raw[2]
-		if slot >= 2 && r.engine != nil {
+		if slot >= 1 && slot <= 7 && r.engine != nil {
 			r.mu.Lock()
 			cur, hasSlot := r.slots[slot]
-			aliveInEngine := hasSlot && r.engine.HasDetectedTimer(cur.timerID)
+			aliveInEngine := hasSlot && r.engine.HasDetectedTimerFingerprint(cur.timerID, cur.fpHex)
 			hello, hasHello := r.lastHello[slot]
 			r.mu.Unlock()
 			if !aliveInEngine && hasHello {
-				r.engine.ClearDeletedSpokeFingerprint(hello.fpHex)
+				if !hello.isHub {
+					r.engine.ClearDeletedSpokeFingerprint(hello.fpHex)
+				}
 				r.registerHello(slot, hello)
 			}
 		}
@@ -364,7 +385,7 @@ func (r *HubFrameDecoder) applyHello(slot uint8, hello helloInfo) bool {
 		r.mu.Unlock()
 		return false
 	}
-	if cur, ok := r.slots[slot]; ok && cur.fingerprint == hello.fingerprint && strings.TrimSpace(cur.label) == hello.label && (r.engine == nil || r.engine.HasDetectedTimer(cur.timerID)) {
+	if cur, ok := r.slots[slot]; ok && cur.fingerprint == hello.fingerprint && strings.TrimSpace(cur.label) == hello.label && (r.engine == nil || r.engine.HasDetectedTimerFingerprint(cur.timerID, hello.fpHex)) {
 		r.mu.Unlock()
 		if r.engine != nil {
 			r.engine.MarkTimerSeen(cur.timerID) // Keeps the collector Hub (HELLO-only) online
@@ -391,7 +412,23 @@ func (r *HubFrameDecoder) registerHello(slot uint8, hello helloInfo) {
 		interval = 1_000_000 / uint64(hz)
 	}
 	r.mu.Lock()
-	r.slots[slot] = slotInfo{fingerprint: hello.fingerprint, label: hello.label, timerID: timerID, intervalUs: interval}
+	for otherSlot, prev := range r.slots {
+		if otherSlot != slot && (prev.fingerprint == hello.fingerprint || prev.timerID == timerID) {
+			delete(r.slots, otherSlot)
+		}
+	}
+	for otherSlot, prevHello := range r.lastHello {
+		if otherSlot != slot && prevHello.fingerprint == hello.fingerprint {
+			delete(r.lastHello, otherSlot)
+		}
+	}
+	r.slots[slot] = slotInfo{
+		fingerprint: hello.fingerprint,
+		fpHex:       hello.fpHex,
+		label:       hello.label,
+		timerID:     timerID,
+		intervalUs:  interval,
+	}
 	delete(r.hasSeq, timerID)
 	delete(r.lastTs, timerID)
 	delete(r.lastArrival, timerID)
@@ -404,10 +441,10 @@ func (r *HubFrameDecoder) registerHello(slot uint8, hello helloInfo) {
 }
 
 // resolveSlotLocked returns the stable timer ID and sweep interval for a Hub slot, or ok=false if
-// that slot hasn't sent a HELLO yet (or its timer was deleted).
+// that slot hasn't sent a HELLO yet (or its timer was deleted / reassigned to a different board).
 func (r *HubFrameDecoder) resolveSlotLocked(slot uint8) (uint8, uint64, bool) {
 	if info, ok := r.slots[slot]; ok {
-		if r.engine != nil && !r.engine.HasDetectedTimer(info.timerID) {
+		if r.engine != nil && !r.engine.HasDetectedTimerFingerprint(info.timerID, info.fpHex) {
 			delete(r.slots, slot)
 			return 0, 0, false
 		}

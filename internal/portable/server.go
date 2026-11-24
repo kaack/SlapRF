@@ -414,13 +414,23 @@ func NewServer(cfg Config) *Server {
 			if s.persistWorker != nil {
 				s.persistWorker.WipeAndReconcile()
 			}
+			s.realHubRx.ClearSlotBindings()
+			s.simHubRx.ClearSlotBindings()
 			reconcileRealHardwareLinks(sim.IsRunning(), false)
+			if !sim.IsRunning() && domain.IsSlapRFMode(realEngine.TimingHardwareMode()) {
+				s.activeSlapRFManager().RebindConnectedTimers()
+			}
 		},
 		OnStorageImport: func() {
 			if s.persistWorker != nil {
 				s.persistWorker.ReconcileAllNow()
 			}
+			s.realHubRx.ClearSlotBindings()
+			s.simHubRx.ClearSlotBindings()
 			reconcileRealHardwareLinks(sim.IsRunning(), true)
+			if !sim.IsRunning() && domain.IsSlapRFMode(realEngine.TimingHardwareMode()) {
+				s.activeSlapRFManager().RebindConnectedTimers()
+			}
 		},
 		OnLogLevelChanged: func(level string) {
 			if s.store != nil {

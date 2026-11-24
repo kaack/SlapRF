@@ -1703,10 +1703,7 @@ export class TimerConsole {
         return;
       }
       const cleanLabel = label.trim() || (slot === 1 ? "H1" : `T${slot - 1}`);
-      const prev = this.hubSlotHello.get(slot);
-      if (prev && prev.fp === cleanFp && prev.label === cleanLabel) {
-        return;
-      }
+      this.hubSlotHello.set(slot, { fp: cleanFp, label: cleanLabel, role });
       const fpNum = Number.parseInt(cleanFp, 16) >>> 0;
       if (fpNum === 0) return;
       const pkt = new Uint8Array(36);

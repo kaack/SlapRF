@@ -208,3 +208,74 @@ func TestDecodeWindowFrameHalfDbResolution(t *testing.T) {
 		t.Fatalf("unexpected 0.5 dB decoded values: %v", frames[0].RSSI[:4])
 	}
 }
+
+func TestSlotRebindsCleanlyWhenEngineResetReassignsTimerIDs(t *testing.T) {
+	eng := tracker.NewRealEngine()
+	rx := NewHubFrameDecoder(eng)
+
+	// Initial session: T2 (tdma=4) registers first -> gets timerID=2;
+	// T1 (tdma=3) -> timerID=3; T3 (tdma=2) -> timerID=4; H1 (tdma=1) -> timerID=1.
+	rx.BindSlotHello(1, "EFE44224", true, 50, "H1")
+	rx.BindSlotHello(4, "7B1C4D9C", false, 100, "T2")
+	rx.BindSlotHello(3, "D3FEDE5D", false, 100, "T1")
+	rx.BindSlotHello(2, "53E049F7", false, 100, "T3")
+
+	for slot := uint8(1); slot <= 4; slot++ {
+		rx.IngestPacket(EncodeWindowFrame(slot, 4100, -91, []domain.TimerTelemetryFrame{{SeqNum: 1}}), 100_000)
+	}
+
+	// Wipe Engine timers (simulating POST /v1/storage:reset while BLE Hub stays connected).
+	// T1 (tdma=3) transmits a window frame FIRST and claims timerID=2 (previously held by T2 on tdma=4!).
+	eng.ResetToFactoryDefaults(false)
+	rx.IngestPacket(EncodeWindowFrame(3, 4100, -91, []domain.TimerTelemetryFrame{{SeqNum: 2}}), 200_000)
+	rx.IngestPacket(EncodeWindowFrame(2, 4100, -91, []domain.TimerTelemetryFrame{{SeqNum: 2}}), 210_000)
+
+	// Next STATUS? push arrives and calls BindSlotHello for all 4 timers (allocating timerID=4 to T2).
+	// Previously BindSlotHello(4, "7B1C4D9C", ...) saw HasDetectedTimer(2)==true (owned by T1!) and
+	// left r.slots[4].timerID=2, starving T2 (timerID=4) at 0 samples while double-feeding T1.
+	rx.BindSlotHello(1, "EFE44224", true, 50, "H1")
+	rx.BindSlotHello(2, "53E049F7", false, 100, "T3")
+	rx.BindSlotHello(3, "D3FEDE5D", false, 100, "T1")
+	rx.BindSlotHello(4, "7B1C4D9C", false, 100, "T2")
+
+	// Feed 3 new samples on every TDMA slot (1..4).
+	for step := uint8(10); step < 13; step++ {
+		nowUs := uint64(300_000) + uint64(step)*10_000
+		for slot := uint8(1); slot <= 4; slot++ {
+			var s domain.TimerTelemetryFrame
+			s.SeqNum = uint32(step)
+			s.RSSI[0] = -90.0 - float32(slot)
+			rx.IngestPacket(EncodeWindowFrame(slot, 4100, -91, []domain.TimerTelemetryFrame{s}), nowUs)
+		}
+	}
+
+	byFP := make(map[string]domain.DetectedTimer)
+	for _, dt := range eng.DetectedTimersSnapshot() {
+		byFP[dt.Fingerprint] = dt
+	}
+	for _, wantFP := range []string{"EFE44224", "53E049F7", "D3FEDE5D", "7B1C4D9C"} {
+		dt, ok := byFP[wantFP]
+		if !ok {
+			t.Fatalf("missing detected timer for fp=%s", wantFP)
+		}
+		if dt.FramesRxCount < 3 {
+			t.Fatalf("fp=%s (%s, timerID=%d) expected >=3 samples after reset, got %d", wantFP, dt.TimerLabel, dt.TimerID, dt.FramesRxCount)
+		}
+	}
+	// T1 must have 1 + 3 = 4 samples (never polluted by T2's 3 samples), and T2 must have 3 samples.
+	if byFP["D3FEDE5D"].FramesRxCount != 4 {
+		t.Fatalf("expected T1 (D3FEDE5D) to have exact 4 samples without T2 cross-talk, got %d", byFP["D3FEDE5D"].FramesRxCount)
+	}
+	if byFP["7B1C4D9C"].FramesRxCount != 3 {
+		t.Fatalf("expected T2 (7B1C4D9C) to have exact 3 samples, got %d", byFP["7B1C4D9C"].FramesRxCount)
+	}
+
+	// Also verify TDMA slot migration: if Hub reboots and T2 moves from slot 4 to slot 5, old slot 4 is evicted.
+	rx.BindSlotHello(5, "7B1C4D9C", false, 100, "T2")
+	if got := rx.DecodePacket(EncodeWindowFrame(4, 4100, -91, []domain.TimerTelemetryFrame{{SeqNum: 30}}), 500_000); len(got) != 0 {
+		t.Fatalf("expected stale TDMA slot 4 to be evicted after T2 moved to slot 5, got %d frames", len(got))
+	}
+	if got := rx.DecodePacket(EncodeWindowFrame(5, 4100, -91, []domain.TimerTelemetryFrame{{SeqNum: 31}}), 510_000); len(got) != 1 || got[0].TimerID != byFP["7B1C4D9C"].TimerID {
+		t.Fatalf("expected new TDMA slot 5 to route to T2 timerID=%d, got %+v", byFP["7B1C4D9C"].TimerID, got)
+	}
+}

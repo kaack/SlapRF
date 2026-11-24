@@ -1746,6 +1746,31 @@ func (m *Manager) mirrorStatusHellosLocked(slot *connSlot, st map[string]any) {
 	}
 }
 
+// RebindConnectedTimers re-registers any currently open Hub and active Spokes in `Engine` + `HubRx`
+// from cached `lastStatus` / `lastConfig` (for example right after `POST /v1/storage:reset` or
+// `POST /v1/storage:import` wipes and rebuilds `Engine.detected` while a live Hub link stays open).
+func (m *Manager) RebindConnectedTimers() {
+	rebound := false
+	for i := 0; i < MaxConnections; i++ {
+		s := m.slots[i]
+		s.mu.Lock()
+		isConn := s.port != nil
+		st := s.lastStatus
+		cfg := s.lastConfig
+		s.mu.Unlock()
+		if !isConn {
+			continue
+		}
+		if st != nil || cfg != nil {
+			m.registerConnectedHubInEngine(st, cfg)
+			rebound = true
+		}
+	}
+	if rebound && m.cfg.HubRx != nil {
+		m.cfg.HubRx.PushActiveChannels()
+	}
+}
+
 func (m *Manager) registerConnectedHubInEngine(st map[string]any, cfg *firmware.TimerReadout) {
 	m.mu.RLock()
 	simRunning := m.simMode
