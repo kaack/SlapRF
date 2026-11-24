@@ -1,0 +1,215 @@
+package api
+
+import (
+	"bytes"
+	"encoding/base64"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+
+	"slaprf/internal/domain"
+	"slaprf/internal/tracker"
+)
+
+// SessionTraceResponse returns compact base64-encoded binary telemetry batches (`EncodeTelemetryBatch`)
+// for a PracticeSession's saved `.rfbin` trace.
+type SessionTraceResponse struct {
+	SessionID   string   `json:"sessionId"`
+	SampleCount int      `json:"sampleCount"`
+	RssiCount   int      `json:"rssiCount"`
+	BatchesB64  []string `json:"batchesB64"`
+}
+
+func (s *Server) handleGetPracticeSessionTrace(w http.ResponseWriter, r *http.Request) {
+	rawID := strings.TrimSpace(r.PathValue("sessionId"))
+	if !rejectColonInPathValue(w, rawID) {
+		return
+	}
+	eng := s.activeEngine()
+	sess, targetID := resolvePracticeSession(eng, rawID)
+	if sess == nil {
+		writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("practice session %q not found", rawID))
+		return
+	}
+
+	frames, err := eng.SessionTraceFrames(targetID)
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+
+	rssiCount := domain.MaxPilotSlots
+	for _, sp := range sess.Pilots {
+		if sp.SlotIndex > rssiCount {
+			rssiCount = sp.SlotIndex
+		}
+	}
+	if pc := eng.PilotCount(); pc > rssiCount {
+		rssiCount = pc
+	}
+	if rssiCount > domain.MaxPilotPoolSize {
+		rssiCount = domain.MaxPilotPoolSize
+	}
+
+	const maxFramesPerBatch = 16384
+	batches := make([]string, 0, 1+len(frames)/maxFramesPerBatch)
+	var encBuf []byte
+	for start := 0; start < len(frames); start += maxFramesPerBatch {
+		end := start + maxFramesPerBatch
+		if end > len(frames) {
+			end = len(frames)
+		}
+		encBuf = EncodeTelemetryBatch(encBuf[:0], frames[start:end], rssiCount)
+		batches = append(batches, base64.StdEncoding.EncodeToString(encBuf))
+	}
+
+	writeJSON(w, http.StatusOK, SessionTraceResponse{
+		SessionID:   targetID,
+		SampleCount: len(frames),
+		RssiCount:   rssiCount,
+		BatchesB64:  batches,
+	})
+}
+
+func (s *Server) handlePutPracticePackLoop(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		PackLoopEnabled  *bool `json:"packLoopEnabled,omitempty"`
+		PackLoopQuietSec *int  `json:"packLoopQuietSec,omitempty"`
+		PreemptOngoing   bool  `json:"preemptOngoing,omitempty"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	eng := s.activeEngine()
+	wasArmed := eng.IsRaceArmed()
+	if _, err := eng.PracticeAction(tracker.PracticeActionPayload{
+		Action:           "set_pack_loop",
+		PackLoopEnabled:  body.PackLoopEnabled,
+		PackLoopQuietSec: body.PackLoopQuietSec,
+		PreemptOngoing:   body.PreemptOngoing,
+	}); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	if !wasArmed && eng.IsRaceArmed() && s.hooks.OnTimingStarted != nil {
+		s.hooks.OnTimingStarted()
+	}
+	s.logUserAction("Practice", "Updated Hands-Free Pack Loop (enabled=%v)", body.PackLoopEnabled != nil && *body.PackLoopEnabled)
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+func (s *Server) handleSplitPracticePackLoop(w http.ResponseWriter, r *http.Request) {
+	if err := decodeOptionalJSONBody(r, &struct{}{}); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	eng := s.activeEngine()
+	if _, err := eng.PracticeAction(tracker.PracticeActionPayload{
+		Action: "seal_and_split_pack",
+	}); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	if eng.IsRaceArmed() && s.hooks.OnTimingStarted != nil {
+		s.hooks.OnTimingStarted()
+	}
+	s.logUserAction("Practice", "Sealed current pack and armed next pack")
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+// --- On-Device AI Detector & Model Training (`/v1/ml`, `/v1/ml:train`, `/v1/ml/dataset.tar.gz`, `/v1/ml/dataset:import`) ---
+
+func (s *Server) handleGetMLStatus(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.activeEngine().MLStatus())
+}
+
+func (s *Server) handlePatchMLConfig(w http.ResponseWriter, r *http.Request) {
+	var body tracker.MLConfigPayload
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	st, err := s.activeEngine().UpdateMLConfig(body)
+	if err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.logUserAction("ML", "Updated detector config (mode=%s, model=%s, liveTune=%v)", st.Config.DetectorMode, st.Config.ActiveModelID, st.Config.LiveTuneEnabled)
+	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) handleStartMLTraining(w http.ResponseWriter, r *http.Request) {
+	var body tracker.MLTrainRequest
+	if err := decodeOptionalJSONBody(r, &body); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	st, err := s.activeEngine().StartMLTraining(body)
+	if err != nil {
+		writeErrorJSON(w, http.StatusConflict, err.Error())
+		return
+	}
+	s.logUserAction("ML", "Started on-device base model training (epochs=%d)", st.Training.TotalEpochs)
+	writeJSON(w, http.StatusAccepted, st)
+}
+
+func (s *Server) handleExportMLDataset(w http.ResponseWriter, r *http.Request) {
+	var buf bytes.Buffer
+	if err := s.activeEngine().ExportMLDatasetTarGz(&buf); err != nil {
+		writeErrorJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if strings.EqualFold(r.URL.Query().Get("format"), "base64") {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"filename":   "slaprf-ai-dataset.tar.gz",
+			"sizeBytes":  buf.Len(),
+			"archiveB64": base64.StdEncoding.EncodeToString(buf.Bytes()),
+		})
+		return
+	}
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", `attachment; filename="slaprf-ai-dataset.tar.gz"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(buf.Bytes())
+}
+
+func (s *Server) handleImportMLDataset(w http.ResponseWriter, r *http.Request) {
+	ct := strings.ToLower(r.Header.Get("Content-Type"))
+	var archiveReader io.Reader
+	if strings.Contains(ct, "application/json") {
+		var body struct {
+			ArchiveB64 string `json:"archiveB64"`
+		}
+		if err := decodeJSONBody(r, &body); err != nil {
+			writeErrorJSON(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(body.ArchiveB64))
+		if err != nil || len(raw) == 0 {
+			writeErrorJSON(w, http.StatusBadRequest, "invalid base64 archiveB64 payload")
+			return
+		}
+		archiveReader = bytes.NewReader(raw)
+	} else {
+		raw, err := io.ReadAll(io.LimitReader(r.Body, 128<<20))
+		if err != nil || len(raw) == 0 {
+			writeErrorJSON(w, http.StatusBadRequest, "empty dataset archive body")
+			return
+		}
+		archiveReader = bytes.NewReader(raw)
+	}
+
+	impSess, impMod, err := s.activeEngine().ImportMLDatasetTarGz(archiveReader)
+	if err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.logUserAction("ML", "Imported AI dataset archive (%d sessions, %d models)", impSess, impMod)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"importedSessions": impSess,
+		"importedModels":   impMod,
+		"state":            s.buildFullStateResponse(),
+	})
+}

@@ -167,17 +167,17 @@ func (e *Engine) buildMLStatusLocked() domain.MLStatus {
 	e.ensurePracticeStateInitializedLocked()
 	ts := e.ensureTraceStoreLocked()
 
-	_, builtinSnap := ml.PretrainedBaseModel()
+	builtinSum := ml.PretrainedBaseSummary()
 	models := make([]domain.MLModelSummary, 0, 1+len(e.mlState.Models))
 	hasBuiltin := false
 	for _, m := range e.mlState.Models {
-		if m.ModelID == builtinSnap.ModelID {
+		if m.ModelID == builtinSum.ModelID {
 			hasBuiltin = true
 		}
 		models = append(models, m.MLModelSummary)
 	}
 	if !hasBuiltin {
-		models = append(models, builtinSnap.MLModelSummary)
+		models = append(models, builtinSum)
 	}
 	// Newest version first, built-in v0 last
 	sort.SliceStable(models, func(i, j int) bool {
@@ -236,6 +236,10 @@ type MLConfigPayload struct {
 
 // UpdateMLConfig applies changes to `MLConfig` and hot-swaps the active TCN weights if needed.
 func (e *Engine) UpdateMLConfig(req MLConfigPayload) (domain.MLStatus, error) {
+	// Warm built-in model outside Engine.mu so switching to AI mode never holds the lock during init.
+	if req.DetectorMode != nil && strings.EqualFold(strings.TrimSpace(*req.DetectorMode), string(domain.DetectorModeAI)) {
+		_, _ = ml.PretrainedBaseModel()
+	}
 	e.mu.Lock()
 	e.ensureMLInitializedLocked()
 
@@ -299,7 +303,7 @@ func (e *Engine) UpdateMLConfig(req MLConfigPayload) (domain.MLStatus, error) {
 // human-deleted (`x`) negative marks.
 func (e *Engine) recomputeLiveGateTunesLocked(slotIndex int, manualDeleted []domain.ManualDeletedCrossing) bool {
 	e.ensureMLInitializedLocked()
-	if !e.mlState.Config.LiveTuneEnabled {
+	if e.mlState.Config.DetectorMode != domain.DetectorModeAI || !e.mlState.Config.LiveTuneEnabled {
 		return false
 	}
 	tcn := e.resolveActiveTCNLocked()
@@ -741,6 +745,8 @@ type MLTrainRequest struct {
 // StartMLTraining launches an asynchronous multi-core Go training run across verified `.rfbin`
 // packs (plus synthetic RF physics stabilization traces), evaluating against an 80/20 pack holdout.
 func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
+	initTCN, _ := ml.PretrainedBaseModel()
+
 	e.mu.Lock()
 	e.ensureMLInitializedLocked()
 
@@ -778,7 +784,6 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 			nextVer = m.Version + 1
 		}
 	}
-	initTCN, _ := ml.PretrainedBaseModel()
 
 	e.mlTraining = domain.MLTrainingProgress{
 		Running:     true,

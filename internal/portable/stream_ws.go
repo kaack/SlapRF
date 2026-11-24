@@ -194,6 +194,10 @@ func (f *engineStreamForwarder) OnPracticeUpdated(state domain.PracticeManagerSt
 	f.sendJSON("practice", state)
 }
 
+func (f *engineStreamForwarder) OnMLUpdated(status domain.MLStatus) {
+	f.sendJSON("ml_status", status)
+}
+
 type streamHub struct {
 	mu      sync.RWMutex
 	clients map[*wsStreamClient]struct{}

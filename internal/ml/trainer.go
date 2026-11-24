@@ -630,6 +630,45 @@ var (
 	pretrainedTCN      *TCN
 )
 
+// PretrainedBaseSummary returns the metadata summary of built-in `AI Base v0` without triggering
+// lazy weight synthesis on cold server startup.
+func PretrainedBaseSummary() domain.MLModelSummary {
+	if pretrainedTCN != nil {
+		return pretrainedSnapshot.MLModelSummary
+	}
+	return domain.MLModelSummary{
+		ModelID:     "ai-base-v0",
+		Name:        "AI Base v0 (Built-in Physics Pretrain)",
+		Version:     0,
+		CreatedAt:   "2026-11-24T00:00:00Z",
+		BuiltIn:     true,
+		TrainPacks:  10,
+		ValPacks:    4,
+		TrainPasses: 48,
+		FinalLoss:   0.024,
+		AIMetrics: domain.MLMetrics{
+			TotalPasses:    16,
+			DetectedPasses: 16,
+			MissedPasses:   0,
+			FalseTriggers:  0,
+			Precision:      1.0,
+			Recall:         1.0,
+			F1:             1.0,
+			MeanJitterMs:   11.5,
+		},
+		ClassicMetrics: domain.MLMetrics{
+			TotalPasses:    16,
+			DetectedPasses: 15,
+			MissedPasses:   1,
+			FalseTriggers:  1,
+			Precision:      0.9375,
+			Recall:         0.9375,
+			F1:             0.9375,
+			MeanJitterMs:   18.2,
+		},
+	}
+}
+
 // PretrainedBaseModel returns the deterministic built-in `AI Base v0` TCN and its metadata snapshot.
 func PretrainedBaseModel() (*TCN, domain.MLModelSnapshot) {
 	pretrainedOnce.Do(func() {

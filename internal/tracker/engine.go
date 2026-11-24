@@ -769,11 +769,9 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 	isSlapRFMode := domain.IsSlapRFMode(hwMode)
 	useAIDetector := isSlapRFMode && e.mlState.Config.DetectorMode == domain.DetectorModeAI
 	var activeTCN *ml.TCN
-	if useAIDetector || e.mlState.Config.LiveTuneEnabled {
+	if useAIDetector {
 		e.ensureMLInitializedLocked()
-		if useAIDetector {
-			activeTCN = e.resolveActiveTCNLocked()
-		}
+		activeTCN = e.resolveActiveTCNLocked()
 	}
 	var autoCalibChanged bool
 	var autoCalibSFChanged bool
@@ -796,15 +794,12 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 		gate.LastRSSI[i] = det.SmoothedRSSI()
 		frame.RSSI[i] = det.SmoothedRSSI()
 
-		// Feed StreamDetector when AI mode is active (or while recording embeddings for live 2-lap tuning)
+		// Feed StreamDetector when AI mode is active
 		var mlDet *ml.StreamDetector
 		var aiCand *dsp.CrossingCandidate
-		if isSlapRFMode && pilot.Enabled && pilot.Channel > 0 && (useAIDetector || e.mlState.Config.LiveTuneEnabled) {
+		if useAIDetector && pilot.Enabled && pilot.Channel > 0 {
 			mlDet = e.mlDetectors[dkey]
 			if mlDet == nil {
-				if activeTCN == nil {
-					activeTCN = e.resolveActiveTCNLocked()
-				}
 				mlDet = ml.NewStreamDetector(gate.GateID, pilot.SlotIndex, activeTCN)
 				e.mlDetectors[dkey] = mlDet
 			}
@@ -936,7 +931,7 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 	var mlSnap domain.MLStatus
 	if len(completedLaps) > 0 {
 		summariesSnapshot = e.computeSummariesLocked()
-		if isSlapRFMode && e.mlState.Config.LiveTuneEnabled {
+		if useAIDetector && e.mlState.Config.LiveTuneEnabled {
 			var manualDeleted []domain.ManualDeletedCrossing
 			if !e.isLiveRaceHeatActiveLocked() && e.practiceState.ActiveSessionID != "" {
 				if sess := e.findPracticeSessionLocked(e.practiceState.ActiveSessionID); sess != nil {

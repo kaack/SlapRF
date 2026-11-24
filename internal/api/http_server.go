@@ -37,6 +37,7 @@ type FullStateResponse struct {
 	RaceState           domain.RaceTournamentState    `json:"raceState"`
 	EventState          domain.EventManagerState      `json:"eventState"`
 	PracticeState       domain.PracticeManagerState   `json:"practiceState"`
+	MLStatus            *domain.MLStatus              `json:"mlStatus,omitempty"`
 	ImportSummary       *domain.PilotCSVImportSummary `json:"importSummary,omitempty"`
 }
 
@@ -227,9 +228,12 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 	// Practice Sessions Resource Hierarchy (`/v1/practice/sessions`)
 	mux.HandleFunc("POST /v1/practice:reset", wrap(s.handleResetActivePracticeLaps))
+	mux.HandleFunc("PUT /v1/practice/pack-loop", wrap(s.handlePutPracticePackLoop))
+	mux.HandleFunc("POST /v1/practice/pack-loop:split", wrap(s.handleSplitPracticePackLoop))
 	mux.HandleFunc("GET /v1/practice/sessions", s.handleGetPracticeSessions)
 	mux.HandleFunc("POST /v1/practice/sessions", wrap(s.handleCreatePracticeSession))
 	mux.HandleFunc("GET /v1/practice/sessions/{sessionId}", s.handleGetPracticeSession)
+	mux.HandleFunc("GET /v1/practice/sessions/{sessionId}/trace", s.handleGetPracticeSessionTrace)
 	mux.HandleFunc("PATCH /v1/practice/sessions/{sessionId}", wrap(s.handlePatchPracticeSession))
 	mux.HandleFunc("DELETE /v1/practice/sessions/{sessionId}", wrap(s.handleDeletePracticeSession))
 	mux.HandleFunc("POST /v1/practice/sessions/{sessionId}", wrap(s.handlePracticeSessionCustomAction))
@@ -321,6 +325,13 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/storage/sim", s.handleExportSimStorage)
 	mux.HandleFunc("PUT /v1/storage/sim", s.handleImportSimStorage)
 
+	// On-Device AI Crossing Detector & Training (`/v1/ml`, `/v1/ml:train`, `/v1/ml/dataset.tar.gz`, `/v1/ml/dataset:import`)
+	mux.HandleFunc("GET /v1/ml", s.handleGetMLStatus)
+	mux.HandleFunc("PATCH /v1/ml", wrap(s.handlePatchMLConfig))
+	mux.HandleFunc("POST /v1/ml:train", wrap(s.handleStartMLTraining))
+	mux.HandleFunc("GET /v1/ml/dataset.tar.gz", s.handleExportMLDataset)
+	mux.HandleFunc("POST /v1/ml/dataset:import", wrap(s.handleImportMLDataset))
+
 	// Diagnostic Logs (`/v1/logs`, `/v1/logs/config`, `/v1/logs:clear`) — shared across Go Server & Browser WASM
 	mux.HandleFunc("GET /v1/logs", s.handleLogsGet)
 	mux.HandleFunc("GET /v1/logs/config", s.handleGetLogsConfig)
@@ -353,6 +364,7 @@ func (s *Server) buildFullStateResponse() FullStateResponse {
 		mgpExp := s.simulator.MultiGPBackend().ExportState()
 		simMGP = &mgpExp
 	}
+	mlStatus := eng.MLStatus()
 	return FullStateResponse{
 		ServerTimestampUs:   eng.NowUs(),
 		TimingHardwareMode:  eng.TimingHardwareMode(),
@@ -372,6 +384,7 @@ func (s *Server) buildFullStateResponse() FullStateResponse {
 		RaceState:           raceState,
 		EventState:          eventState,
 		PracticeState:       practiceState,
+		MLStatus:            &mlStatus,
 	}
 }
 

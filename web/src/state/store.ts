@@ -13,6 +13,7 @@ import {
   GateCrossingEvent,
   LapRecord,
   LapRFEmulatorStatus,
+  MLStatus,
   OperatingMode,
   PilotSlot,
   PilotTrackSummary,
@@ -46,7 +47,8 @@ export type Topic =
   | "selection"
   | "rules"
   | "race"
-  | "practice";
+  | "practice"
+  | "ml";
 
 type Listener = () => void;
 type LapListener = (lap: LapRecord) => void;
@@ -189,6 +191,9 @@ export interface ScopedStoreOverrides {
   selectedPilot?: () => number;
   selectPilot?: (slotIndex: number) => void;
   lastCrossingFor?: (slotIndex: number) => GateCrossingEvent | undefined;
+  historyFor?: (gateId: number) => TimerTelemetryFrame[];
+  latestTimestampUs?: () => number;
+  smoothLatestTimestampUs?: () => number;
 }
 
 export type ResolvedAnalyticsScope =
@@ -332,12 +337,34 @@ function normalizePracticeSession(raw: PracticeSession): PracticeSession {
 function normalizePracticeState(raw?: PracticeManagerState | null): PracticeManagerState {
   if (!raw) return DEFAULT_PRACTICE_STATE;
   return {
+    ...raw,
     initialized: raw.initialized,
     activeSessionId: raw.activeSessionId ?? "",
     selectedSessionId: raw.selectedSessionId ?? "",
     sessions: Array.isArray(raw.sessions) ? raw.sessions.map((s) => normalizePracticeSession(s)) : [],
   };
 }
+
+const DEFAULT_ML_STATUS: MLStatus = {
+  config: {
+    detectorMode: "classic",
+    activeModelId: "ai-base-v0",
+    liveTuneEnabled: true,
+  },
+  training: {
+    running: false,
+    epoch: 0,
+    totalEpochs: 0,
+    loss: 0,
+  },
+  models: [],
+  verifiedPacks: 0,
+  unverifiedPacks: 0,
+  totalRecordedPacks: 0,
+  verifiedPasses: 0,
+  storageBytes: 0,
+  liveTunes: [],
+};
 
 export class AppStore {
   private _pilots: PilotSlot[] = [];
@@ -357,6 +384,9 @@ export class AppStore {
   private _raceState: RaceTournamentState = DEFAULT_RACE_STATE;
   private _eventState: EventManagerState = DEFAULT_EVENT_STATE;
   private _practiceState: PracticeManagerState = DEFAULT_PRACTICE_STATE;
+  private _mlStatus: MLStatus = DEFAULT_ML_STATUS;
+  private readonly sessionTraces = new Map<string, { byGate: Map<number, TimerTelemetryFrame[]>; maxTsUs: number }>();
+  private readonly packSealedListeners = new Set<(lapCount: number, nextPackName: string) => void>();
   private _laprfEmulator: LapRFEmulatorStatus = {
     connectedClients: 0,
     detectionsSent: 0,
@@ -483,6 +513,50 @@ export class AppStore {
   public onStartGateDetected(fn: CrossingListener): () => void {
     this.startGateListeners.add(fn);
     return () => this.startGateListeners.delete(fn);
+  }
+
+  public onPackSealed(fn: (lapCount: number, nextPackName: string) => void): () => void {
+    this.packSealedListeners.add(fn);
+    return () => this.packSealedListeners.delete(fn);
+  }
+
+  public get mlStatus(): MLStatus {
+    return this._mlStatus;
+  }
+
+  public ingestMLStatus(status: MLStatus): void {
+    this._mlStatus = status;
+    this.emit("ml");
+  }
+
+  public hasSessionTrace(sessionId: string): boolean {
+    return this.sessionTraces.has(sessionId);
+  }
+
+  public setSessionTrace(sessionId: string, frames: TimerTelemetryFrame[]): void {
+    const byGate = new Map<number, TimerTelemetryFrame[]>();
+    let maxTsUs = 0;
+    for (let i = 0; i < frames.length; i++) {
+      const fr = frames[i];
+      if (fr.timestampUs > maxTsUs) {
+        maxTsUs = fr.timestampUs;
+      }
+      let arr = byGate.get(fr.timerId);
+      if (!arr) {
+        arr = [];
+        byGate.set(fr.timerId, arr);
+      }
+      arr.push(fr);
+    }
+    this.sessionTraces.set(sessionId, { byGate, maxTsUs });
+    // Evict oldest cached traces beyond 16 sessions in browser RAM
+    if (this.sessionTraces.size > 16) {
+      const firstKey = this.sessionTraces.keys().next().value;
+      if (firstKey && firstKey !== sessionId) {
+        this.sessionTraces.delete(firstKey);
+      }
+    }
+    this.emit("practice", "selection");
   }
 
   public onRaceAnnouncement(fn: RaceAnnouncementListener): () => void {
@@ -1187,8 +1261,12 @@ export class AppStore {
         get: () => base.liveServerTimestampUs,
         enumerable: true,
       },
+      latestTimestampUs: {
+        get: overrides.latestTimestampUs ? overrides.latestTimestampUs : () => base.latestTimestampUs,
+        enumerable: true,
+      },
       smoothLatestTimestampUs: {
-        get: () => base.smoothLatestTimestampUs,
+        get: overrides.smoothLatestTimestampUs ? overrides.smoothLatestTimestampUs : () => base.smoothLatestTimestampUs,
         enumerable: true,
       },
       node: {
@@ -1228,7 +1306,7 @@ export class AppStore {
         value: base.setLiveFocus.bind(base),
       },
       historyFor: {
-        value: base.historyFor.bind(base),
+        value: overrides.historyFor ? overrides.historyFor : base.historyFor.bind(base),
       },
       clearActiveHistory: {
         value: base.clearActiveHistory.bind(base),
@@ -1287,6 +1365,102 @@ export class AppStore {
     return this.createScopedView({
       nodes: () => this.practiceSessionNodes(this.selectedPracticeSession),
       rules: () => this.practiceSessionRules(this.selectedPracticeSession),
+      historyFor: (gateId: number) => {
+        const sess = this.selectedPracticeSession;
+        if (sess && !sess.active) {
+          const cached = this.sessionTraces.get(sess.sessionId);
+          if (cached && cached.maxTsUs > 0) {
+            return cached.byGate.get(gateId) ?? [];
+          }
+        }
+        return this.historyFor(gateId);
+      },
+      latestTimestampUs: () => {
+        const sess = this.selectedPracticeSession;
+        if (sess && !sess.active) {
+          const cached = this.sessionTraces.get(sess.sessionId);
+          if (cached && cached.maxTsUs > 0) {
+            return cached.maxTsUs;
+          }
+        }
+        return this.latestTimestampUs;
+      },
+      smoothLatestTimestampUs: () => {
+        const sess = this.selectedPracticeSession;
+        if (sess && !sess.active) {
+          const cached = this.sessionTraces.get(sess.sessionId);
+          if (cached && cached.maxTsUs > 0) {
+            return cached.maxTsUs;
+          }
+        }
+        return this.smoothLatestTimestampUs;
+      },
+    });
+  }
+
+  /** Scoped store view for reviewing a specific Practice session's `.rfbin` trace in `AI Training`. */
+  public forPracticeSessionReview(getSession: () => PracticeSession | null | undefined): AppStore {
+    return this.createScopedView({
+      nodes: () => this.practiceSessionNodes(getSession() ?? undefined),
+      rules: () => this.practiceSessionRules(getSession() ?? undefined),
+      isScopeLive: () => Boolean(getSession()?.active),
+      laps: () => getSession()?.laps ?? [],
+      crossings: () => getSession()?.crossings ?? [],
+      filtered: () => getSession()?.filtered ?? [],
+      summaries: () => getSession()?.summaries ?? [],
+      enabledPilots: () => {
+        const sess = getSession();
+        if (!sess) return [];
+        return sess.pilots.map((sp) => {
+          const base = this._pilots.find((p) => p.slotIndex === sp.slotIndex);
+          return {
+            slotIndex: sp.slotIndex,
+            callsign: base?.callsign || sp.callsign,
+            phoneticName: base?.phoneticName ?? sp.phoneticName ?? "",
+            enabled: true,
+            band: sp.band || base?.band || 1,
+            channel: sp.channel,
+            frequencyMhz: sp.frequencyMhz || base?.frequencyMhz || 0,
+            enterThreshold: base?.enterThreshold ?? -58,
+            exitThreshold: base?.exitThreshold ?? -66,
+            laprfThreshold: base?.laprfThreshold ?? 800,
+            rhEnterThreshold: base?.rhEnterThreshold ?? 95,
+            rhExitThreshold: base?.rhExitThreshold ?? 70,
+            attenuationGain: base?.attenuationGain ?? 59,
+            color: base?.color || sp.color || "#38bdf8",
+          };
+        });
+      },
+      historyFor: (gateId: number) => {
+        const sess = getSession();
+        if (sess && !sess.active) {
+          const cached = this.sessionTraces.get(sess.sessionId);
+          if (cached && cached.maxTsUs > 0) {
+            return cached.byGate.get(gateId) ?? [];
+          }
+        }
+        return this.historyFor(gateId);
+      },
+      latestTimestampUs: () => {
+        const sess = getSession();
+        if (sess && !sess.active) {
+          const cached = this.sessionTraces.get(sess.sessionId);
+          if (cached && cached.maxTsUs > 0) {
+            return cached.maxTsUs;
+          }
+        }
+        return this.latestTimestampUs;
+      },
+      smoothLatestTimestampUs: () => {
+        const sess = getSession();
+        if (sess && !sess.active) {
+          const cached = this.sessionTraces.get(sess.sessionId);
+          if (cached && cached.maxTsUs > 0) {
+            return cached.maxTsUs;
+          }
+        }
+        return this.smoothLatestTimestampUs;
+      },
     });
   }
 
@@ -1731,6 +1905,9 @@ export class AppStore {
     if (state.practiceState) {
       this._practiceState = normalizePracticeState(state.practiceState);
     }
+    if (state.mlStatus) {
+      this._mlStatus = state.mlStatus;
+    }
     if (modeChanged) {
       this._comparison = { lapId: null, reference: "best" };
       this._playheadUs = 0;
@@ -1827,7 +2004,9 @@ export class AppStore {
   }
 
   public ingestPractice(practiceState: PracticeManagerState): void {
-    this._practiceState = normalizePracticeState(practiceState);
+    const prevSealed = this._practiceState.lastSealedSessionId ?? "";
+    const next = normalizePracticeState(practiceState);
+    this._practiceState = next;
     if (!this.isLiveRaceHeatRunning) {
       const activeSess = this.activePracticeSession;
       if (activeSess) {
@@ -1842,6 +2021,18 @@ export class AppStore {
     }
     this.ensureValidSelection();
     this.emit("practice", "config", "laps", "crossings", "selection", "rules");
+    if (
+      next.packLoopEnabled &&
+      next.lastSealedSessionId &&
+      next.lastSealedSessionId !== prevSealed
+    ) {
+      const nextActive = next.sessions.find((s) => s.sessionId === next.activeSessionId);
+      const nextName = nextActive?.name || "Next pack";
+      const lapCount = next.lastSealedLapCount ?? 0;
+      for (const fn of this.packSealedListeners) {
+        fn(lapCount, nextName);
+      }
+    }
   }
 
   private recomputePracticeLapList(list: LapRecord[]): void {

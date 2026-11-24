@@ -138,6 +138,10 @@ tags:
       - **Log Inspection & Download (`/v1/logs`)**: Read recent chronological log lines in JSON or download the rolling `slaprf.log` plain-text file (`?format=text`).
       - **Severity & Maintenance (`/v1/logs/config`, `/v1/logs:clear`)**: Inspect or update the active log threshold (`trace`, `debug`, `info`, `warn`, `error`) at runtime without restarting, or truncate `slaprf.log` and rotated backups before reproducing an issue.
 
+  - name: AI Detector & Traces
+    description: |
+      On-device 1D Temporal ConvNet (TCN) gate-crossing detector, live 2-lap per-timer adapter, Hands-Free Pack Loop recording, `.rfbin` session trace replay, and `.tar.gz` dataset export/import (`/v1/ml*`, `/v1/practice/pack-loop*`, `/v1/practice/sessions/{sessionId}/trace`).
+
 paths:
   /v1/version:
     get:
@@ -6263,6 +6267,176 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DiagnosticLogStatus"
+
+  /v1/practice/pack-loop:
+    put:
+      tags: [AI Detector & Traces]
+      summary: Enable or configure the Hands-Free Pack Loop auto-session splitter
+      operationId: putPracticePackLoop
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                packLoopEnabled:
+                  type: boolean
+                packLoopQuietSec:
+                  type: integer
+                  example: 25
+                preemptOngoing:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated application state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+
+  /v1/practice/pack-loop:split:
+    post:
+      tags: [AI Detector & Traces]
+      summary: Seal the active Practice pack trace immediately and arm the next pack
+      operationId: splitPracticePackLoop
+      responses:
+        "200":
+          description: Updated application state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+
+  /v1/practice/sessions/{sessionId}/trace:
+    get:
+      tags: [AI Detector & Traces]
+      summary: Read saved .rfbin raw RSSI telemetry batches for a Practice session
+      operationId: getPracticeSessionTrace
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Encoded telemetry batches for historical Signals replay
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessionId, sampleCount, rssiCount, batchesB64]
+                properties:
+                  sessionId:
+                    type: string
+                  sampleCount:
+                    type: integer
+                  rssiCount:
+                    type: integer
+                  batchesB64:
+                    type: array
+                    items:
+                      type: string
+
+  /v1/ml:
+    get:
+      tags: [AI Detector & Traces]
+      summary: Read active AI detector configuration, dataset stats, live tunes, and model snapshots
+      operationId: getMLStatus
+      responses:
+        "200":
+          description: Current ML status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    patch:
+      tags: [AI Detector & Traces]
+      summary: Switch between Classic DSP and AI 1D TCN detector or toggle live 2-lap tuning
+      operationId: patchMLConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                detectorMode:
+                  type: string
+                  enum: [classic, ai]
+                activeModelId:
+                  type: string
+                liveTuneEnabled:
+                  type: boolean
+                resetLiveTunes:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated ML status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/ml:train:
+    post:
+      tags: [AI Detector & Traces]
+      summary: Start background pure-Go 1D TCN base-model training on verified packs
+      operationId: startMLTraining
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                epochs:
+                  type: integer
+                  example: 32
+                includeUnverified:
+                  type: boolean
+      responses:
+        "202":
+          description: Background training started
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "409":
+          description: Training already running or active timing session in progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/ml/dataset.tar.gz:
+    get:
+      tags: [AI Detector & Traces]
+      summary: Export verified .rfbin session traces and trained models as a .tar.gz archive
+      operationId: exportMLDataset
+      parameters:
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [gzip, base64]
+      responses:
+        "200":
+          description: Portable dataset archive
+
+  /v1/ml/dataset:import:
+    post:
+      tags: [AI Detector & Traces]
+      summary: Import a .tar.gz dataset and model archive exported from another SlapRF device
+      operationId: importMLDataset
+      responses:
+        "200":
+          description: Import summary and updated state
 
   /v1/storage/status:
     get:

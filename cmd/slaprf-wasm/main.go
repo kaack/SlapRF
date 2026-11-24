@@ -194,6 +194,10 @@ func (w *wasmStreamSubscriber) OnPracticeUpdated(state domain.PracticeManagerSta
 	w.send("practice", state)
 }
 
+func (w *wasmStreamSubscriber) OnMLUpdated(status domain.MLStatus) {
+	w.send("ml_status", status)
+}
+
 type persistedSimBundle struct {
 	Engine  tracker.PersistedEngineState `json:"engine"`
 	Options ingest.SimPersistedOptions   `json:"options"`

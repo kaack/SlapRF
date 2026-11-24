@@ -59,8 +59,10 @@ export interface PersistedEngineStateJson {
   filtered: unknown[] | null;
   raceState?: unknown;
   eventState?: unknown;
+  practiceState?: unknown;
   practiceSnap?: unknown;
   practiceBackup?: unknown;
+  mlState?: unknown;
 }
 
 /** `kv` document holding everything of the real engine except the per-event records. */
@@ -77,8 +79,10 @@ export interface RealConfigDoc {
   deletedSpokeFp?: string[] | null;
   raceState?: unknown;
   eventState?: unknown;
+  practiceState?: unknown;
   practiceSnap?: unknown;
   practiceBackup?: unknown;
+  mlState?: unknown;
 }
 
 export interface SimStateDoc {
@@ -139,8 +143,10 @@ export function splitRealState(state: PersistedEngineStateJson): {
       deletedSpokeFp: state.deletedSpokeFp ?? null,
       ...(state.raceState !== undefined ? { raceState: state.raceState } : {}),
       ...(state.eventState !== undefined ? { eventState: state.eventState } : {}),
+      ...(state.practiceState !== undefined ? { practiceState: state.practiceState } : {}),
       ...(state.practiceSnap !== undefined ? { practiceSnap: state.practiceSnap } : {}),
       ...(state.practiceBackup !== undefined ? { practiceBackup: state.practiceBackup } : {}),
+      ...(state.mlState !== undefined ? { mlState: state.mlState } : {}),
     },
     laps: validRecords("laps", state.laps),
     crossings: validRecords("crossings", state.crossings),
@@ -180,8 +186,10 @@ export function assembleRealState(
     deletedSpokeFp: config?.deletedSpokeFp ?? null,
     ...(config?.raceState !== undefined ? { raceState: config.raceState } : {}),
     ...(config?.eventState !== undefined ? { eventState: config.eventState } : {}),
+    ...(config?.practiceState !== undefined ? { practiceState: config.practiceState } : {}),
     ...(config?.practiceSnap !== undefined ? { practiceSnap: config.practiceSnap } : {}),
     ...(config?.practiceBackup !== undefined ? { practiceBackup: config.practiceBackup } : {}),
+    ...(config?.mlState !== undefined ? { mlState: config.mlState } : {}),
     laps: l,
     crossings: c,
     filtered: f,

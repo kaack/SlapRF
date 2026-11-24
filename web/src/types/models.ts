@@ -802,6 +802,13 @@ export interface PracticeSessionPilot {
   frequencyMhz: number;
 }
 
+export interface ManualDeletedCrossing {
+  gateId: number;
+  slotIndex: number;
+  timestampUs: number;
+  peakRssiDbm?: number;
+}
+
 export interface PracticeSession {
   sessionId: string;
   name: string;
@@ -818,12 +825,22 @@ export interface PracticeSession {
   crossings: GateCrossingEvent[];
   filtered: FilteredDetection[];
   summaries: PilotTrackSummary[];
+  trainingVerified?: boolean;
+  manualDeletedCrossings?: ManualDeletedCrossing[];
+  traceSampleCount?: number;
+  traceDurationSec?: number;
 }
 
 export interface PracticeManagerState {
   initialized?: boolean;
   activeSessionId: string;
   selectedSessionId: string;
+  packLoopEnabled?: boolean;
+  packLoopQuietSec?: number;
+  packLoopQuietElapsed?: number;
+  packLoopState?: string;
+  lastSealedSessionId?: string;
+  lastSealedLapCount?: number;
   sessions: PracticeSession[];
 }
 
@@ -844,7 +861,10 @@ export interface PracticeActionPayload {
     | "clear_session_laps"
     | "clear_pilot_laps"
     | "toggle_session_lap"
-    | "delete_session_lap";
+    | "delete_session_lap"
+    | "set_pack_loop"
+    | "seal_and_split_pack"
+    | "set_training_verified";
   sessionId?: string;
   name?: string;
   tags?: string[];
@@ -856,6 +876,83 @@ export interface PracticeActionPayload {
   channel?: number;
   preemptOngoing?: boolean;
   lapId?: number;
+  packLoopEnabled?: boolean;
+  packLoopQuietSec?: number;
+  trainingVerified?: boolean;
+}
+
+export type DetectorMode = "classic" | "ai";
+
+export interface MLMetrics {
+  totalPasses: number;
+  detectedPasses: number;
+  missedPasses: number;
+  falseTriggers: number;
+  precision: number;
+  recall: number;
+  f1: number;
+  meanJitterMs: number;
+}
+
+export interface MLModelSummary {
+  modelId: string;
+  name: string;
+  version: number;
+  createdAt: string;
+  builtIn?: boolean;
+  trainPacks: number;
+  valPacks: number;
+  trainPasses: number;
+  trainDurationMs: number;
+  finalLoss: number;
+  aiMetrics: MLMetrics;
+  classicMetrics: MLMetrics;
+}
+
+export interface MLConfig {
+  detectorMode: DetectorMode;
+  activeModelId: string;
+  liveTuneEnabled: boolean;
+}
+
+export interface MLLiveGateTune {
+  gateId: number;
+  slotIndex: number;
+  lapsUsed: number;
+  posExamples: number;
+  negExamples: number;
+  weights: number[];
+  bias: number;
+}
+
+export interface MLTrainingProgress {
+  running: boolean;
+  epoch: number;
+  totalEpochs: number;
+  loss: number;
+  message?: string;
+  startedAt?: string;
+  completedModelId?: string;
+  error?: string;
+}
+
+export interface MLStatus {
+  config: MLConfig;
+  training: MLTrainingProgress;
+  models: MLModelSummary[];
+  verifiedPacks: number;
+  unverifiedPacks: number;
+  totalRecordedPacks: number;
+  verifiedPasses: number;
+  storageBytes: number;
+  liveTunes?: MLLiveGateTune[];
+}
+
+export interface SessionTraceResponse {
+  sessionId: string;
+  sampleCount: number;
+  rssiCount: number;
+  batchesB64: string[];
 }
 
 export interface EventManagerState {
@@ -1249,6 +1346,7 @@ export interface FullStateResponse {
   raceState?: RaceTournamentState;
   eventState?: EventManagerState;
   practiceState?: PracticeManagerState;
+  mlStatus?: MLStatus;
   importSummary?: PilotCSVImportSummary;
 }
 
@@ -1304,6 +1402,6 @@ export interface FilteredDetection {
 }
 
 export interface StreamEnvelope {
-  type: "connected" | "telemetry" | "crossing" | "filtered" | "lap" | "config" | "race" | "practice";
+  type: "connected" | "telemetry" | "crossing" | "filtered" | "lap" | "config" | "race" | "practice" | "ml_status";
   payload?: unknown;
 }

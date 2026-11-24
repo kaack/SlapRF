@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -34,6 +35,7 @@ import (
 	slaprfble "slaprf/internal/slaprf/bluetooth"
 	slaprfusb "slaprf/internal/slaprf/usb"
 	"slaprf/internal/storage"
+	"slaprf/internal/tracestore"
 	"slaprf/internal/tracker"
 )
 
@@ -109,8 +111,9 @@ type Server struct {
 	httpClient    *http.Client
 	hostname      string
 	tempDBPath    string
-	store         *storage.BoltStore
-	persistWorker *storage.PersistenceWorker
+	store          *storage.BoltStore
+	realTraceStore tracestore.Store
+	persistWorker  *storage.PersistenceWorker
 
 	simEngine  *tracker.Engine
 	realEngine *tracker.Engine
@@ -210,6 +213,15 @@ func NewServer(cfg Config) *Server {
 
 	simEngine := tracker.NewEngine()
 	realEngine := tracker.NewRealEngine()
+	var realTraces tracestore.Store
+	if tempDB == "" && dbPath != "" {
+		if fs, fErr := tracestore.NewFileStore(filepath.Join(filepath.Dir(dbPath), "traces")); fErr == nil {
+			realTraces = fs
+			realEngine.SetTraceStore(fs)
+		} else {
+			appLogger.Warnf("[TraceStore] Failed to open traces directory: %v", fErr)
+		}
+	}
 	sim := ingest.NewTrackSimulator(simEngine)
 	realHubRx := ingest.NewHubFrameDecoder(realEngine)
 	realHubRx.SetLogger(appLogger)
@@ -223,9 +235,10 @@ func NewServer(cfg Config) *Server {
 		ownsAppLog: ownsAppLog,
 		httpClient: hc,
 		hostname:   hostName,
-		tempDBPath: tempDB,
-		store:      store,
-		simEngine:  simEngine,
+		tempDBPath:     tempDB,
+		store:          store,
+		realTraceStore: realTraces,
+		simEngine:      simEngine,
 		realEngine: realEngine,
 		sim:        sim,
 		realHubRx:  realHubRx,
@@ -583,6 +596,9 @@ func (s *Server) Close() {
 	}
 	if s.stream != nil {
 		s.stream.close()
+	}
+	if s.realTraceStore != nil {
+		_ = s.realTraceStore.Close()
 	}
 	if s.store != nil {
 		_ = s.store.Close()

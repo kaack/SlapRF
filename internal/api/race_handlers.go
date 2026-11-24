@@ -268,9 +268,10 @@ func (s *Server) handlePatchPracticeSession(w http.ResponseWriter, r *http.Reque
 	}
 
 	var body struct {
-		Name     *string   `json:"name,omitempty"`
-		Tags     *[]string `json:"tags,omitempty"`
-		Selected *bool     `json:"selected,omitempty"`
+		Name             *string   `json:"name,omitempty"`
+		Tags             *[]string `json:"tags,omitempty"`
+		Selected         *bool     `json:"selected,omitempty"`
+		TrainingVerified *bool     `json:"trainingVerified,omitempty"`
 	}
 	if err := decodeJSONBody(r, &body); err != nil {
 		writeErrorJSON(w, http.StatusBadRequest, err.Error())
@@ -298,6 +299,17 @@ func (s *Server) handlePatchPracticeSession(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		s.logUserAction("Practice", "Updated tags on session %q (id=%s)", sess.Name, targetID)
+	}
+	if body.TrainingVerified != nil {
+		if _, err := eng.PracticeAction(tracker.PracticeActionPayload{
+			Action:           "set_training_verified",
+			SessionID:        targetID,
+			TrainingVerified: body.TrainingVerified,
+		}); err != nil {
+			writeEngineError(w, err)
+			return
+		}
+		s.logUserAction("Practice", "Updated trainingVerified=%v on session %q (id=%s)", *body.TrainingVerified, sess.Name, targetID)
 	}
 	if body.Selected != nil && *body.Selected {
 		if _, err := eng.PracticeAction(tracker.PracticeActionPayload{

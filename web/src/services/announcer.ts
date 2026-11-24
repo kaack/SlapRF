@@ -230,6 +230,17 @@ export class Announcer {
     this.unsubscribers.push(store.onRaceAnnouncement((ann) => this.onRaceAnnouncement(ann)));
     this.unsubscribers.push(store.onTelemetryFrame((frame) => this.onTelemetryBeep(frame)));
     this.unsubscribers.push(
+      store.onPackSealed((lapCount, nextName) => {
+        if (this.prefs.enabled) {
+          this.say(
+            `Pack saved, ${lapCount} ${lapCount === 1 ? "lap" : "laps"}. ${nextName} armed`,
+            false,
+            false
+          );
+        }
+      })
+    );
+    this.unsubscribers.push(
       store.subscribe(["config", "rules", "practice", "race"], () => {
         this.beepConfigDirty = true;
         const nextCfg = this.resolveBeepScope();

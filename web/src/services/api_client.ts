@@ -12,6 +12,7 @@ import {
   GateUpdate,
   isSlapRFMode,
   LapRecord,
+  MLStatus,
   MultiGPRaceEntry,
   MultiGPRaceViewData,
   MultiGPScheduleRound,
@@ -26,6 +27,7 @@ import {
   RaceMarshalPayload,
   RaceSetupConfig,
   RaceTournamentState,
+  SessionTraceResponse,
   SimMultiGPAdminAction,
   SimMultiGPState,
   StageControlAction,
@@ -61,7 +63,7 @@ import {
 import { bindSimSerialStore, bindSimTimerActionHandler, isSimulatedSerialPort } from "./sim_serial_port";
 import { forgetKnownHardwareTimer, TimerConsole, TimerStatus, usbPool } from "./timer_console";
 import { ApiTransport } from "./transport";
-import { WasmSimTransport } from "./wasm_transport";
+import { decodeTelemetryBatch, WasmSimTransport } from "./wasm_transport";
 
 interface LapPayload {
   lap: LapRecord;
@@ -1150,12 +1152,115 @@ export class ApiClient {
           `/v1/practice/sessions/${sid}/laps/${payload.lapId ?? 0}`
         );
         break;
+      case "set_pack_loop":
+        state = await this.transport.request<FullStateResponse>("PUT", "/v1/practice/pack-loop", {
+          packLoopEnabled: payload.packLoopEnabled,
+          packLoopQuietSec: payload.packLoopQuietSec,
+          preemptOngoing: payload.preemptOngoing,
+        });
+        break;
+      case "seal_and_split_pack":
+        state = await this.transport.request<FullStateResponse>(
+          "POST",
+          "/v1/practice/pack-loop:split",
+          {}
+        );
+        break;
+      case "set_training_verified":
+        state = await this.transport.request<FullStateResponse>("PATCH", `/v1/practice/sessions/${sid}`, {
+          trainingVerified: payload.trainingVerified,
+        });
+        break;
       default:
         throw new Error(`Unsupported practice session action: ${String(payload.action)}`);
     }
 
     this.store.hydrate(state);
     this.transport.pushHubChannels();
+  }
+
+  private readonly pendingTraceFetches = new Set<string>();
+
+  /** Loads and caches a stopped PracticeSession's `.rfbin` trace for interactive Signals replay. */
+  public async ensurePracticeSessionTrace(sessionId: string, force = false): Promise<void> {
+    const clean = (sessionId || "").trim();
+    if (!clean) return;
+    if (!force && (this.store.hasSessionTrace(clean) || this.pendingTraceFetches.has(clean))) {
+      return;
+    }
+    this.pendingTraceFetches.add(clean);
+    try {
+      const resp = await this.transport.request<SessionTraceResponse>(
+        "GET",
+        `/v1/practice/sessions/${encodeURIComponent(clean)}/trace`
+      );
+      const frames: TimerTelemetryFrame[] = [];
+      for (const b64 of resp?.batchesB64 ?? []) {
+        if (!b64) continue;
+        const binStr = window.atob(b64);
+        const bytes = new Uint8Array(binStr.length);
+        for (let i = 0; i < binStr.length; i++) {
+          bytes[i] = binStr.charCodeAt(i);
+        }
+        const batch = decodeTelemetryBatch(bytes);
+        for (let i = 0; i < batch.length; i++) {
+          frames.push(batch[i]);
+        }
+      }
+      this.store.setSessionTrace(clean, frames);
+    } finally {
+      this.pendingTraceFetches.delete(clean);
+    }
+  }
+
+  public async fetchMLStatus(): Promise<MLStatus> {
+    const st = await this.transport.request<MLStatus>("GET", "/v1/ml");
+    this.store.ingestMLStatus(st);
+    return st;
+  }
+
+  public async updateMLConfig(payload: {
+    detectorMode?: "classic" | "ai";
+    activeModelId?: string;
+    liveTuneEnabled?: boolean;
+    resetLiveTunes?: boolean;
+  }): Promise<MLStatus> {
+    const st = await this.transport.request<MLStatus>("PATCH", "/v1/ml", payload);
+    this.store.ingestMLStatus(st);
+    await this.persistBrowserEnginesIfDemo();
+    return st;
+  }
+
+  public async startMLTraining(payload?: {
+    epochs?: number;
+    includeUnverified?: boolean;
+  }): Promise<MLStatus> {
+    const st = await this.transport.request<MLStatus>("POST", "/v1/ml:train", payload ?? {});
+    this.store.ingestMLStatus(st);
+    return st;
+  }
+
+  public async exportMLDatasetArchive(): Promise<{ filename: string; archiveB64: string; sizeBytes: number }> {
+    return this.transport.request<{ filename: string; archiveB64: string; sizeBytes: number }>(
+      "GET",
+      "/v1/ml/dataset.tar.gz?format=base64"
+    );
+  }
+
+  public async importMLDatasetArchive(archiveB64: string): Promise<{ importedSessions: number; importedModels: number }> {
+    const res = await this.transport.request<{
+      importedSessions: number;
+      importedModels: number;
+      state: FullStateResponse;
+    }>("POST", "/v1/ml/dataset:import", { archiveB64 });
+    if (res?.state) {
+      this.store.hydrate(res.state);
+    }
+    await this.persistBrowserEnginesIfDemo();
+    return {
+      importedSessions: res?.importedSessions ?? 0,
+      importedModels: res?.importedModels ?? 0,
+    };
   }
 
   public async bracketEdit(payload: BracketEditPayload): Promise<RaceTournamentState> {
@@ -1822,6 +1927,13 @@ export class ApiClient {
           const p = msg.payload as PracticeManagerState;
           if (p) {
             this.store.ingestPractice(p);
+          }
+          break;
+        }
+        case "ml_status": {
+          const m = msg.payload as MLStatus;
+          if (m) {
+            this.store.ingestMLStatus(m);
           }
           break;
         }
