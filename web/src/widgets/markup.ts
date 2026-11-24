@@ -8,6 +8,7 @@ export const FILTER_LABELS: Record<FilterReason, string> = {
   SPIKE: "Noise spike",
   MIN_LAP: "Min lap",
   LAP_TOO_LONG: "Lap too long",
+  OUT_OF_ORDER: "Out of order",
 };
 
 /** Colour chip for a section split in pilot lap tables: fastest (neon accent), normal, or >10% off best. */

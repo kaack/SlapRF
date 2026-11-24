@@ -173,7 +173,7 @@ components:
     FilteredEventMessage:
       name: filtered
       title: Filtered / Rejected Gate Pass (JSON Text Frame)
-      summary: Emitted when an RSSI peak is rejected by minimum crossing time (`SPIKE`), minimum lap time (`MIN_LAP`), or maximum lap duration (`LAP_TOO_LONG`) rules.
+      summary: Emitted when an RSSI peak is rejected by minimum crossing time (`SPIKE`), minimum lap time (`MIN_LAP`), sequential track order (`OUT_OF_ORDER`), or maximum lap duration (`LAP_TOO_LONG`) rules.
       contentType: application/json
       payload:
         $ref: "#/components/schemas/FilteredEnvelope"
@@ -400,7 +400,7 @@ components:
               type: string
             reason:
               type: string
-              enum: [SPIKE, MIN_LAP, LAP_TOO_LONG]
+              enum: [SPIKE, MIN_LAP, LAP_TOO_LONG, OUT_OF_ORDER]
             detail:
               type: string
             peakRssiDbm:

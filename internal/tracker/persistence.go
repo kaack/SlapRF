@@ -309,6 +309,17 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 
 	// In real SlapRF hardware mode, ensure the Hub occupies slot 1 (and any non-Hub in slot 1 is moved to a free 2..7 slot).
 	if !markTimersOnline && domain.IsSlapRFMode(e.timingHardwareMode) {
+		assignedTimers := make(map[uint8]bool, len(s.Gates))
+		for _, g := range s.Gates {
+			if g.AssignedTimerID > 0 {
+				assignedTimers[g.AssignedTimerID] = true
+			}
+		}
+		for id, d := range e.detected {
+			if !assignedTimers[id] && d.Fingerprint != "" && !domain.IsValidSlapRFFingerprint(d.Fingerprint) {
+				delete(e.detected, id)
+			}
+		}
 		var hubEntry *domain.DetectedTimer
 		var hubOldID uint8
 		for id := uint8(maxTimers); id >= 1; id-- {

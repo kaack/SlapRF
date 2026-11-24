@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"slaprf/internal/applog"
+	"slaprf/internal/domain"
 	"slaprf/internal/firmware"
 	"slaprf/internal/ingest"
 	"slaprf/internal/serialport"
@@ -1790,7 +1791,7 @@ func (m *Manager) registerConnectedHubInEngine(st map[string]any, cfg *firmware.
 			if hubHz <= 0 {
 				hubHz = defaultHubHz
 			}
-			if fp != "" {
+			if domain.IsValidSlapRFFingerprint(fp) {
 				if tid, err := m.cfg.Engine.RegisterTimerHello(fp, true, label); err == nil && tid != 0 {
 					m.cfg.Engine.MarkTimerSeen(tid)
 				}
@@ -1816,7 +1817,7 @@ func (m *Manager) registerConnectedHubInEngine(st map[string]any, cfg *firmware.
 							msAgo = 0
 						}
 						spokeActive := (!hasFrames || frames > 0) && (!hasMsAgo || msAgo < 5000)
-						if spFp != "" && !strings.HasPrefix(spFp, "53504B") {
+						if domain.IsValidSlapRFFingerprint(spFp) && !strings.HasPrefix(strings.ToUpper(spFp), "53504B") {
 							if spokeActive {
 								m.cfg.Engine.ClearDeletedSpokeFingerprint(spFp)
 							}

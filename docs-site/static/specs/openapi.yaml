@@ -6737,7 +6737,7 @@ components:
           example: "VORTEX"
         reason:
           type: string
-          enum: [SPIKE, MIN_LAP, LAP_TOO_LONG]
+          enum: [SPIKE, MIN_LAP, LAP_TOO_LONG, OUT_OF_ORDER]
           example: MIN_LAP
         detail:
           type: string

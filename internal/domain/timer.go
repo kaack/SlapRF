@@ -68,6 +68,28 @@ func IsRotorHazardMode(m TimingHardwareMode) bool {
 // LatestFirmwareVersion is the current XIAO ESP32-C5 SDR timer firmware build (firmware/slaprf).
 const LatestFirmwareVersion = "v0.1.7"
 
+// IsValidSlapRFFingerprint reports whether `fp` is a non-zero 8-hex-digit SlapRF board fingerprint.
+func IsValidSlapRFFingerprint(fp string) bool {
+	if len(fp) != 8 {
+		return false
+	}
+	nonZero := false
+	for i := 0; i < 8; i++ {
+		c := fp[i]
+		switch {
+		case c >= '0' && c <= '9':
+			if c != '0' {
+				nonZero = true
+			}
+		case c >= 'A' && c <= 'F', c >= 'a' && c <= 'f':
+			nonZero = true
+		default:
+			return false
+		}
+	}
+	return nonZero
+}
+
 // DetectedTimer represents a physical Seeed Studio XIAO ESP32-C5 board discovered over
 // the USB Hub (ESP-NOW) or flashed over USB, whether or not it is currently assigned to a gate.
 type DetectedTimer struct {

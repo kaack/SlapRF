@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"slaprf/internal/domain"
 	"slaprf/internal/storage"
 )
 
@@ -117,7 +118,7 @@ func NewKnownTimerRegistry(store *storage.BoltStore) *KnownTimerRegistry {
 		if ok, err := store.GetJSON(kvKnownTimersKey, &list); err == nil && ok {
 			for _, kt := range list {
 				fp := strings.ToUpper(strings.TrimSpace(kt.FP))
-				if fp != "" {
+				if domain.IsValidSlapRFFingerprint(fp) && fp != "00000001" && !strings.HasPrefix(fp, "SIM000") && !strings.HasPrefix(fp, "53504B") {
 					kt.FP = fp
 					r.timers[fp] = kt
 				}
@@ -289,7 +290,7 @@ func (r *KnownTimerRegistry) SnapshotFor(marksBLEPaired bool) []KnownHardwareTim
 // Upsert merges and persists a discovered or updated SlapRF hardware timer.
 func (r *KnownTimerRegistry) Upsert(entry KnownHardwareTimer) {
 	fp := strings.ToUpper(strings.TrimSpace(entry.FP))
-	if fp == "" || fp == "00000001" || strings.HasPrefix(fp, "SIM000") || strings.HasPrefix(fp, "53504B") {
+	if !domain.IsValidSlapRFFingerprint(fp) || fp == "00000001" || strings.HasPrefix(fp, "SIM000") || strings.HasPrefix(fp, "53504B") {
 		return
 	}
 	r.mu.Lock()

@@ -121,14 +121,19 @@ func TestCleanLapIsRecordedWithEverySection(t *testing.T) {
 func TestTimersActIndependentlyWithoutCrossGateRejection(t *testing.T) {
 	r := newRig(t)
 	r.expectAccepted(r.pass(1, 10.0))
-	// G2 only 0.2 s after G1: accepted because timers evaluate passes independently.
+	// G2 only 0.2 s after G1: accepted because forward sequential gates have no artificial min-section lockout.
 	r.expectAccepted(r.pass(2, 10.2))
-	// G3 at 12.0 s, then G2 again at 16.0 s (>= 5 s after G2's 10.2 s pass): accepted cleanly.
+	// G3 at 12.0 s advances forward in track order cleanly.
 	r.expectAccepted(r.pass(3, 12.0))
-	r.expectAccepted(r.pass(2, 16.0))
-	// Same-gate minimum lap time still guards G2 independently against immediate repeat triggers.
-	r.expectFiltered(r.pass(2, 16.8), domain.FilterMinLap)
-	r.expectFiltered(r.pass(2, 19.0), domain.FilterMinLap)
+	// G2 at 16.0 s (>= 5 s after G2's 10.2 s pass, but before Start/Finish G1) is out of sequential track order
+	// and skipped so return-lane proximity cannot corrupt the final section or arm G2's MinLapSec!
+	r.expectFiltered(r.pass(2, 16.0), domain.FilterOutOfOrder)
+	// Finish Lap 1 at G1 (17.5 s), then hit G2 on Lap 2 (19.0 s, only 3.0 s after the skipped out-of-order G2):
+	// G2 MUST be accepted because the skipped out-of-order detection did not arm MinLapSec!
+	r.expectAccepted(r.pass(1, 17.5))
+	r.expectAccepted(r.pass(2, 19.0))
+	// Same-gate minimum lap time still guards G2 against immediate repeat triggers.
+	r.expectFiltered(r.pass(2, 19.8), domain.FilterMinLap)
 }
 
 func TestMinimumCrossingTimeRejectsShortSpikes(t *testing.T) {
@@ -299,5 +304,82 @@ func TestStrongerRealPassSupersedesBorderlinePrematureBumpWithinMinLap(t *testin
 	}
 	if fin.lap.Sectors[1].SplitSeconds != 3.2 || fin.lap.Sectors[2].SplitSeconds != 3.8 {
 		t.Fatalf("expected superseded G2->G3=3.2s and G3->G4=3.8s, got %+v", fin.lap.Sectors)
+	}
+}
+
+func TestReturnLaneOutOfOrderPassPreservesS4AndSubsequentS1S2(t *testing.T) {
+	r := newRig(t)
+
+	// Sector gate hit before Start/Finish begins Lap 1 is skipped as OUT_OF_ORDER without arming MinLapSec.
+	r.expectFiltered(r.passWithHold(2, 8.70, 800, 10.0), domain.FilterOutOfOrder)
+
+	// Replay the 6-lap field trajectory (H1=G1, T1=G2, T2=G3, T3=G4) where the return lane from T3->H1
+	// passes near T1 ~1.3 s before H1 on every lap:
+	// Lap 1 (T2 & T3 missed, return-lane T1 skipped):
+	r.expectAccepted(r.passWithHold(1, 10.000, 600, 20.9))
+	r.expectAccepted(r.passWithHold(2, 11.681, 600, 15.4))
+	r.expectFiltered(r.passWithHold(2, 20.905, 800, 10.6), domain.FilterOutOfOrder)
+	lap1 := r.passWithHold(1, 22.202, 600, 45.7)
+	r.expectAccepted(lap1)
+
+	// Lap 2:
+	r.expectAccepted(r.passWithHold(2, 26.283, 600, 11.0))
+	r.expectAccepted(r.passWithHold(3, 28.624, 600, 16.2))
+	r.expectAccepted(r.passWithHold(4, 30.865, 600, 19.4))
+	r.expectFiltered(r.passWithHold(2, 33.885, 800, 11.3), domain.FilterOutOfOrder)
+	lap2 := r.passWithHold(1, 35.119, 600, 47.3)
+	r.expectAccepted(lap2)
+
+	// Lap 3 (real T1 arrives 2.769 s into Lap 3 = 4.003 s after the skipped return-lane T1):
+	r.expectAccepted(r.passWithHold(2, 37.888, 600, 14.0))
+	r.expectAccepted(r.passWithHold(3, 41.670, 600, 25.7))
+	r.expectAccepted(r.passWithHold(4, 44.261, 600, 22.1))
+	r.expectFiltered(r.passWithHold(2, 47.280, 800, 21.2), domain.FilterOutOfOrder)
+	lap3 := r.passWithHold(1, 48.590, 600, 35.1)
+	r.expectAccepted(lap3)
+
+	// Lap 4 (real T1 arrives 4.062 s after the skipped return-lane T1):
+	r.expectAccepted(r.passWithHold(2, 51.342, 600, 18.0))
+	r.expectAccepted(r.passWithHold(3, 54.504, 600, 27.3))
+	r.expectAccepted(r.passWithHold(4, 56.969, 600, 22.0))
+	r.expectFiltered(r.passWithHold(2, 59.822, 800, 20.4), domain.FilterOutOfOrder)
+	lap4 := r.passWithHold(1, 61.876, 600, 40.5)
+	r.expectAccepted(lap4)
+
+	// Lap 5 (real T1 arrives 4.641 s after the skipped return-lane T1):
+	r.expectAccepted(r.passWithHold(2, 64.463, 600, 17.5))
+	r.expectAccepted(r.passWithHold(3, 67.141, 600, 22.2))
+	r.expectAccepted(r.passWithHold(4, 69.537, 600, 21.3))
+	r.expectFiltered(r.passWithHold(2, 72.189, 800, 15.5), domain.FilterOutOfOrder)
+	lap5 := r.passWithHold(1, 73.741, 600, 35.3)
+	r.expectAccepted(lap5)
+
+	// Lap 6:
+	r.expectAccepted(r.passWithHold(2, 78.093, 600, 16.0))
+	r.expectAccepted(r.passWithHold(3, 81.121, 600, 17.4))
+	r.expectAccepted(r.passWithHold(4, 83.644, 600, 17.3))
+	r.expectFiltered(r.passWithHold(2, 86.732, 800, 10.9), domain.FilterOutOfOrder)
+	lap6 := r.passWithHold(1, 87.640, 600, 73.4)
+	r.expectAccepted(lap6)
+
+	for idx, out := range []crossingOutcome{lap2, lap3, lap4, lap5, lap6} {
+		lapNum := idx + 2
+		if out.lap == nil || len(out.lap.Sectors) != 4 {
+			t.Fatalf("Lap %d: expected 4 canonical sections (S1..S4), got %+v", lapNum, out.lap)
+		}
+		wantPairs := [4][2]uint8{{1, 2}, {2, 3}, {3, 4}, {4, 1}}
+		for si, wp := range wantPairs {
+			got := out.lap.Sectors[si]
+			if got.FromGateID != wp[0] || got.ToGateID != wp[1] || got.SplitSeconds <= 0 {
+				t.Fatalf("Lap %d S%d: expected %d->%d > 0s, got %+v", lapNum, si+1, wp[0], wp[1], got)
+			}
+		}
+	}
+}
+
+func TestMalformedSplicedFingerprintIsRejected(t *testing.T) {
+	e := NewRealEngine()
+	if id, err := e.RegisterTimerHello("53E01C4D9C", false, "T2"); err == nil || id != 0 {
+		t.Fatalf("expected 10-hex spliced BLE fingerprint to be rejected, got id=%d err=%v", id, err)
 	}
 }

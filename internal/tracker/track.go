@@ -44,6 +44,9 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 		return 0, ErrGateNameTooLong
 	}
 	fingerprint := strings.ToUpper(strings.TrimSpace(req.Fingerprint))
+	if fingerprint != "" && !domain.IsValidSlapRFFingerprint(fingerprint) {
+		return 0, fmt.Errorf("invalid 8-hex timer fingerprint %q", fingerprint)
+	}
 	ver := domain.LatestFirmwareVersion
 
 	e.mu.Lock()

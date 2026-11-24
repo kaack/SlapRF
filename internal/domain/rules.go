@@ -325,11 +325,12 @@ const (
 	FilterSpike      FilterReason = "SPIKE"        // Short RF / Wi-Fi spike lacking minimum crossing time or curve area
 	FilterMinLap     FilterReason = "MIN_LAP"      // Same gate again before the minimum lap time
 	FilterLapTooLong FilterReason = "LAP_TOO_LONG" // Crossing accepted, but the lap exceeded maximum lap time
+	FilterOutOfOrder FilterReason = "OUT_OF_ORDER" // Sector gate detected before Start/Finish or behind current track order
 )
 
 // IsValid reports whether `r` is one of the supported FilterReason values.
 func (r FilterReason) IsValid() bool {
-	return r == FilterSpike || r == FilterMinLap || r == FilterLapTooLong
+	return r == FilterSpike || r == FilterMinLap || r == FilterLapTooLong || r == FilterOutOfOrder
 }
 
 // FilteredDetection is a detection the timing rules set aside, kept for inspection on the chart.

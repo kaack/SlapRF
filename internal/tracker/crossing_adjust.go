@@ -136,6 +136,7 @@ func rebuildLapSectorsFromCrossings(
 ) []domain.SectorSplit {
 	var sectorEvents []domain.GateCrossingEvent
 	lastGate := sfGateID
+	lastIdx := indexOfGate(orderedGates, sfGateID)
 	for _, c := range crossings {
 		if c.SlotIndex != slotIndex {
 			continue
@@ -149,8 +150,15 @@ func rebuildLapSectorsFromCrossings(
 		if c.GateID == lastGate {
 			continue
 		}
+		candIdx := indexOfGate(orderedGates, c.GateID)
+		if lastIdx >= 0 && candIdx >= 0 && candIdx <= lastIdx {
+			continue
+		}
 		sectorEvents = append(sectorEvents, c)
 		lastGate = c.GateID
+		if candIdx >= 0 {
+			lastIdx = candIdx
+		}
 	}
 
 	rebuilt := make([]domain.SectorSplit, 0, len(sectorEvents)+1)
@@ -281,12 +289,17 @@ func (e *Engine) rebuildPilotLiveProgressFromCrossingsLocked(slotIndex int, orde
 		lastGateID:     lastSf.GateID,
 		lastGateTimeUs: lastSf.TimestampUs,
 	}
+	lastIdx := indexOfGate(orderedGates, lastSf.GateID)
 	for i := range e.crossings {
 		c := e.crossings[i]
 		if c.SlotIndex != slotIndex || c.TimestampUs <= lastSf.TimestampUs {
 			continue
 		}
 		if c.IsStartFinish || c.GateID == sfGateID || c.GateID == prog.lastGateID {
+			continue
+		}
+		candIdx := indexOfGate(orderedGates, c.GateID)
+		if lastIdx >= 0 && candIdx >= 0 && candIdx <= lastIdx {
 			continue
 		}
 		splitSec := round3(seconds(prog.lastGateTimeUs, c.TimestampUs))
@@ -321,6 +334,9 @@ func (e *Engine) rebuildPilotLiveProgressFromCrossingsLocked(slotIndex int, orde
 		prog.prevGateTimeUs = prog.lastGateTimeUs
 		prog.lastGateID = c.GateID
 		prog.lastGateTimeUs = c.TimestampUs
+		if candIdx >= 0 {
+			lastIdx = candIdx
+		}
 	}
 	e.progress[slotIndex] = prog
 }

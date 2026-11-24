@@ -88,6 +88,16 @@ func (e *Engine) applyCrossingLocked(pilot domain.PilotSlot, gate domain.TrackGa
 		}
 	}
 
+	ordered := e.orderedGatesLocked()
+	if !isSF && prog.lapStartUs == 0 && len(ordered) > 0 && ordered[0].Role == domain.GateRoleStartFinish {
+		return reject(
+			domain.FilterOutOfOrder,
+			"%s before %s (Start/Finish) - waiting for lap start",
+			e.gateLabelLocked(gate.GateID),
+			e.gateLabelLocked(ordered[0].GateID),
+		)
+	}
+
 	// 3. Minimum lap time. At Start/Finish it is measured from the lap start; every timer also
 	// enforces MinLapSec independently against its own previous accepted crossing for that pilot.
 	// Safety net on sector gates: if a weak approach ripple or distant cross-talk bump barely
@@ -146,6 +156,23 @@ func (e *Engine) applyCrossingLocked(pilot domain.PilotSlot, gate domain.TrackGa
 		}
 		if supersededNote == nil {
 			return reject(domain.FilterMinLap, "%s again after %.2fs - quicker than min lap (%.1fs)", e.gateLabelLocked(gate.GateID), sinceSameGate, r.MinLapSec)
+		}
+	}
+
+	// 4. Sequential track order: missing intermediate gates is allowed, but sector gates
+	// must advance strictly forward around the loop before returning to Start/Finish.
+	if !isSF && prog.lapStartUs != 0 && prog.lastGateID != 0 && len(ordered) >= 2 {
+		lastIdx := indexOfGate(ordered, prog.lastGateID)
+		candIdx := indexOfGate(ordered, gate.GateID)
+		if lastIdx >= 0 && candIdx >= 0 && candIdx <= lastIdx {
+			nextIdx := (lastIdx + 1) % len(ordered)
+			return reject(
+				domain.FilterOutOfOrder,
+				"%s out of track order after %s (expecting %s)",
+				e.gateLabelLocked(gate.GateID),
+				e.gateLabelLocked(prog.lastGateID),
+				e.gateLabelLocked(ordered[nextIdx].GateID),
+			)
 		}
 	}
 

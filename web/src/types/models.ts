@@ -1287,7 +1287,7 @@ export type GateRuleOverrides = Partial<Record<NumericGateRuleKey, number>> & {
   beepMode?: CrossingBeepMode;
 };
 
-export type FilterReason = "SPIKE" | "MIN_LAP" | "LAP_TOO_LONG";
+export type FilterReason = "SPIKE" | "MIN_LAP" | "LAP_TOO_LONG" | "OUT_OF_ORDER";
 
 /** A detection the timing rules set aside (or a lap that was too long to count). */
 export interface FilteredDetection {

@@ -36,6 +36,7 @@ func TestGateOverrideOnlyAffectsThatGate(t *testing.T) {
 	// G3 still uses the global 5 s minimum lap time and 120 ms minimum crossing time.
 	r.expectAccepted(r.passWithHold(3, 21.0, 150, 3.5))
 	r.expectFiltered(r.pass(3, 24.0), domain.FilterMinLap)
+	r.expectAccepted(r.pass(1, 25.0))
 	r.expectAccepted(r.pass(3, 26.5))
 }
 

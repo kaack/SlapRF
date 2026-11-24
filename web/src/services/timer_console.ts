@@ -74,12 +74,16 @@ const PAIRED_SIM_BLE_HUB_KEY = "slaprf.ui.pairedSimBleHub.v1";
 let backendKnownTimersCache: KnownHardwareTimer[] = [];
 let backendKnownTimersHydrated = false;
 
+function isValidSlapRfFingerprint(fp: string): boolean {
+  return /^[0-9A-F]{8}$/.test(fp) && fp !== "00000000" && fp !== "00000001" && !fp.startsWith("SIM000") && !fp.startsWith("53504B");
+}
+
 export function getKnownHardwareTimers(): KnownHardwareTimer[] {
   const map = new Map<string, KnownHardwareTimer>();
   for (const item of backendKnownTimersCache) {
     if (item && typeof item.fp === "string") {
       const fp = item.fp.toUpperCase();
-      if (fp && fp !== "00000001" && !fp.startsWith("SIM000") && !fp.startsWith("53504B")) {
+      if (isValidSlapRfFingerprint(fp)) {
         map.set(fp, { ...item, fp });
       }
     }
@@ -94,7 +98,7 @@ export function getKnownHardwareTimers(): KnownHardwareTimer[] {
             if (item && typeof item === "object" && typeof (item as KnownHardwareTimer).fp === "string") {
               const t = item as KnownHardwareTimer;
               const fp = t.fp.toUpperCase();
-              if (fp && fp !== "00000001" && !fp.startsWith("SIM000") && !fp.startsWith("53504B")) {
+              if (isValidSlapRfFingerprint(fp)) {
                 const prev = map.get(fp);
                 if (!prev || (t.lastSeenMs ?? 0) >= (prev.lastSeenMs ?? 0)) {
                   map.set(fp, { ...prev, ...t, fp });
@@ -114,7 +118,7 @@ export function getKnownHardwareTimers(): KnownHardwareTimer[] {
 export function recordKnownHardwareTimer(entry: Partial<KnownHardwareTimer> & { fp: string }): void {
   if (isSimulatedUsbMode()) return;
   const fp = (entry.fp || "").trim().toUpperCase();
-  if (!fp || fp === "00000001" || fp.startsWith("SIM000") || fp.startsWith("53504B")) return;
+  if (!isValidSlapRfFingerprint(fp)) return;
   const list = getKnownHardwareTimers();
   const byFp = new Map<string, KnownHardwareTimer>(list.map((t) => [t.fp.toUpperCase(), t]));
   const prev = byFp.get(fp);
