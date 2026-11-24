@@ -183,10 +183,9 @@ const LEGEND_REFRESH_MS = 150;
 const MIN_CALIB_SPIN_MS = 480;
 /** How close (px) the cursor must be to a pass marker to show its details. */
 const MARKER_HIT_PX = 7;
-/** Threshold tags: height, and how close (px) to a threshold line counts as grabbing it. */
+/** Threshold tags: pill height and vertical spacing. */
 const TAG_H = 18;
 const TAG_GAP = 4;
-const LINE_HIT_PX = 5;
 /** Room on the right for the threshold tags. */
 const TAG_GUTTER = 84;
 const RSSI_CHART_STORAGE_KEY = "slaprf.ui.rssi_chart.v1";
@@ -1054,7 +1053,7 @@ export class PilotRssiChart extends Component {
       this.hoverY = y;
       const isTouch = e.pointerType === "touch";
 
-      const grabbedBox = this.tagBoxAt(x, y);
+      const grabbedBox = this.tagBoxAt(x, y, isTouch);
       if (grabbedBox !== null) {
         const curDbm =
           grabbedBox.kind === "enter"
@@ -1089,16 +1088,6 @@ export class PilotRssiChart extends Component {
           grabOffsetPx: grabbedCrossing.inPill ? x - grabbedCrossing.box.lineX : 0,
         };
         host.classList.add("is-dragging", "is-over-crossing");
-        return;
-      }
-
-      const grabbedLine = this.tagLineAt(x, y);
-      if (grabbedLine !== null) {
-        const curDbm =
-          grabbedLine.kind === "enter"
-            ? this.thresholdOf(grabbedLine.gateId).dbm
-            : this.exitThresholdOf(grabbedLine.gateId).dbm;
-        this.tagDrag = { gateId: grabbedLine.gateId, kind: grabbedLine.kind, dbm: curDbm };
         return;
       }
 
@@ -1283,11 +1272,12 @@ export class PilotRssiChart extends Component {
       }
 
       if (!this.drag) {
-        const overTagBox = this.tagBoxAt(x, y) !== null;
-        const crossingHit = !overTagBox ? this.crossingAt(x, y, e.pointerType === "touch") : null;
+        const isTouchMove = e.pointerType === "touch";
+        const overTagBox = this.tagBoxAt(x, y, isTouchMove) !== null;
+        const crossingHit = !overTagBox ? this.crossingAt(x, y, isTouchMove) : null;
         const overCrossingDelete = Boolean(crossingHit?.inDelete);
         const overCrossing = crossingHit !== null && !overCrossingDelete;
-        const overTag = overTagBox || (!overCrossing && !overCrossingDelete && this.tagLineAt(x, y) !== null);
+        const overTag = overTagBox;
         const overYAxis =
           !overTag &&
           !overCrossing &&
@@ -1946,33 +1936,21 @@ export class PilotRssiChart extends Component {
     this.renderCalib();
   }
 
-  /** Threshold pill box directly under `(x, y)`, if any. */
-  private tagBoxAt(x: number, y: number): { gateId: number; kind: "enter" | "exit" } | null {
+  /** Threshold pill handle directly under `(x, y)`, if any. Thresholds drag strictly by their pill handles. */
+  private tagBoxAt(x: number, y: number, isTouch = false): { gateId: number; kind: "enter" | "exit" } | null {
     if (!this.canEditLines) return null;
+    const pad = isTouch ? 4 : 0;
     for (const t of this.tags) {
-      if (x >= t.x && x <= t.x + t.w && y >= t.y && y <= t.y + TAG_H) {
+      if (x >= t.x - pad && x <= t.x + t.w + pad && y >= t.y - pad && y <= t.y + TAG_H + pad) {
         return { gateId: t.gateId, kind: t.kind };
       }
     }
     return null;
   }
 
-  /** Horizontal threshold line directly under `(x, y)`, if any. */
-  private tagLineAt(x: number, y: number): { gateId: number; kind: "enter" | "exit" } | null {
-    if (!this.canEditLines) return null;
-    if (x < this.padL || x > this.padL + this.plot.w) return null;
-    let best: TagBox | null = null;
-    for (const t of this.tags) {
-      if (Math.abs(y - t.lineY) <= LINE_HIT_PX && (!best || Math.abs(y - t.lineY) < Math.abs(y - best.lineY))) {
-        best = t;
-      }
-    }
-    return best ? { gateId: best.gateId, kind: best.kind } : null;
-  }
-
-  /** Gate & kind whose threshold tag (or line) is under the pointer, if any. Tags win over lines. */
+  /** Gate & kind whose threshold pill handle is under the pointer, if any. */
   private tagAt(x: number, y: number): { gateId: number; kind: "enter" | "exit" } | null {
-    return this.tagBoxAt(x, y) ?? this.tagLineAt(x, y);
+    return this.tagBoxAt(x, y);
   }
 
   /** Timed crossing pill, delete `×` button, or vertical line under `(x, y)` when unlocked & paused. */

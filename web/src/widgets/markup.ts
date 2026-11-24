@@ -11,12 +11,12 @@ export const FILTER_LABELS: Record<FilterReason, string> = {
   OUT_OF_ORDER: "Out of order",
 };
 
-/** Compact 2-letter chart codes (`T1-OO`, `T1-TS`, `T1-TL`, `T1-SP`) for rejected passes. */
+/** Short chart codes (`T1-OOO`, `T1-SHORT`, `T1-LONG`, `T1-NOISE`) for rejected passes. */
 export const FILTER_SHORT_CODES: Record<FilterReason, string> = {
-  OUT_OF_ORDER: "OO",
-  MIN_LAP: "TS",
-  LAP_TOO_LONG: "TL",
-  SPIKE: "SP",
+  OUT_OF_ORDER: "OOO",
+  MIN_LAP: "SHORT",
+  LAP_TOO_LONG: "LONG",
+  SPIKE: "NOISE",
 };
 
 /** Colour chip for a section split in pilot lap tables: fastest (neon accent), normal, or >10% off best. */

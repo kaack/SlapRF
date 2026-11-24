@@ -1069,7 +1069,7 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       const box15DuringDrag = liveBoxes.find((b) => b.eventId === 15);
       expect(box15DuringDrag).toBeDefined();
       expect(box15DuringDrag!.counted).toBe(false);
-      expect(box15DuringDrag!.title).toBe("T1-TS");
+      expect(box15DuringDrag!.title).toBe("T1-SHORT");
       expect(box15DuringDrag!.pillY > midY).toBe(true);
       expect(root.querySelector(".scope-toolbar [data-slot='chart-actions']")).not.toBeNull();
       hostEl.dispatchEvent(
@@ -1079,6 +1079,83 @@ describe("widgets/Toast & TimingRulesEditor", () => {
           pointerType: "mouse",
         })
       );
+
+      // Swiping directly on the Enter threshold horizontal line inside the plot must NOT grab Enter/Exit;
+      // only dragging the right-side threshold handle pill moves thresholds!
+      await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
+      const tags = (chart as unknown as { tags: Array<{ gateId: number; kind: "enter" | "exit"; x: number; y: number; w: number; lineY: number }> }).tags;
+      const enterTag = tags.find((t) => t.gateId === 2 && t.kind === "enter");
+      expect(enterTag).toBeDefined();
+      const setThrCallsBefore = calls.filter((c) => c.method === "setGateThresholds").length;
+      const plotSafeX = 110; // Well inside the plot, away from crossing lines and right-side pill handles
+      hostEl.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: rect.left + plotSafeX,
+          clientY: rect.top + enterTag!.lineY,
+          pointerId: 4,
+          pointerType: "touch",
+        })
+      );
+      hostEl.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          clientX: rect.left + plotSafeX - 40,
+          clientY: rect.top + enterTag!.lineY + 25,
+          pointerId: 4,
+          pointerType: "touch",
+        })
+      );
+      hostEl.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          clientX: rect.left + plotSafeX - 40,
+          clientY: rect.top + enterTag!.lineY + 25,
+          pointerId: 4,
+          pointerType: "touch",
+        })
+      );
+      await flushMicrotasks();
+      expect(calls.filter((c) => c.method === "setGateThresholds").length).toBe(setThrCallsBefore);
+
+      // Dragging the Enter handle pill box itself DOES adjust the threshold!
+      await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
+      const updatedTags = (chart as unknown as { tags: Array<{ gateId: number; kind: "enter" | "exit"; x: number; y: number; w: number; lineY: number }> }).tags;
+      const enterTagNow = updatedTags.find((t) => t.gateId === 2 && t.kind === "enter");
+      expect(enterTagNow).toBeDefined();
+      const handleCenterX = enterTagNow!.x + enterTagNow!.w * 0.5;
+      const handleCenterY = enterTagNow!.y + 9;
+      hostEl.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: rect.left + handleCenterX,
+          clientY: rect.top + handleCenterY,
+          pointerId: 5,
+          pointerType: "touch",
+        })
+      );
+      hostEl.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          clientX: rect.left + handleCenterX,
+          clientY: rect.top + handleCenterY + 24,
+          pointerId: 5,
+          pointerType: "touch",
+        })
+      );
+      hostEl.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          clientX: rect.left + handleCenterX,
+          clientY: rect.top + handleCenterY + 24,
+          pointerId: 5,
+          pointerType: "touch",
+        })
+      );
+      await flushMicrotasks();
+      expect(calls.filter((c) => c.method === "setGateThresholds").length).toBe(setThrCallsBefore + 1);
     } finally {
       chart.destroy();
     }
