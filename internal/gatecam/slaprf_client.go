@@ -34,12 +34,13 @@ type slaprfClient struct {
 	onCrossing func(ev domain.GateCrossingEvent)
 	onStatus   func()
 
-	mu          sync.RWMutex
-	cfg         LinkConfig
-	syncSt      SyncStatus
-	gateToTimer map[uint8]uint8
-	rssiRing    map[string][]rssiPoint // key: "timerId:slotIndex"
-	latestRSSI  [domain.MaxPilotSlots]float32
+	mu           sync.RWMutex
+	cfg          LinkConfig
+	syncSt       SyncStatus
+	gateToTimer  map[uint8]uint8
+	startTimerID uint8
+	rssiRing     map[string][]rssiPoint // key: "timerId:slotIndex"
+	latestRSSI   [domain.MaxPilotSlots]float32
 
 	reconnCh chan struct{}
 	stopCh   chan struct{}
@@ -348,6 +349,7 @@ func (c *slaprfClient) syncClockAndMetadata(ctx context.Context, hc *http.Client
 
 func (c *slaprfClient) applyGatesLocked(gates []domain.TrackGate) {
 	out := make([]GateInfo, 0, len(gates))
+	var startTimer uint8
 	for _, g := range gates {
 		out = append(out, GateInfo{
 			GateID: g.GateID,
@@ -357,7 +359,15 @@ func (c *slaprfClient) applyGatesLocked(gates []domain.TrackGate) {
 		if g.AssignedTimerID > 0 {
 			c.gateToTimer[g.GateID] = g.AssignedTimerID
 		}
+		if g.Role == domain.GateRoleStartFinish {
+			if g.AssignedTimerID > 0 {
+				startTimer = g.AssignedTimerID
+			} else {
+				startTimer = g.GateID
+			}
+		}
 	}
+	c.startTimerID = startTimer
 	c.syncSt.Gates = out
 }
 
@@ -401,7 +411,9 @@ func (c *slaprfClient) ingestBinaryTelemetry(b []byte) {
 		for s := 0; s < maxSlots; s++ {
 			dbm := math.Float32frombits(binary.LittleEndian.Uint32(b[o+20+4*s : o+24+4*s]))
 			if dbm > -119 && dbm < 0 {
-				c.latestRSSI[s] = dbm
+				if c.startTimerID == 0 || timerID == c.startTimerID {
+					c.latestRSSI[s] = dbm
+				}
 				key := fmt.Sprintf("%d:%d", timerID, s+1)
 				ring := append(c.rssiRing[key], rssiPoint{tsUs: tsUs, dbm: dbm})
 				if len(ring) > 640 {

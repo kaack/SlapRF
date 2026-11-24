@@ -58,7 +58,7 @@ interface SyncStatus {
   minRttUs: number;
   syncErrorBoundMs: number;
   lastError?: string;
-  pilots?: Array<{ slotIndex: number; callsign: string; frequencyMhz: number }>;
+  pilots?: Array<{ slotIndex: number; callsign: string; frequencyMhz: number; color?: string }>;
   gates?: Array<{ gateId: number; name: string; role: string }>;
   liveRssi?: Array<{ slotIndex: number; callsign: string; rssiDbm: number }>;
   lanUrls?: string[];
@@ -165,14 +165,65 @@ declare global {
   }
 }
 
+/* Crisp 2px Geometric Stroke Icons (Matching SlapRF web/src/core/icons.ts) */
+const svg = (body: string, size = 16): string =>
+  `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" shape-rendering="geometricPrecision" aria-hidden="true">${body}</svg>`;
+
+const icons = {
+  slaprf: (s = 22) =>
+    svg(
+      `<g transform="translate(0.6 -1.1)"><path d="M18.21 16.30A8.2 8.2 0 1 1 13.30 5.79" stroke-width="2.15"/><circle cx="10.5" cy="13.5" r="1.8" fill="currentColor" stroke="none"/><path d="M10.5 13.5L15.2 9.8" stroke-width="2.15"/><path d="M15.77 7.22A8.2 8.2 0 0 1 18.70 13.50" stroke-width="2.15"/><path d="M17.64 4.36A11.6 11.6 0 0 1 22.09 13.90" stroke-width="2.15" opacity="0.65"/></g>`,
+      s
+    ),
+  camera: (s = 18) =>
+    svg(
+      `<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3.2"/>`,
+      s
+    ),
+  passes: (s = 18) =>
+    svg(
+      `<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M7 4v16M17 4v16M2 9h5M17 9h5M2 15h5M17 15h5"/>`,
+      s
+    ),
+  chart: (s = 18) => svg(`<path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/>`, s),
+  settings: (s = 18) =>
+    svg(
+      `<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>`,
+      s
+    ),
+  lock: (s = 15) => svg(`<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>`, s),
+  unlock: (s = 15) => svg(`<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.8-1"/>`, s),
+  flip: (s = 15) => svg(`<path d="m17 3 4 4-4 4"/><path d="M3 7h18"/><path d="m7 21-4-4 4-4"/><path d="M21 17H3"/>`, s),
+  chevronLeft: (s = 16) => svg(`<path d="M15 6l-6 6 6 6"/>`, s),
+  chevronRight: (s = 16) => svg(`<path d="M9 6l6 6-6 6"/>`, s),
+  play: (s = 14) => svg(`<path d="M7 4l13 8-13 8z"/>`, s),
+  pause: (s = 14) => svg(`<path d="M9 5v14M15 5v14"/>`, s),
+  pin: (s = 15) => svg(`<path d="M8 3h8"/><path d="M9 3v5l-3 3v2h12v-2l-3-3V3"/><path d="M12 13v8"/>`, s),
+  reset: (s = 15) => svg(`<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>`, s),
+  ban: (s = 15) => svg(`<circle cx="12" cy="12" r="9"/><path d="m5.7 5.7 12.6 12.6"/>`, s),
+  check: (s = 15) => svg(`<path d="M20 6 9 17l-5-5"/>`, s),
+  download: (s = 15) => svg(`<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>`, s),
+  trash: (s = 15) => svg(`<path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>`, s),
+  plus: (s = 15) => svg(`<path d="M12 5v14M5 12h14"/>`, s),
+  moon: (s = 14) => svg(`<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>`, s),
+  sun: (s = 14) =>
+    svg(
+      `<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>`,
+      s
+    ),
+};
+
 const isNativeUnderlay = typeof window.GateCamAndroid !== "undefined";
 if (isNativeUnderlay) {
   document.documentElement.classList.add("is-native-underlay");
   document.body.classList.add("is-native-underlay");
 }
 
+type RouteId = "live" | "passes" | "inspector" | "stats" | "settings";
+
 let state: AppState | null = null;
-let route: "live" | "inspector" | "stats" = "live";
+let route: RouteId = "live";
+let prevRouteBeforeInspect: "live" | "passes" | "stats" = "live";
 let inspectPassId = 0;
 let inspectPass: PassRecord | null = null;
 let inspectFrameIdx = 0;
@@ -180,13 +231,29 @@ let showGateOverlay = true;
 let showBlobOverlay = true;
 let showMaskMode = false;
 let slowPlayTimer: number | null = null;
-let setupOpen = false;
+let passFilter: "all" | "valid" | "review" = "all";
 let dragHandle: "p1" | "p2" | null = null;
 let previewPollTimer: number | null = null;
 let tapFocusSpot: { x: number; y: number } | null = null;
 let tapFocusTimer: number | null = null;
+let settingsDraftLookback = 450;
+let settingsDraftModel = "mog2";
 
 const appRoot = document.getElementById("app")!;
+
+function getTheme(): "dark" | "light" {
+  return document.documentElement.dataset.theme === "light" ? "light" : "dark";
+}
+
+function setTheme(mode: "dark" | "light"): void {
+  document.documentElement.dataset.theme = mode;
+  try {
+    localStorage.setItem("slaprf.gatecam.theme.v1", mode);
+  } catch {
+    // ignore storage errors
+  }
+  render();
+}
 
 function esc(s: string): string {
   return String(s ?? "")
@@ -197,7 +264,7 @@ function esc(s: string): string {
 }
 
 function fmtSigned(v: number | undefined | null, digits = 1, unit = "ms"): string {
-  if (v === undefined || v === null || !Number.isFinite(v)) return "—";
+  if (v === undefined || v === null || !Number.isFinite(v)) return "--";
   const sign = v >= 0 ? "+" : "";
   return `${sign}${v.toFixed(digits)} ${unit}`;
 }
@@ -221,6 +288,9 @@ function syncRouteFromHash(): void {
   if (h.startsWith("#/pass/")) {
     const id = parseInt(h.slice("#/pass/".length), 10);
     if (id > 0) {
+      if (route === "live" || route === "passes" || route === "stats") {
+        prevRouteBeforeInspect = route;
+      }
       route = "inspector";
       if (inspectPassId !== id) {
         inspectPassId = id;
@@ -232,13 +302,19 @@ function syncRouteFromHash(): void {
       return;
     }
   }
-  if (h === "#/stats") {
+  if (h === "#/passes") {
+    route = "passes";
+  } else if (h === "#/stats") {
     route = "stats";
-    updateNativeUnderlayVisibility();
-    render();
-    return;
+  } else if (h === "#/settings") {
+    route = "settings";
+    if (state) {
+      settingsDraftLookback = state.camera.lookbackHalfMs || 450;
+      settingsDraftModel = state.camera.motionModel || "mog2";
+    }
+  } else {
+    route = "live";
   }
-  route = "live";
   updateNativeUnderlayVisibility();
   render();
 }
@@ -257,9 +333,9 @@ async function loadPassDetail(passId: number): Promise<void> {
 }
 
 function updateNativeUnderlayVisibility(): void {
-  const isLive = route === "live" && !setupOpen;
-  document.documentElement.classList.toggle("route-live", route === "live");
-  document.body.classList.toggle("route-live", route === "live");
+  const isLive = route === "live";
+  document.documentElement.classList.toggle("route-live", isLive);
+  document.body.classList.toggle("route-live", isLive);
   if (window.GateCamAndroid) {
     window.GateCamAndroid.setPreviewVisible(isLive);
     if (isLive) {
@@ -267,14 +343,14 @@ function updateNativeUnderlayVisibility(): void {
     }
   }
   if (!isNativeUnderlay) {
-    if (route === "live" && previewPollTimer === null) {
+    if (isLive && previewPollTimer === null) {
       previewPollTimer = window.setInterval(() => {
         const img = document.querySelector<HTMLImageElement>("[data-remote-preview]");
         if (img && route === "live") {
           img.src = `/v1/gatecam/preview.jpg?t=${Date.now()}`;
         }
       }, 180);
-    } else if (route !== "live" && previewPollTimer !== null) {
+    } else if (!isLive && previewPollTimer !== null) {
       clearInterval(previewPollTimer);
       previewPollTimer = null;
     }
@@ -293,7 +369,7 @@ window.addEventListener("resize", () => requestAnimationFrame(syncNativePreviewB
 window.addEventListener("hashchange", syncRouteFromHash);
 
 window.addEventListener("keydown", (e) => {
-  if (route !== "inspector" || !inspectPass || setupOpen) return;
+  if (route !== "inspector" || !inspectPass) return;
   if (e.key === "ArrowLeft") {
     e.preventDefault();
     stepInspectorFrame(-1);
@@ -341,7 +417,7 @@ function currentFrameDims(): { w: number; h: number } {
 }
 
 function fmtCamTelemetry(ci: CameraStatus): string {
-  const parts: string[] = [];
+  const parts: string[] = [`${Math.round(ci.actualFps)}fps`];
   if (ci.exposureUs && ci.exposureUs > 0) {
     if (ci.exposureUs <= 8000) {
       parts.push(`1/${Math.max(100, Math.round(1_000_000 / ci.exposureUs))}s`);
@@ -349,12 +425,18 @@ function fmtCamTelemetry(ci: CameraStatus): string {
       parts.push(`${(ci.exposureUs / 1000).toFixed(1)}ms`);
     }
   }
-  if (ci.iso && ci.iso > 0) {
-    parts.push(`ISO ${ci.iso}`);
+  if (ci.ringSpanMs > 0) {
+    parts.push(`${(ci.ringSpanMs / 1000).toFixed(1)}s`);
   }
-  parts.push(`${ci.actualFps.toFixed(0)}fps`);
-  parts.push(`${(ci.ringSpanMs / 1000).toFixed(1)}s`);
   return parts.join(" · ");
+}
+
+function fmtStartGateRssi(sync: SyncStatus): string {
+  const items = sync.liveRssi ?? [];
+  if (items.length > 0) {
+    return items.map((r) => `${esc(r.callsign)} <span class="mono">${r.rssiDbm.toFixed(0)} dBm</span>`).join(" · ");
+  }
+  return sync.connected ? "Start Gate ready" : "Waiting for SlapRF";
 }
 
 function gateGeometrySVG(g: GateLine, interactive: boolean, W = 640, H = 360): string {
@@ -372,54 +454,53 @@ function gateGeometrySVG(g: GateLine, interactive: boolean, W = 640, H = 360): s
 
   const mx = (x1 + x2) * 0.5;
   const my = (y1 + y2) * 0.5;
-  const ax = mx + nx * 56;
-  const ay = my + ny * 56;
-  // Arrowhead wings
-  const wx1 = ax - nx * 12 + (dx / len) * 7;
-  const wy1 = ay - ny * 12 + (dy / len) * 7;
-  const wx2 = ax - nx * 12 - (dx / len) * 7;
-  const wy2 = ay - ny * 12 - (dy / len) * 7;
+  const ax = mx + nx * 46;
+  const ay = my + ny * 46;
+  const wx1 = ax - nx * 10 + (dx / len) * 6;
+  const wy1 = ay - ny * 10 + (dy / len) * 6;
+  const wx2 = ax - nx * 10 - (dx / len) * 6;
+  const wy2 = ay - ny * 10 - (dy / len) * 6;
+
+  const volt = "#d4ff3a";
+  const voltCorridor = "rgba(212, 255, 58, 0.24)";
 
   return `
-    <!-- Analysis Band (±bandPx) -->
+    <!-- Corridor Bounds -->
     <line x1="${(x1 - nx * bandPx).toFixed(1)}" y1="${(y1 - ny * bandPx).toFixed(1)}"
           x2="${(x2 - nx * bandPx).toFixed(1)}" y2="${(y2 - ny * bandPx).toFixed(1)}"
-          stroke="rgba(34,211,238,0.32)" stroke-width="1.5" stroke-dasharray="6 5" />
+          stroke="${voltCorridor}" stroke-width="1.25" stroke-dasharray="5 5" />
     <line x1="${(x1 + nx * bandPx).toFixed(1)}" y1="${(y1 + ny * bandPx).toFixed(1)}"
           x2="${(x2 + nx * bandPx).toFixed(1)}" y2="${(y2 + ny * bandPx).toFixed(1)}"
-          stroke="rgba(34,211,238,0.32)" stroke-width="1.5" stroke-dasharray="6 5" />
+          stroke="${voltCorridor}" stroke-width="1.25" stroke-dasharray="5 5" />
 
-    <!-- Primary Gate Plane Sightline -->
+    <!-- Start Gate Sightline -->
     <line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"
-          stroke="#22d3ee" stroke-width="2.6" />
+          stroke="${volt}" stroke-width="2.2" />
 
-    <!-- Flight Direction Normal Arrow -->
+    <!-- Flight Direction Vector -->
     <g data-flip-dir="1" style="cursor:${interactive ? "pointer" : "default"}">
       <line x1="${mx.toFixed(1)}" y1="${my.toFixed(1)}" x2="${ax.toFixed(1)}" y2="${ay.toFixed(1)}"
-            stroke="#fbbf24" stroke-width="3" />
+            stroke="${volt}" stroke-width="2.2" />
       <polygon points="${ax.toFixed(1)},${ay.toFixed(1)} ${wx1.toFixed(1)},${wy1.toFixed(1)} ${wx2.toFixed(1)},${wy2.toFixed(1)}"
-               fill="#fbbf24" />
+               fill="${volt}" />
       <circle cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="18" fill="transparent" />
     </g>
 
     ${
       interactive
         ? `
-      <!-- Draggable Endpoints P1 & P2 -->
-      <g data-handle="p1" style="cursor:${g.locked ? "not-allowed" : "grab"}">
-        <circle cx="${x1.toFixed(1)}" cy="${y1.toFixed(1)}" r="22" fill="rgba(34,211,238,0.14)" stroke="#22d3ee" stroke-width="2" />
-        <circle cx="${x1.toFixed(1)}" cy="${y1.toFixed(1)}" r="4" fill="#22d3ee" />
-        <text x="${(x1 + 14).toFixed(1)}" y="${(y1 + 4).toFixed(1)}" fill="#22d3ee" font-size="11" font-family="monospace" font-weight="bold">P1</text>
+      <g data-handle="p1" style="cursor:${g.locked ? "default" : "grab"}">
+        <circle cx="${x1.toFixed(1)}" cy="${y1.toFixed(1)}" r="18" fill="rgba(11, 12, 15, 0.38)" stroke="${volt}" stroke-width="1.8" />
+        <circle cx="${x1.toFixed(1)}" cy="${y1.toFixed(1)}" r="3.5" fill="${volt}" />
       </g>
-      <g data-handle="p2" style="cursor:${g.locked ? "not-allowed" : "grab"}">
-        <circle cx="${x2.toFixed(1)}" cy="${y2.toFixed(1)}" r="22" fill="rgba(34,211,238,0.14)" stroke="#22d3ee" stroke-width="2" />
-        <circle cx="${x2.toFixed(1)}" cy="${y2.toFixed(1)}" r="4" fill="#22d3ee" />
-        <text x="${(x2 + 14).toFixed(1)}" y="${(y2 + 4).toFixed(1)}" fill="#22d3ee" font-size="11" font-family="monospace" font-weight="bold">P2</text>
+      <g data-handle="p2" style="cursor:${g.locked ? "default" : "grab"}">
+        <circle cx="${x2.toFixed(1)}" cy="${y2.toFixed(1)}" r="18" fill="rgba(11, 12, 15, 0.38)" stroke="${volt}" stroke-width="1.8" />
+        <circle cx="${x2.toFixed(1)}" cy="${y2.toFixed(1)}" r="3.5" fill="${volt}" />
       </g>
       ${
         tapFocusSpot
-          ? `<rect x="${(tapFocusSpot.x * W - 20).toFixed(1)}" y="${(tapFocusSpot.y * H - 20).toFixed(1)}" width="40" height="40" rx="4"
-                   fill="none" stroke="#10b981" stroke-width="2" />`
+          ? `<rect x="${(tapFocusSpot.x * W - 18).toFixed(1)}" y="${(tapFocusSpot.y * H - 18).toFixed(1)}" width="36" height="36" rx="6"
+                   fill="none" stroke="#34d399" stroke-width="2" />`
           : ""
       }`
         : ""
@@ -427,28 +508,107 @@ function gateGeometrySVG(g: GateLine, interactive: boolean, W = 640, H = 360): s
   `;
 }
 
+function renderSidebar(): string {
+  if (!state) return "";
+  const theme = getTheme();
+  const total = state.passes.length;
+  const activeTab = route === "inspector" ? "passes" : route;
+
+  return `
+    <aside class="sidebar" aria-label="Main navigation">
+      <div class="brand">
+        <div class="brand-mark">${icons.slaprf(22)}</div>
+        <div class="brand-copy">
+          <span class="brand-name">SlapRF</span>
+          <span class="brand-tag">GateCam</span>
+        </div>
+      </div>
+      <div class="sidebar-nav-shell">
+        <nav class="nav">
+          <button type="button" class="nav-item ${activeTab === "live" ? "is-active" : ""}" data-nav="#/">
+            ${icons.camera(20)}
+            <span>Camera</span>
+          </button>
+          <button type="button" class="nav-item ${activeTab === "passes" ? "is-active" : ""}" data-nav="#/passes">
+            ${icons.passes(20)}
+            <span>Passes</span>
+            ${total > 0 ? `<span class="nav-count">${total}</span>` : ""}
+          </button>
+          <button type="button" class="nav-item ${activeTab === "stats" ? "is-active" : ""}" data-nav="#/stats">
+            ${icons.chart(20)}
+            <span>Accuracy</span>
+          </button>
+          <button type="button" class="nav-item ${activeTab === "settings" ? "is-active" : ""}" data-nav="#/settings">
+            ${icons.settings(20)}
+            <span>Settings</span>
+          </button>
+        </nav>
+      </div>
+      <div class="sidebar-footer">
+        <span class="sidebar-theme-label">Theme</span>
+        <div class="theme-toggler" role="group" aria-label="Color theme">
+          <button type="button" class="theme-btn ${theme === "dark" ? "is-active" : ""}" data-theme-set="dark" title="Dark theme">
+            ${icons.moon(14)}
+          </button>
+          <button type="button" class="theme-btn ${theme === "light" ? "is-active" : ""}" data-theme-set="light" title="Light theme">
+            ${icons.sun(14)}
+          </button>
+        </div>
+      </div>
+    </aside>
+  `;
+}
+
 function renderTopBar(): string {
   if (!state) return "";
   const sync = state.sync;
-  const dotCls = sync.connected && sync.clockLocked ? "ok" : sync.connected ? "warn" : "err";
-  const syncLabel = sync.clockLocked ? `±${sync.syncErrorBoundMs.toFixed(2)}ms` : "syncing";
-  const gateFilterTxt = state.link.gateFilter > 0 ? `Gate #${state.link.gateFilter}` : "All Gates";
+  const isUp = sync.connected && sync.clockLocked;
+  const dotCls = isUp ? "is-up" : sync.connected ? "is-warn" : "";
+  const linkSummary = isUp ? `±${sync.syncErrorBoundMs.toFixed(1)} ms` : sync.connected ? "Syncing" : "Offline";
+
+  const backHash =
+    prevRouteBeforeInspect === "passes" ? "#/passes" : prevRouteBeforeInspect === "stats" ? "#/stats" : "#/";
+
+  let leftHtml = "";
+  if (route === "inspector") {
+    const titleTxt = inspectPass ? `#${inspectPass.passId} ${esc(inspectPass.callsign)}` : `Pass #${inspectPassId}`;
+    leftHtml = `
+      <button type="button" class="btn btn-sm" data-nav="${backHash}">
+        ${icons.chevronLeft(15)}
+        <span>Back</span>
+      </button>
+      <span class="topbar-title">${titleTxt}</span>
+    `;
+  } else {
+    const pageTitle =
+      route === "passes"
+        ? "Passes"
+        : route === "stats"
+          ? "Accuracy"
+          : route === "settings"
+            ? "Settings"
+            : "GateCam";
+    leftHtml = `
+      <div class="topbar-mobile-brand">
+        <div class="brand-mark">${icons.slaprf(19)}</div>
+      </div>
+      <span class="topbar-title">${pageTitle}</span>
+    `;
+  }
+
   return `
     <header class="topbar">
-      <div class="topbar-left">
-        <span class="brand">SlapRF <span class="brand-accent">GateCam</span></span>
-        <span class="pill" title="${esc(sync.lastError || sync.slaprfUrl)}">
-          <span class="dot ${dotCls}"></span>
-          <span>${esc(sync.slaprfUrl.replace(/^https?:\/\//, ""))}</span>
-        </span>
-        <span class="pill">⏱ ${syncLabel}</span>
-        <span class="pill">🎯 ${esc(gateFilterTxt)}</span>
-      </div>
+      <div class="topbar-left">${leftHtml}</div>
       <div class="topbar-right">
-        ${state.camInfo.simulated ? `<button class="amber" data-act="sim-pass">+ Sim Pass</button>` : ""}
-        <button class="${route === "live" ? "primary" : ""}" data-nav="#/">📷 Live</button>
-        <button class="${route === "stats" ? "primary" : ""}" data-nav="#/stats">📊 Stats (${state.stats.validPasses})</button>
-        <button data-act="open-setup">⚙ Setup</button>
+        ${
+          state.camInfo.simulated
+            ? `<button type="button" class="btn btn-sm btn-armed" data-act="sim-pass">${icons.plus(14)}<span>Sim Pass</span></button>`
+            : ""
+        }
+        <button type="button" class="pill ${isUp ? "is-up" : ""}" data-nav="#/settings" title="${esc(sync.lastError || sync.slaprfUrl)}">
+          <span class="status-dot ${dotCls}"></span>
+          <span class="mono">${esc(linkSummary)}</span>
+        </button>
       </div>
     </header>
   `;
@@ -458,7 +618,29 @@ function renderStatusBadge(status: PassSummary["status"], conf: number): string 
   if (status === "AUTO") return `<span class="badge auto">AUTO ${Math.round(conf * 100)}%</span>`;
   if (status === "MANUAL") return `<span class="badge manual">MANUAL</span>`;
   if (status === "EXCLUDED") return `<span class="badge excl">EXCLUDED</span>`;
-  return `<span class="badge warn">PICK FRAME</span>`;
+  return `<span class="badge warn">REVIEW</span>`;
+}
+
+function renderPassCard(p: PassSummary): string {
+  const subTxt =
+    p.lapNumber && p.lapRfSec !== undefined
+      ? `Lap ${p.lapNumber} · ${p.lapRfSec.toFixed(3)}s (${fmtSigned(p.lapDeltaMs, 2)})`
+      : `${p.peakRssiDbm.toFixed(0)} dBm · ${p.holdMs.toFixed(0)} ms hold`;
+  return `
+    <div class="pass-card" data-open-pass="${p.passId}">
+      <img class="pass-thumb" src="/v1/gatecam/passes/${p.passId}/thumb.jpg" alt="Pass ${p.passId}" loading="lazy" />
+      <div class="pass-meta">
+        <div class="pass-callsign">
+          <span>#${p.passId} ${esc(p.callsign)}</span>
+        </div>
+        <div class="pass-sub mono">${subTxt}</div>
+      </div>
+      <div class="pass-right">
+        <span class="pass-bias">${fmtSigned(p.gateBiasMs, 2)}</span>
+        ${renderStatusBadge(p.status, p.confidence)}
+      </div>
+    </div>
+  `;
 }
 
 function renderLiveView(): string {
@@ -468,11 +650,7 @@ function renderLiveView(): string {
   const ci = state.camInfo;
   const { w: fw, h: fh } = currentFrameDims();
   const st = state.stats;
-  const rssiItems = state.sync.liveRssi ?? [];
-  const rssiHtml =
-    rssiItems.length > 0
-      ? rssiItems.map((r) => `${esc(r.callsign)} <b>${r.rssiDbm.toFixed(0)} dBm</b>`).join(" · ")
-      : `Waiting for 50 Hz RSSI...`;
+
   const minZoom = ci.minZoomRatio ?? 1.0;
   const curZoom = ci.zoomRatio ?? cam.zoomRatio ?? 1.0;
   const hasUltraWide = minZoom > 0.3 && minZoom < 0.9;
@@ -482,130 +660,161 @@ function renderLiveView(): string {
   const isHighSpeed = cam.targetFps >= 120 && supFps.includes(120);
 
   return `
-    <div class="live-grid">
-      <div class="cam-column">
-        <div class="viewfinder-wrap">
+    <div class="live-layout">
+      <div class="cam-pane">
+        <div class="viewfinder-frame">
           <div class="viewfinder-stage" id="live-stage" style="aspect-ratio:${fw} / ${fh}">
-            ${!isNativeUnderlay ? `<img class="preview-img" data-remote-preview src="/v1/gatecam/preview.jpg?t=${Date.now()}" alt="Gate preview" />` : ""}
+            ${!isNativeUnderlay ? `<img class="preview-img" data-remote-preview src="/v1/gatecam/preview.jpg?t=${Date.now()}" alt="Start gate preview" />` : ""}
             <svg class="gate-svg" id="live-gate-svg" viewBox="0 0 ${fw} ${fh}" preserveAspectRatio="none">
               ${gateGeometrySVG(g, true, fw, fh)}
             </svg>
+            <div class="vf-hud-top">
+              <span class="vf-chip mono" data-hud-ring>${esc(fmtCamTelemetry(ci))}</span>
+            </div>
+            <div class="vf-hud-bottom">
+              <span class="vf-chip" data-hud-rssi>${fmtStartGateRssi(state.sync)}</span>
+              <div class="vf-actions">
+                <button type="button" class="vf-btn" data-act="flip-dir" title="Flip flight direction">
+                  ${icons.flip(14)}
+                  <span>Dir</span>
+                </button>
+                <button type="button" class="vf-btn ${g.locked ? "is-locked" : ""}" data-act="toggle-lock" title="Lock gate sightline">
+                  ${g.locked ? icons.lock(14) : icons.unlock(14)}
+                  <span>${g.locked ? "Locked" : "Line"}</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
-        <div class="hud-rssi-bar">
-          <span class="hud-rssi-text" data-hud-rssi>${rssiHtml}</span>
-          <span class="hud-ring-text" data-hud-ring>${fmtCamTelemetry(ci)} ●</span>
-        </div>
-        <div class="cam-controls">
-          <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
+
+        <div class="cam-toolbar">
+          <div class="cam-toolbar-row">
+            <div class="ctrl-cluster">
+              <div class="segmented" role="group" aria-label="Capture frame rate">
+                <button type="button" class="${cam.targetFps === 60 ? "is-active" : ""}" data-fps="60">60</button>
+                ${supFps.includes(120) ? `<button type="button" class="${cam.targetFps === 120 ? "is-active" : ""}" data-fps="120">120</button>` : ""}
+                ${supFps.includes(240) ? `<button type="button" class="${cam.targetFps === 240 ? "is-active" : ""}" data-fps="240">240</button>` : ""}
+              </div>
+              <span class="ctrl-label">fps</span>
+            </div>
+
             ${
               hasUltraWide
-                ? `<div class="seg-group" title="Camera Lens Field of View (60 fps mode)">
-                     <button class="${isUltra ? "active" : ""}" data-zoom="${minZoom.toFixed(2)}">0.5x</button>
-                     <button class="${!isUltra ? "active" : ""}" data-zoom="1.0">1x</button>
+                ? `<div class="ctrl-cluster">
+                     <div class="segmented" role="group" aria-label="Lens field of view">
+                       <button type="button" class="${isUltra ? "is-active" : ""}" data-zoom="${minZoom.toFixed(2)}">0.5x</button>
+                       <button type="button" class="${!isUltra ? "is-active" : ""}" data-zoom="1.0">1x</button>
+                     </div>
                    </div>`
                 : ""
             }
-            <div class="seg-group" title="Camera Capture Rate">
-              <button class="${cam.targetFps === 60 ? "active" : ""}" data-fps="60">60</button>
-              ${supFps.includes(120) ? `<button class="${cam.targetFps === 120 ? "active" : ""}" data-fps="120">${supFps.includes(240) ? "120" : "120 fps"}</button>` : ""}
-              ${supFps.includes(240) ? `<button class="${cam.targetFps === 240 ? "active" : ""}" data-fps="240">240 fps</button>` : ""}
+          </div>
+
+          <div class="cam-toolbar-row">
+            <div class="ctrl-cluster">
+              <span class="ctrl-label">Focus</span>
+              <div class="segmented" role="group" aria-label="Focus distance">
+                <button type="button" class="${curFocusMode === "gate" ? "is-active" : ""}" data-focus-val="gate">3m</button>
+                <button type="button" class="${curFocusMode === "near" ? "is-active" : ""}" data-focus-val="near">1m</button>
+                <button type="button" class="${curFocusMode === "inf" ? "is-active" : ""}" data-focus-val="inf">Inf</button>
+                ${curFocusMode === "tap" ? `<button type="button" class="is-active" data-act="lock-af">Spot</button>` : ""}
+              </div>
             </div>
+
             ${
-              isHighSpeed
-                ? `<select disabled title="Android High-Speed 120/240 fps mode uses automatic exposure">
-                     <option selected>Shutter: Auto (HS)</option>
-                   </select>`
-                : `<select data-shutter title="Shutter-Priority Exposure (Auto-ISO)">
-                     <option value="0" ${cam.shutterUs === 0 ? "selected" : ""}>Shutter: Auto</option>
-                     <option value="4000" ${cam.shutterUs === 4000 ? "selected" : ""}>1/250s</option>
-                     <option value="2000" ${cam.shutterUs === 2000 ? "selected" : ""}>1/500s</option>
-                     <option value="1000" ${cam.shutterUs === 1000 ? "selected" : ""}>1/1000s</option>
-                     <option value="500" ${cam.shutterUs === 500 ? "selected" : ""}>1/2000s</option>
-                     <option value="250" ${cam.shutterUs === 250 ? "selected" : ""}>1/4000s</option>
-                   </select>`
+              !isHighSpeed
+                ? `<div class="ctrl-cluster">
+                     <div class="segmented" role="group" aria-label="Shutter speed">
+                       <button type="button" class="${cam.shutterUs === 0 ? "is-active" : ""}" data-shutter-val="0">Auto</button>
+                       <button type="button" class="${cam.shutterUs === 1000 ? "is-active" : ""}" data-shutter-val="1000">1/1000</button>
+                       <button type="button" class="${cam.shutterUs === 500 ? "is-active" : ""}" data-shutter-val="500">1/2000</button>
+                       <button type="button" class="${cam.shutterUs === 250 ? "is-active" : ""}" data-shutter-val="250">1/4000</button>
+                     </div>
+                   </div>`
+                : `<span class="ctrl-label mono">ISO ${ci.iso ?? "--"}</span>`
             }
-            <select data-focus-mode title="Fixed/Locked Focus (Prevents Focus Hunting)">
-              <option value="gate" ${curFocusMode === "gate" ? "selected" : ""}>Focus: Gate (3m)</option>
-              <option value="near" ${curFocusMode === "near" ? "selected" : ""}>Focus: Near (1m)</option>
-              <option value="inf" ${curFocusMode === "inf" ? "selected" : ""}>Focus: Far (∞)</option>
-              <option value="tap" ${curFocusMode === "tap" ? "selected" : ""}>Focus: Tap Lock</option>
-            </select>
-            <button class="${curFocusMode === "tap" ? "primary" : ""}" data-act="lock-af" title="Focus once on the Gate Line (or tap anywhere on camera) and lock">🎯 Focus</button>
-            <button data-act="flip-dir">⇄ Dir</button>
-            <button class="${g.locked ? "amber" : ""}" data-act="toggle-lock">${g.locked ? "🔒 Locked" : "🔓 Line"}</button>
           </div>
         </div>
       </div>
 
-      <aside class="side-panel">
-        <div class="section-title">Session Accuracy (${st.validPasses} Valid / ${st.totalPasses} Total)</div>
-        <div class="kpi-grid">
-          <div class="kpi-card">
-            <div class="kpi-label">Gate Bias (μ)</div>
-            <div class="kpi-val">${st.validPasses > 0 ? fmtSigned(st.meanBiasMs, 2) : "—"}</div>
-            <div class="kpi-sub">${st.validPasses > 0 ? fmtSigned(st.meanBiasCm, 1, "cm") : "t_RF - t_cam"}</div>
+      <aside class="feed-pane">
+        <div class="stat-row">
+          <div class="stat">
+            <div class="stat-label">Start Bias</div>
+            <div class="stat-value">${st.validPasses > 0 ? fmtSigned(st.meanBiasMs, 2) : "--"}</div>
+            <div class="stat-sub">${st.validPasses > 0 ? fmtSigned(st.meanBiasCm, 1, "cm") : "RF vs camera"}</div>
           </div>
-          <div class="kpi-card">
-            <div class="kpi-label">Pass Jitter (σ)</div>
-            <div class="kpi-val">${st.validPasses > 1 ? `±${st.stdBiasMs.toFixed(2)} ms` : "—"}</div>
-            <div class="kpi-sub">P95: ${st.validPasses > 0 ? `${st.p95AbsBiasMs.toFixed(1)} ms` : "—"}</div>
+          <div class="stat">
+            <div class="stat-label">Pass Jitter</div>
+            <div class="stat-value">${st.validPasses > 1 ? `±${st.stdBiasMs.toFixed(2)} ms` : "--"}</div>
+            <div class="stat-sub">P95 ${st.validPasses > 0 ? `${st.p95AbsBiasMs.toFixed(1)} ms` : "--"}</div>
           </div>
-          <div class="kpi-card">
-            <div class="kpi-label">Lap Error (σ)</div>
-            <div class="kpi-val">${st.lapCount > 1 ? `±${st.stdLapDeltaMs.toFixed(2)} ms` : "—"}</div>
-            <div class="kpi-sub">${st.lapCount} paired lap${st.lapCount === 1 ? "" : "s"}</div>
-          </div>
-          <div class="kpi-card">
-            <div class="kpi-label">P95 |ΔLap|</div>
-            <div class="kpi-val">${st.lapCount > 0 ? `${st.p95AbsLapDeltaMs.toFixed(2)} ms` : "—"}</div>
-            <div class="kpi-sub">Max: ${st.lapCount > 0 ? `${st.maxAbsLapDeltaMs.toFixed(1)} ms` : "—"}</div>
+          <div class="stat">
+            <div class="stat-label">Lap Error</div>
+            <div class="stat-value">${st.lapCount > 1 ? `±${st.stdLapDeltaMs.toFixed(2)} ms` : "--"}</div>
+            <div class="stat-sub">${st.lapCount} lap${st.lapCount === 1 ? "" : "s"}</div>
           </div>
         </div>
 
-        <div class="section-title">Recent Crossings (Tap to Scrub Frames)</div>
-        <div class="pass-list">
-          ${
-            state.passes.length === 0
-              ? `<div style="padding:18px 8px;color:var(--muted);text-align:center;line-height:1.5;">
-                   Align <b>P1–P2</b> with both gate posts and fly a pass.<br/>
-                   GateCam automatically slices ±${cam.lookbackHalfMs} ms around each SlapRF crossing.
-                 </div>`
-              : state.passes
-                  .map(
-                    (p) => `
-                <div class="pass-card" data-open-pass="${p.passId}">
-                  <img class="pass-thumb" src="/v1/gatecam/passes/${p.passId}/thumb.jpg" alt="Pass #${p.passId}" loading="lazy" />
-                  <div class="pass-meta">
-                    <div class="pass-row1">
-                      <span>#${p.passId} ${esc(p.callsign)}</span>
-                      ${renderStatusBadge(p.status, p.confidence)}
-                    </div>
-                    <div class="pass-row2">
-                      Bias: <b style="color:var(--text)">${fmtSigned(p.gateBiasMs, 2)}</b>
-                      ${p.gateBiasFrames !== undefined ? `(${fmtSigned(p.gateBiasFrames, 1, "fr")})` : ""}
-                    </div>
-                    <div class="pass-row3">
-                      ${
-                        p.lapNumber && p.lapRfSec !== undefined
-                          ? `Lap #${p.lapNumber}: ${p.lapRfSec.toFixed(3)}s (Δ ${fmtSigned(p.lapDeltaMs, 2)})`
-                          : `Peak ${p.peakRssiDbm.toFixed(1)} dBm · Hold ${p.holdMs.toFixed(0)}ms`
-                      }
-                    </div>
-                  </div>
-                </div>`
-                  )
-                  .join("")
-          }
+        <div class="feed-card">
+          <div class="feed-head">
+            <span class="feed-title">Start Gate Passes</span>
+            <span class="badge">${st.validPasses} valid / ${st.totalPasses}</span>
+          </div>
+          <div class="pass-list">
+            ${
+              state.passes.length === 0
+                ? `<div class="empty-state">
+                     Align the Volt line with the Start Gate posts. Tap anywhere on the video to spot-lock focus.
+                   </div>`
+                : state.passes.map(renderPassCard).join("")
+            }
+          </div>
         </div>
       </aside>
     </div>
   `;
 }
 
+function renderPassesView(): string {
+  if (!state) return "";
+  const filtered = state.passes.filter((p) => {
+    if (passFilter === "valid") return p.status === "AUTO" || p.status === "MANUAL";
+    if (passFilter === "review") return p.status === "NEEDS_MANUAL";
+    return true;
+  });
+
+  return `
+    <div class="page-scroll">
+      <div class="page-inner">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+          <div class="segmented" role="group" aria-label="Pass filter">
+            <button type="button" class="${passFilter === "all" ? "is-active" : ""}" data-pass-filter="all">All (${state.passes.length})</button>
+            <button type="button" class="${passFilter === "valid" ? "is-active" : ""}" data-pass-filter="valid">Valid (${state.stats.validPasses})</button>
+            <button type="button" class="${passFilter === "review" ? "is-active" : ""}" data-pass-filter="review">Review (${state.stats.needsManualCount})</button>
+          </div>
+          ${
+            state.passes.length > 0
+              ? `<button type="button" class="btn btn-sm btn-danger" data-act="clear-passes">${icons.trash(14)}<span>Clear All</span></button>`
+              : ""
+          }
+        </div>
+
+        <div class="card" style="padding:10px;">
+          ${
+            filtered.length === 0
+              ? `<div class="empty-state">No Start Gate passes match this filter yet.</div>`
+              : `<div style="display:flex;flex-direction:column;gap:6px;">${filtered.map(renderPassCard).join("")}</div>`
+          }
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderInspectorTimelineSVG(p: PassRecord, curIdx: number): string {
   const W = 600;
-  const H = 82;
+  const H = 78;
   const frames = p.frames;
   if (!frames || frames.length === 0) return "";
   const minRel = frames[0].relToRfMs;
@@ -613,16 +822,14 @@ function renderInspectorTimelineSVG(p: PassRecord, curIdx: number): string {
   const span = Math.max(10, maxRel - minRel);
   const xOfMs = (ms: number) => 12 + ((ms - minRel) / span) * (W - 24);
 
-  // RSSI polyline (-96 .. -30 dBm)
   let rssiPts = "";
   for (const s of p.rssiTrace ?? []) {
     const x = xOfMs(s.relMs);
     const norm = Math.max(0, Math.min(1, (s.rssiDbm - -96) / 62));
-    const y = H - 14 - norm * (H - 26);
+    const y = H - 12 - norm * (H - 24);
     rssiPts += `${x.toFixed(1)},${y.toFixed(1)} `;
   }
 
-  // Signed distance d_k polyline (-120 .. +120 px)
   let distPts = "";
   for (const f of frames) {
     if (!f.hasBlob) continue;
@@ -640,25 +847,21 @@ function renderInspectorTimelineSVG(p: PassRecord, curIdx: number): string {
 
   return `
     <svg class="timeline-svg" id="inspector-timeline" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-      <!-- Zero distance horizontal guide -->
       <line x1="12" y1="${(H * 0.5).toFixed(1)}" x2="${W - 12}" y2="${(H * 0.5).toFixed(1)}"
-            stroke="rgba(148,163,184,0.22)" stroke-dasharray="4 4" />
-      ${rssiPts ? `<polyline fill="none" stroke="#f59e0b" stroke-width="1.8" points="${rssiPts.trim()}" />` : ""}
-      ${distPts ? `<polyline fill="none" stroke="#22d3ee" stroke-width="2" points="${distPts.trim()}" />` : ""}
+            stroke="rgba(163, 168, 179, 0.2)" stroke-dasharray="4 4" />
+      ${rssiPts ? `<polyline fill="none" stroke="#fbbf24" stroke-width="1.75" points="${rssiPts.trim()}" />` : ""}
+      ${distPts ? `<polyline fill="none" stroke="#d4ff3a" stroke-width="2" points="${distPts.trim()}" />` : ""}
 
-      <!-- SlapRF t_RF Marker (Amber) -->
-      <line x1="${xRF.toFixed(1)}" y1="4" x2="${xRF.toFixed(1)}" y2="${H - 4}" stroke="#f59e0b" stroke-width="2" />
-      <text x="${(xRF + 4).toFixed(1)}" y="13" fill="#f59e0b" font-size="10" font-family="monospace">t_RF</text>
+      <line x1="${xRF.toFixed(1)}" y1="4" x2="${xRF.toFixed(1)}" y2="${H - 4}" stroke="#fbbf24" stroke-width="1.8" />
+      <text x="${(xRF + 4).toFixed(1)}" y="12" fill="#fbbf24" font-size="10" font-family="monospace">RF</text>
 
-      <!-- Camera t_cam Marker (Cyan) -->
       ${
         xCam !== null
-          ? `<line x1="${xCam.toFixed(1)}" y1="4" x2="${xCam.toFixed(1)}" y2="${H - 4}" stroke="#22d3ee" stroke-width="2" />
-             <text x="${Math.max(14, xCam - 34).toFixed(1)}" y="${H - 5}" fill="#22d3ee" font-size="10" font-family="monospace">t_cam</text>`
+          ? `<line x1="${xCam.toFixed(1)}" y1="4" x2="${xCam.toFixed(1)}" y2="${H - 4}" stroke="#d4ff3a" stroke-width="1.8" />
+             <text x="${Math.max(14, xCam - 28).toFixed(1)}" y="${H - 5}" fill="#d4ff3a" font-size="10" font-family="monospace">CAM</text>`
           : ""
       }
 
-      <!-- Current Scrubber Playhead -->
       <line id="tl-playhead" x1="${xCur.toFixed(1)}" y1="0" x2="${xCur.toFixed(1)}" y2="${H}" stroke="#ffffff" stroke-width="1.8" />
     </svg>
   `;
@@ -667,7 +870,7 @@ function renderInspectorTimelineSVG(p: PassRecord, curIdx: number): string {
 function renderInspectorFrameOverlaySVG(p: PassRecord, f: FrameObservation | undefined): string {
   const W = f?.frameWidth || state?.camInfo?.frameWidth || 640;
   const H = f?.frameHeight || state?.camInfo?.frameHeight || 360;
-  let svg = showGateOverlay ? gateGeometrySVG(p.gateSnapshot, false, W, H) : "";
+  let out = showGateOverlay ? gateGeometrySVG(p.gateSnapshot, false, W, H) : "";
   if (showBlobOverlay && f && f.hasBlob) {
     const cx = f.blobCx * W;
     const cy = f.blobCy * H;
@@ -675,23 +878,23 @@ function renderInspectorFrameOverlaySVG(p: PassRecord, f: FrameObservation | und
     const by = f.blobBoxY * H;
     const bw = Math.max(12, f.blobBoxW * W);
     const bh = Math.max(12, f.blobBoxH * H);
-    const color = f.onTrack ? "#10b981" : "#94a3b8";
-    svg += `
+    const color = f.onTrack ? "#34d399" : "#a3a8b3";
+    out += `
       <rect x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}"
-            fill="none" stroke="${color}" stroke-width="2" />
-      <line x1="${(cx - 9).toFixed(1)}" y1="${cy.toFixed(1)}" x2="${(cx + 9).toFixed(1)}" y2="${cy.toFixed(1)}"
-            stroke="#fbbf24" stroke-width="2" />
-      <line x1="${cx.toFixed(1)}" y1="${(cy - 9).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${(cy + 9).toFixed(1)}"
-            stroke="#fbbf24" stroke-width="2" />
-      <circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="3.5" fill="#fbbf24" />
+            rx="3" fill="none" stroke="${color}" stroke-width="2" />
+      <line x1="${(cx - 8).toFixed(1)}" y1="${cy.toFixed(1)}" x2="${(cx + 8).toFixed(1)}" y2="${cy.toFixed(1)}"
+            stroke="#d4ff3a" stroke-width="2" />
+      <line x1="${cx.toFixed(1)}" y1="${(cy - 8).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${(cy + 8).toFixed(1)}"
+            stroke="#d4ff3a" stroke-width="2" />
+      <circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="3" fill="#d4ff3a" />
     `;
   }
-  return svg;
+  return out;
 }
 
 function renderInspectorView(): string {
   if (!inspectPass) {
-    return `<div style="padding:32px;text-align:center;color:var(--muted);">Loading pass #${inspectPassId} lookback frames...</div>`;
+    return `<div class="page-scroll"><div class="empty-state">Decoding pass #${inspectPassId} frames...</div></div>`;
   }
   const p = inspectPass;
   const frames = p.frames ?? [];
@@ -705,39 +908,38 @@ function renderInspectorView(): string {
   const posInList = allIds.indexOf(p.passId);
   const newerId = posInList > 0 ? allIds[posInList - 1] : 0;
   const olderId = posInList >= 0 && posInList < allIds.length - 1 ? allIds[posInList + 1] : 0;
+  const fw = f?.frameWidth || 640;
+  const fh = f?.frameHeight || 360;
 
   return `
     <div class="inspector-layout">
       <div class="inspector-main">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+        <div class="inspector-bar">
           <div style="display:flex;align-items:center;gap:8px;">
-            <button data-nav="#/">← Back</button>
-            <b>Pass #${p.passId} · ${esc(p.callsign)} (${p.frequencyMhz} MHz) · Gate #${p.gateId}</b>
             ${renderStatusBadge(p.status, p.confidence)}
+            <span id="insp-frame-label" class="mono" style="font-size:12px;color:var(--text-2);">
+              Fr ${inspectFrameIdx + 1}/${frames.length} · ${f ? fmtSigned(f.relToRfMs, 2) : "--"} vs RF
+            </span>
           </div>
-          <div style="display:flex;gap:6px;">
-            <button ${olderId ? `data-nav="#/pass/${olderId}"` : "disabled"}>◀ Older</button>
-            <button ${newerId ? `data-nav="#/pass/${newerId}"` : "disabled"}>Newer ▶</button>
-          </div>
-        </div>
-
-        <div style="display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:11.5px;color:var(--muted);">
-          <span id="insp-frame-label">
-            Frame ${inspectFrameIdx + 1} / ${frames.length}
-            · t = ${f ? fmtSigned(f.relToRfMs, 2) : "—"} vs RF
-            · Blob d = ${f && f.hasBlob ? `${f.signedDistPx >= 0 ? "+" : ""}${f.signedDistPx.toFixed(1)} px` : "none"}
-          </span>
-          <div style="display:flex;gap:6px;">
-            <button class="${showGateOverlay ? "primary" : ""}" data-insp-toggle="gate">✓ Gate</button>
-            <button class="${showBlobOverlay ? "primary" : ""}" data-insp-toggle="blob">✓ Blob ⊕</button>
-            <button class="${showMaskMode ? "amber" : ""}" data-insp-toggle="mask">MOG2 Mask</button>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <div class="segmented" role="group" aria-label="Overlay layers">
+              <button type="button" class="${showGateOverlay ? "is-active" : ""}" data-insp-toggle="gate">Gate</button>
+              <button type="button" class="${showBlobOverlay ? "is-active" : ""}" data-insp-toggle="blob">Drone</button>
+              <button type="button" class="${showMaskMode ? "is-active" : ""}" data-insp-toggle="mask">Mask</button>
+            </div>
+            <button type="button" class="btn btn-sm btn-icon" ${olderId ? `data-nav="#/pass/${olderId}"` : "disabled"} title="Older pass">
+              ${icons.chevronLeft(15)}
+            </button>
+            <button type="button" class="btn btn-sm btn-icon" ${newerId ? `data-nav="#/pass/${newerId}"` : "disabled"} title="Newer pass">
+              ${icons.chevronRight(15)}
+            </button>
           </div>
         </div>
 
         <div class="inspector-frame-box">
-          <div class="inspector-stage" style="aspect-ratio:${f?.frameWidth || 360} / ${f?.frameHeight || 640}">
+          <div class="inspector-stage" style="aspect-ratio:${fw} / ${fh}">
             <img id="insp-img" class="preview-img" src="${frameSrc}" alt="Frame ${inspectFrameIdx}" />
-            <svg id="insp-svg" class="gate-svg" viewBox="0 0 ${f?.frameWidth || 360} ${f?.frameHeight || 640}" preserveAspectRatio="none">
+            <svg id="insp-svg" class="gate-svg" viewBox="0 0 ${fw} ${fh}" preserveAspectRatio="none">
               ${renderInspectorFrameOverlaySVG(p, f)}
             </svg>
           </div>
@@ -745,56 +947,75 @@ function renderInspectorView(): string {
 
         <div class="timeline-card">
           ${renderInspectorTimelineSVG(p, inspectFrameIdx)}
-          <div class="scrubber-bar" style="margin-top:6px;">
-            <div style="display:flex;gap:5px;flex-wrap:wrap;">
-              <button data-insp-jump="${p.crossingFrameIdx}">⏮ @Cam (#${p.crossingFrameIdx + 1})</button>
-              <button data-insp-step="-1">◀ -1 Frame</button>
-              <button class="${slowPlayTimer !== null ? "active" : ""}" data-act="slow-play">${slowPlayTimer !== null ? "⏸ Pause" : "▶ Slow 0.1x"}</button>
-              <button data-insp-step="1">+1 Frame ▶</button>
-              <button data-insp-jump="${p.rfNearestFrameIdx}">@RF (#${p.rfNearestFrameIdx + 1}) ⏭</button>
+          <div class="scrubber-bar">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <button type="button" class="btn btn-sm mono" data-insp-jump="${p.crossingFrameIdx}">@Cam #${p.crossingFrameIdx + 1}</button>
+              <button type="button" class="btn btn-sm" data-insp-step="-1">${icons.chevronLeft(14)}<span>-1</span></button>
+              <button type="button" class="btn btn-sm ${slowPlayTimer !== null ? "btn-armed" : ""}" data-act="slow-play">
+                ${slowPlayTimer !== null ? icons.pause(13) : icons.play(13)}
+                <span>${slowPlayTimer !== null ? "Pause" : "0.1x"}</span>
+              </button>
+              <button type="button" class="btn btn-sm" data-insp-step="1"><span>+1</span>${icons.chevronRight(14)}</button>
+              <button type="button" class="btn btn-sm mono" data-insp-jump="${p.rfNearestFrameIdx}">@RF #${p.rfNearestFrameIdx + 1}</button>
             </div>
-            <span style="font-family:var(--mono);font-size:11px;color:var(--muted);">Drag timeline or use ◀ / ▶ keys</span>
           </div>
         </div>
       </div>
 
-      <aside class="side-panel" style="padding:10px;gap:10px;overflow-y:auto;">
-        <div class="card-box">
-          <div class="section-title" style="padding:0 0 6px;">Timing Comparison</div>
-          <div style="font-family:var(--mono);font-size:12px;line-height:1.7;">
-            <div>SlapRF Peak (t_RF): <b style="color:var(--amber)">${(p.rfTimestampUs / 1e6).toFixed(4)} s</b></div>
-            <div>Camera Cross (t_cam): <b style="color:var(--cyan)">${p.camTimestampUs ? `${(p.camTimestampUs / 1e6).toFixed(4)} s` : "—"}</b></div>
-            <hr style="border:none;border-top:1px solid var(--border);margin:6px 0;" />
-            <div>Gate Bias (t_RF - t_cam): <b style="font-size:14px;color:var(--text)">${fmtSigned(p.gateBiasMs, 2)}</b></div>
-            <div style="color:var(--muted);">Frame Offset: ${fmtSigned(p.gateBiasFrames, 2, "frames")} ${p.spatialBiasCm !== undefined ? `(${fmtSigned(p.spatialBiasCm, 1, "cm")})` : ""}</div>
+      <aside class="inspector-side">
+        <div class="card">
+          <div class="card-head"><h2>Start Gate Timing</h2></div>
+          <div class="kv-list">
+            <div class="kv-row">
+              <span>Start Bias (RF - Cam)</span>
+              <strong class="mono">${fmtSigned(p.gateBiasMs, 2)}</strong>
+            </div>
+            <div class="kv-row">
+              <span>Frame Offset</span>
+              <span class="mono">${fmtSigned(p.gateBiasFrames, 2, "fr")}${p.spatialBiasCm !== undefined ? ` (${fmtSigned(p.spatialBiasCm, 1, "cm")})` : ""}</span>
+            </div>
             ${
               p.lapNumber && p.lapRfSec !== undefined && p.lapCamSec !== undefined
-                ? `<hr style="border:none;border-top:1px solid var(--border);margin:6px 0;" />
-                   <div>Lap #${p.lapNumber} SlapRF: <b>${p.lapRfSec.toFixed(4)} s</b></div>
-                   <div>Lap #${p.lapNumber} Camera: <b>${p.lapCamSec.toFixed(4)} s</b></div>
-                   <div>Lap Error (ΔLap): <b style="color:var(--cyan)">${fmtSigned(p.lapDeltaMs, 2)}</b></div>`
+                ? `<div class="kv-divider"></div>
+                   <div class="kv-row">
+                     <span>Lap ${p.lapNumber} (SlapRF)</span>
+                     <span class="mono">${p.lapRfSec.toFixed(4)} s</span>
+                   </div>
+                   <div class="kv-row">
+                     <span>Lap ${p.lapNumber} (Camera)</span>
+                     <span class="mono">${p.lapCamSec.toFixed(4)} s</span>
+                   </div>
+                   <div class="kv-row">
+                     <span>Lap Delta</span>
+                     <strong class="mono">${fmtSigned(p.lapDeltaMs, 2)}</strong>
+                   </div>`
                 : ""
             }
+            <div class="kv-divider"></div>
+            <div class="kv-row">
+              <span>RF Peak / Hold</span>
+              <span class="mono">${p.peakRssiDbm.toFixed(1)} dBm / ${p.holdMs.toFixed(0)} ms</span>
+            </div>
+            <div class="kv-row">
+              <span>Motion Model</span>
+              <span class="mono">${(p.motionModel || "mog2").toUpperCase()} · ${p.blobAreaPx ?? 0} px</span>
+            </div>
           </div>
         </div>
 
-        <div class="card-box">
-          <div class="section-title" style="padding:0 0 6px;">Detection Details</div>
-          <div style="font-family:var(--mono);font-size:11.5px;line-height:1.65;color:var(--muted);">
-            <div>Model: <b style="color:var(--text)">OpenCV ${(p.motionModel || "mog2").toUpperCase()}</b></div>
-            <div>Auto Frac Frame: <b style="color:var(--text)">#${(p.autoFractionalFrame + 1).toFixed(2)}</b></div>
-            <div>Peak Blob Area: <b style="color:var(--text)">${p.blobAreaPx ?? 0} px</b></div>
-            <div>Flow Velocity: <b style="color:var(--text)">${(p.flowSpeedPxPerFr ?? 0).toFixed(1)} px/fr</b></div>
-            <div>RF Peak / Hold: <b style="color:var(--text)">${p.peakRssiDbm.toFixed(1)} dBm / ${p.holdMs.toFixed(0)} ms</b></div>
-          </div>
-        </div>
-
-        <div class="card-box" style="display:flex;flex-direction:column;gap:7px;">
-          <div class="section-title" style="padding:0;">Manual Curation</div>
-          <button class="primary" id="btn-pin-frame" data-act="pin-frame">📌 Pin Frame #${inspectFrameIdx + 1} as Crossing</button>
-          <button data-act="restore-auto">↺ Restore Auto Crossing</button>
-          <button class="${p.status === "EXCLUDED" ? "amber" : "danger"}" data-act="toggle-exclude">
-            ${p.status === "EXCLUDED" ? "✓ Re-Include Pass in Stats" : "🗑 Exclude Pass from Stats"}
+        <div class="card" style="display:flex;flex-direction:column;gap:8px;">
+          <div class="card-head" style="margin-bottom:4px;"><h2>Crossing Frame</h2></div>
+          <button type="button" class="btn btn-primary" id="btn-pin-frame" data-act="pin-frame">
+            ${icons.pin(15)}
+            <span>Pin Frame #${inspectFrameIdx + 1}</span>
+          </button>
+          <button type="button" class="btn" data-act="restore-auto">
+            ${icons.reset(15)}
+            <span>Restore Auto (#${p.autoCrossingFrameIdx + 1})</span>
+          </button>
+          <button type="button" class="btn ${p.status === "EXCLUDED" ? "btn-armed" : "btn-danger"}" data-act="toggle-exclude">
+            ${p.status === "EXCLUDED" ? icons.check(15) : icons.ban(15)}
+            <span>${p.status === "EXCLUDED" ? "Include in Accuracy" : "Exclude Pass"}</span>
           </button>
         </div>
       </aside>
@@ -810,19 +1031,17 @@ function renderInspectorDynamicOnly(): void {
   if (img && !p.framesPurged) {
     img.src = `/v1/gatecam/passes/${p.passId}/frames/${inspectFrameIdx}.jpg${showMaskMode ? "?mask=1" : ""}`;
   }
-  const svg = document.getElementById("insp-svg");
-  if (svg) {
-    svg.innerHTML = renderInspectorFrameOverlaySVG(p, f);
+  const svgEl = document.getElementById("insp-svg");
+  if (svgEl) {
+    svgEl.innerHTML = renderInspectorFrameOverlaySVG(p, f);
   }
   const lbl = document.getElementById("insp-frame-label");
   if (lbl) {
-    lbl.textContent = `Frame ${inspectFrameIdx + 1} / ${p.frames.length} · t = ${f ? fmtSigned(f.relToRfMs, 2) : "—"} vs RF · Blob d = ${
-      f && f.hasBlob ? `${f.signedDistPx >= 0 ? "+" : ""}${f.signedDistPx.toFixed(1)} px` : "none"
-    }`;
+    lbl.textContent = `Fr ${inspectFrameIdx + 1}/${p.frames.length} · ${f ? fmtSigned(f.relToRfMs, 2) : "--"} vs RF`;
   }
   const pinBtn = document.getElementById("btn-pin-frame");
   if (pinBtn) {
-    pinBtn.textContent = `📌 Pin Frame #${inspectFrameIdx + 1} as Crossing`;
+    pinBtn.innerHTML = `${icons.pin(15)}<span>Pin Frame #${inspectFrameIdx + 1}</span>`;
   }
   const playhead = document.getElementById("tl-playhead");
   if (playhead && p.frames.length > 1) {
@@ -839,199 +1058,227 @@ function renderStatsView(): string {
   if (!state) return "";
   const st = state.stats;
   const maxBin = Math.max(1, ...st.histogram.map((b) => b.count));
-  const lanList = state.sync.lanUrls ?? [];
 
   return `
-    <div class="stats-scroll">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-        <h2 style="margin:0;font-size:16px;">GateCam Verification Report — ${st.totalPasses} Passes</h2>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;">
-          <a class="btn primary" href="/v1/gatecam/export.zip" download>⬇ Export ZIP (JSON + CSV + Frames)</a>
-          <a class="btn" href="/v1/gatecam/report.csv" download>⬇ CSV</a>
-          <button class="danger" data-act="clear-passes">🧹 Clear Session</button>
-        </div>
-      </div>
-
-      <div class="stats-kpi-row">
-        <div class="kpi-card">
-          <div class="kpi-label">VALID PASSES</div>
-          <div class="kpi-val">${st.validPasses} / ${st.totalPasses}</div>
-          <div class="kpi-sub">${st.manualPasses} manual · ${st.excludedCount} excluded</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">MEAN GATE BIAS (μ)</div>
-          <div class="kpi-val">${st.validPasses > 0 ? fmtSigned(st.meanBiasMs, 2) : "—"}</div>
-          <div class="kpi-sub">${st.validPasses > 0 ? `${fmtSigned(st.meanBiasCm, 1, "cm")} spatial` : "t_RF - t_camera"}</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">SINGLE-PASS JITTER (σ)</div>
-          <div class="kpi-val">${st.validPasses > 1 ? `±${st.stdBiasMs.toFixed(2)} ms` : "—"}</div>
-          <div class="kpi-sub">P95: ${st.p95AbsBiasMs.toFixed(2)} ms · Max: ${st.maxAbsBiasMs.toFixed(2)} ms</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">LAP DURATION ERROR (σ)</div>
-          <div class="kpi-val">${st.lapCount > 1 ? `±${st.stdLapDeltaMs.toFixed(2)} ms` : "—"}</div>
-          <div class="kpi-sub">μ: ${fmtSigned(st.meanLapDeltaMs, 2)} · P95: ${st.p95AbsLapDeltaMs.toFixed(2)} ms</div>
-        </div>
-      </div>
-
-      <div class="stats-two-col">
-        <div class="card-box">
-          <div class="section-title" style="padding:0 0 8px;">Gate Bias Distribution (t_RF - t_camera)</div>
-          ${st.histogram
-            .map(
-              (b) => `
-            <div class="hist-row">
-              <span>${esc(b.label)}</span>
-              <div class="hist-track"><div class="hist-fill" style="width:${((b.count / maxBin) * 100).toFixed(1)}%"></div></div>
-              <span style="text-align:right">${b.count}</span>
-            </div>`
-            )
-            .join("")}
+    <div class="page-scroll stats-scroll">
+      <div class="page-inner">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+          <div>
+            <h2 style="font-size:15px;font-weight:650;">GateCam Verification Report</h2>
+            <p style="font-size:12px;color:var(--text-3);margin-top:2px;">Start Gate RF vs high-speed optical crossing accuracy</p>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <a class="btn btn-sm btn-primary" href="/v1/gatecam/export.zip" download>
+              ${icons.download(14)}
+              <span>Export ZIP</span>
+            </a>
+            <a class="btn btn-sm" href="/v1/gatecam/report.csv" download>
+              ${icons.download(14)}
+              <span>CSV</span>
+            </a>
+            ${
+              st.totalPasses > 0
+                ? `<button type="button" class="btn btn-sm btn-danger" data-act="clear-passes">${icons.trash(14)}<span>Reset</span></button>`
+                : ""
+            }
+          </div>
         </div>
 
-        <div class="card-box">
-          <div class="section-title" style="padding:0 0 8px;">Bias by Pass Speed (Zero-Phase Filter Check)</div>
-          <table class="data-table">
-            <thead><tr><th>Pass Bucket</th><th>Count</th><th>Mean Bias</th><th>Std Dev</th></tr></thead>
-            <tbody>
-              ${st.speedBuckets
-                .map(
-                  (sb) => `
+        <div class="stat-row cols-4">
+          <div class="stat">
+            <div class="stat-label">Valid Passes</div>
+            <div class="stat-value">${st.validPasses} / ${st.totalPasses}</div>
+            <div class="stat-sub">${st.manualPasses} manual · ${st.excludedCount} excluded</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Mean Start Bias</div>
+            <div class="stat-value">${st.validPasses > 0 ? fmtSigned(st.meanBiasMs, 2) : "--"}</div>
+            <div class="stat-sub">${st.validPasses > 0 ? `${fmtSigned(st.meanBiasCm, 1, "cm")} spatial` : "RF - camera"}</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Pass Jitter</div>
+            <div class="stat-value">${st.validPasses > 1 ? `±${st.stdBiasMs.toFixed(2)} ms` : "--"}</div>
+            <div class="stat-sub">P95 ${st.p95AbsBiasMs.toFixed(2)} ms · Max ${st.maxAbsBiasMs.toFixed(2)} ms</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Lap Error</div>
+            <div class="stat-value">${st.lapCount > 1 ? `±${st.stdLapDeltaMs.toFixed(2)} ms` : "--"}</div>
+            <div class="stat-sub">P95 ${st.p95AbsLapDeltaMs.toFixed(2)} ms (${st.lapCount} laps)</div>
+          </div>
+        </div>
+
+        <div class="two-col">
+          <div class="card">
+            <div class="card-head"><h2>Start Bias Distribution</h2></div>
+            ${st.histogram
+              .map(
+                (b) => `
+              <div class="hist-row mono">
+                <span>${esc(b.label)}</span>
+                <div class="hist-track"><div class="hist-fill" style="width:${((b.count / maxBin) * 100).toFixed(1)}%"></div></div>
+                <span class="num">${b.count}</span>
+              </div>`
+              )
+              .join("")}
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>Bias by Drone Speed</h2></div>
+            <div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr><th>Speed Band</th><th class="num">Passes</th><th class="num">Mean Bias</th><th class="num">Jitter</th></tr>
+                </thead>
+                <tbody class="mono">
+                  ${st.speedBuckets
+                    .map(
+                      (sb) => `
+                    <tr>
+                      <td style="font-family:var(--font-sans)">${esc(sb.label)}</td>
+                      <td class="num">${sb.count}</td>
+                      <td class="num">${sb.count > 0 ? fmtSigned(sb.meanBiasMs, 2) : "--"}</td>
+                      <td class="num">${sb.count > 1 ? `±${sb.stdBiasMs.toFixed(2)} ms` : "--"}</td>
+                    </tr>`
+                    )
+                    .join("")}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="padding:0;overflow:hidden;">
+          <div class="card-head" style="padding:14px 16px 0;"><h2>Start Gate Pass Log</h2></div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
                 <tr>
-                  <td>${esc(sb.label)}</td>
-                  <td>${sb.count}</td>
-                  <td>${sb.count > 0 ? fmtSigned(sb.meanBiasMs, 2) : "—"}</td>
-                  <td>${sb.count > 1 ? `±${sb.stdBiasMs.toFixed(2)} ms` : "—"}</td>
-                </tr>`
-                )
-                .join("")}
-            </tbody>
-          </table>
-          ${
-            lanList.length > 0
-              ? `<div style="margin-top:10px;font-size:11.5px;color:var(--muted);font-family:var(--mono);">
-                   Remote Tripod URL: <b style="color:var(--cyan)">${esc(lanList.join(", "))}</b>
-                 </div>`
-              : ""
-          }
-        </div>
-      </div>
-
-      <div class="card-box">
-        <div class="section-title" style="padding:0 0 8px;">Pass-by-Pass Log (Click Row to Open Frame Scrubber)</div>
-        <div style="overflow-x:auto;">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>#</th><th>Time</th><th>Pilot</th><th>Status</th><th>Peak dBm</th><th>Hold</th>
-                <th>Gate Bias</th><th>Lap #</th><th>Lap SlapRF</th><th>Lap Cam</th><th>ΔLap</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${state.passes
-                .map(
-                  (p) => `
-                <tr class="clickable" data-open-pass="${p.passId}">
-                  <td>#${p.passId}</td>
-                  <td>${esc(p.createdAt)}</td>
-                  <td><b>${esc(p.callsign)}</b></td>
-                  <td>${renderStatusBadge(p.status, p.confidence)}</td>
-                  <td>${p.peakRssiDbm.toFixed(1)}</td>
-                  <td>${p.holdMs.toFixed(0)} ms</td>
-                  <td><b>${fmtSigned(p.gateBiasMs, 2)}</b></td>
-                  <td>${p.lapNumber || "—"}</td>
-                  <td>${p.lapRfSec !== undefined ? `${p.lapRfSec.toFixed(3)}s` : "—"}</td>
-                  <td>${p.lapCamSec !== undefined ? `${p.lapCamSec.toFixed(3)}s` : "—"}</td>
-                  <td>${fmtSigned(p.lapDeltaMs, 2)}</td>
-                </tr>`
-                )
-                .join("")}
-            </tbody>
-          </table>
+                  <th>#</th><th>Time</th><th>Pilot</th><th>Status</th><th class="num">Peak dBm</th>
+                  <th class="num">Bias</th><th class="num">Lap</th><th class="num">SlapRF</th><th class="num">Camera</th><th class="num">Delta</th>
+                </tr>
+              </thead>
+              <tbody class="mono">
+                ${
+                  state.passes.length === 0
+                    ? `<tr><td colspan="10" style="text-align:center;color:var(--text-3);padding:20px;font-family:var(--font-sans);">No Start Gate passes recorded yet.</td></tr>`
+                    : state.passes
+                        .map(
+                          (p) => `
+                        <tr class="clickable" data-open-pass="${p.passId}">
+                          <td>#${p.passId}</td>
+                          <td>${esc(p.createdAt)}</td>
+                          <td style="font-family:var(--font-sans);font-weight:600;">${esc(p.callsign)}</td>
+                          <td>${renderStatusBadge(p.status, p.confidence)}</td>
+                          <td class="num">${p.peakRssiDbm.toFixed(1)}</td>
+                          <td class="num"><strong>${fmtSigned(p.gateBiasMs, 2)}</strong></td>
+                          <td class="num">${p.lapNumber || "--"}</td>
+                          <td class="num">${p.lapRfSec !== undefined ? `${p.lapRfSec.toFixed(3)}s` : "--"}</td>
+                          <td class="num">${p.lapCamSec !== undefined ? `${p.lapCamSec.toFixed(3)}s` : "--"}</td>
+                          <td class="num">${fmtSigned(p.lapDeltaMs, 2)}</td>
+                        </tr>`
+                        )
+                        .join("")
+                }
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
   `;
 }
 
-function renderSetupModal(): string {
-  if (!setupOpen || !state) return "";
+function renderSettingsView(): string {
+  if (!state) return "";
   const l = state.link;
   const c = state.camera;
-  const gates = state.sync.gates ?? [];
   const pilots = state.sync.pilots ?? [];
+  const theme = getTheme();
+  const startGate = (state.sync.gates ?? []).find((g) => g.role === "START_FINISH");
+  const startGateLabel = startGate
+    ? `Locked to Start / Finish Gate (#${startGate.gateId}${startGate.name ? ` ${startGate.name}` : ""})`
+    : "Automatically locks onto SlapRF's Start / Finish Gate";
 
   return `
-    <div class="modal-backdrop" data-close-backdrop="1">
-      <div class="modal-card">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <b style="font-size:14px;">GateCam Link & OpenCV Motion Settings</b>
-          <button data-act="close-setup">✕</button>
-        </div>
+    <div class="page-scroll">
+      <div class="page-inner settings-grid">
+        <div class="card">
+          <div class="card-head"><h2>SlapRF Engine Link</h2></div>
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            <div class="field">
+              <label for="cfg-url">SlapRF Server URL</label>
+              <div style="display:flex;gap:6px;">
+                <input class="input mono" type="text" id="cfg-url" style="flex:1" value="${esc(l.slaprfUrl)}" placeholder="http://127.0.0.1:18090" />
+                <button type="button" class="btn btn-sm mono" data-preset-url="http://127.0.0.1:18090">:18090</button>
+                <button type="button" class="btn btn-sm mono" data-preset-url="http://127.0.0.1:8090">:8090</button>
+              </div>
+              <span class="field-hint">${esc(startGateLabel)}</span>
+            </div>
 
-        <div class="field-row">
-          <label>SlapRF Server URL (:18090 Same Phone or :8090 LAN)</label>
-          <div style="display:flex;gap:6px;">
-            <input type="text" id="cfg-url" style="flex:1" value="${esc(l.slaprfUrl)}" placeholder="http://127.0.0.1:18090" />
-            <button data-preset-url="http://127.0.0.1:18090">:18090</button>
-            <button data-preset-url="http://127.0.0.1:8090">:8090</button>
+            <div class="field">
+              <label for="cfg-pilot">Pilot Filter</label>
+              <select class="select" id="cfg-pilot">
+                <option value="0" ${l.pilotFilter === 0 ? "selected" : ""}>All Active Pilots</option>
+                ${pilots.map((p) => `<option value="${p.slotIndex}" ${l.pilotFilter === p.slotIndex ? "selected" : ""}>Slot ${p.slotIndex} (${esc(p.callsign)})</option>`).join("")}
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="cfg-auth">HTTP Basic Auth (optional)</label>
+              <input class="input" type="password" id="cfg-auth" value="${esc(l.basicAuth)}" placeholder="user:password" />
+            </div>
           </div>
         </div>
 
-        <div class="field-row">
-          <label>HTTP Basic Auth (optional user:pass)</label>
-          <input type="password" id="cfg-auth" value="${esc(l.basicAuth)}" placeholder="Leave blank if disabled" />
-        </div>
+        <div class="card">
+          <div class="card-head"><h2>Optical Crossing Solver</h2></div>
+          <div style="display:flex;flex-direction:column;gap:14px;">
+            <div class="field">
+              <label>Lookback Window Around Crossing</label>
+              <div class="segmented" role="group" aria-label="Lookback window" style="align-self:flex-start;">
+                <button type="button" class="${settingsDraftLookback === 300 ? "is-active" : ""}" data-cfg-lb="300">±300 ms</button>
+                <button type="button" class="${settingsDraftLookback === 450 ? "is-active" : ""}" data-cfg-lb="450">±450 ms</button>
+                <button type="button" class="${settingsDraftLookback === 600 ? "is-active" : ""}" data-cfg-lb="600">±600 ms</button>
+              </div>
+            </div>
 
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-          <div class="field-row">
-            <label>Target Gate Filter</label>
-            <select id="cfg-gate">
-              <option value="0" ${l.gateFilter === 0 ? "selected" : ""}>All Gates</option>
-              ${gates.map((g) => `<option value="${g.gateId}" ${l.gateFilter === g.gateId ? "selected" : ""}>Gate #${g.gateId} — ${esc(g.name)}</option>`).join("")}
-            </select>
-          </div>
-          <div class="field-row">
-            <label>Pilot Filter</label>
-            <select id="cfg-pilot">
-              <option value="0" ${l.pilotFilter === 0 ? "selected" : ""}>All Pilots</option>
-              ${pilots.map((p) => `<option value="${p.slotIndex}" ${l.pilotFilter === p.slotIndex ? "selected" : ""}>Slot ${p.slotIndex} — ${esc(p.callsign)}</option>`).join("")}
-            </select>
-          </div>
-        </div>
+            <div class="field">
+              <label>Motion Subtractor</label>
+              <div class="segmented" role="group" aria-label="Motion subtractor" style="align-self:flex-start;">
+                <button type="button" class="${settingsDraftModel === "mog2" ? "is-active" : ""}" data-cfg-model="mog2">MOG2</button>
+                <button type="button" class="${settingsDraftModel === "knn" ? "is-active" : ""}" data-cfg-model="knn">KNN</button>
+              </div>
+            </div>
 
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-          <div class="field-row">
-            <label>Lookback Window (±ms)</label>
-            <select id="cfg-lookback">
-              <option value="300" ${c.lookbackHalfMs === 300 ? "selected" : ""}>±300 ms</option>
-              <option value="450" ${c.lookbackHalfMs === 450 ? "selected" : ""}>±450 ms (Default)</option>
-              <option value="600" ${c.lookbackHalfMs === 600 ? "selected" : ""}>±600 ms</option>
-            </select>
-          </div>
-          <div class="field-row">
-            <label>OpenCV Motion Subtractor</label>
-            <select id="cfg-model">
-              <option value="mog2" ${c.motionModel === "mog2" ? "selected" : ""}>OpenCV MOG2 (Shadow Reject)</option>
-              <option value="knn" ${c.motionModel === "knn" ? "selected" : ""}>OpenCV KNN</option>
-            </select>
+            <div class="field">
+              <label for="cfg-sens">Motion Threshold (<span id="sens-lbl" class="mono">${c.sensitivity.toFixed(0)}</span>)</label>
+              <input type="range" id="cfg-sens" min="6" max="40" step="2" value="${c.sensitivity}" />
+              <span class="field-hint">Lower values detect smaller distant drones; higher values reject wind shake.</span>
+            </div>
+
+            <label class="check-row">
+              <span>Rolling-shutter readout skew compensation</span>
+              <input type="checkbox" id="cfg-rsshutter" ${c.rollingShutterComp ? "checked" : ""} />
+            </label>
           </div>
         </div>
 
-        <div class="field-row">
-          <label>MOG2 Sensitivity (varThreshold: <span id="sens-lbl">${c.sensitivity.toFixed(0)}</span> — lower = more sensitive)</label>
-          <input type="range" id="cfg-sens" min="6" max="40" step="2" value="${c.sensitivity}" />
+        <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+          <div>
+            <div style="font-size:13px;font-weight:600;">Appearance</div>
+            <div class="field-hint">Match your SlapRF theme</div>
+          </div>
+          <div class="segmented" role="group" aria-label="Appearance theme">
+            <button type="button" class="${theme === "dark" ? "is-active" : ""}" data-theme-set="dark">${icons.moon(13)}<span>Dark</span></button>
+            <button type="button" class="${theme === "light" ? "is-active" : ""}" data-theme-set="light">${icons.sun(13)}<span>Light</span></button>
+          </div>
         </div>
 
-        <label style="display:flex;align-items:center;gap:8px;font-size:12px;">
-          <input type="checkbox" id="cfg-rsshutter" ${c.rollingShutterComp ? "checked" : ""} />
-          Compensate CMOS rolling-shutter readout skew
-        </label>
-
-        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px;">
-          <button data-act="close-setup">Cancel</button>
-          <button class="primary" data-act="save-setup">Save & Apply</button>
+        <div style="display:flex;justify-content:flex-end;">
+          <button type="button" class="btn btn-primary" data-act="save-setup" style="height:38px;padding:0 18px;">
+            ${icons.check(15)}
+            <span>Save Settings</span>
+          </button>
         </div>
       </div>
     </div>
@@ -1040,12 +1287,29 @@ function renderSetupModal(): string {
 
 function render(): void {
   if (!state) {
-    appRoot.innerHTML = `<div style="padding:32px;color:var(--muted);">Starting SlapRF GateCam...</div>`;
+    appRoot.innerHTML = `<div style="padding:32px;color:var(--text-3);">Starting SlapRF GateCam...</div>`;
     return;
   }
-  const bodyHtml =
-    route === "inspector" ? renderInspectorView() : route === "stats" ? renderStatsView() : renderLiveView();
-  appRoot.innerHTML = renderTopBar() + bodyHtml + renderSetupModal();
+  const outletHtml =
+    route === "inspector"
+      ? renderInspectorView()
+      : route === "passes"
+        ? renderPassesView()
+        : route === "stats"
+          ? renderStatsView()
+          : route === "settings"
+            ? renderSettingsView()
+            : renderLiveView();
+
+  appRoot.innerHTML = `
+    <div class="app-shell ${route === "inspector" ? "is-subpage" : ""}">
+      ${renderSidebar()}
+      <div class="main-col">
+        ${renderTopBar()}
+        <main class="outlet">${outletHtml}</main>
+      </div>
+    </div>
+  `;
   bindLivePointerHandlers();
   bindTimelineScrubHandlers();
   if (route === "live") {
@@ -1054,10 +1318,10 @@ function render(): void {
 }
 
 function bindLivePointerHandlers(): void {
-  const svg = document.getElementById("live-gate-svg");
-  if (!svg || !state) return;
+  const svgEl = document.getElementById("live-gate-svg");
+  if (!svgEl || !state) return;
 
-  svg.onpointerdown = (e: PointerEvent) => {
+  svgEl.onpointerdown = (e: PointerEvent) => {
     if (!state) return;
     const target = e.target as Element | null;
     if (target?.closest("[data-flip-dir]")) {
@@ -1069,12 +1333,11 @@ function bindLivePointerHandlers(): void {
     if (handle) {
       if (state.gate.locked) return;
       dragHandle = handle;
-      svg.setPointerCapture(e.pointerId);
+      svgEl.setPointerCapture(e.pointerId);
       return;
     }
 
-    // Tapping anywhere else on the camera preview triggers one-shot tap-to-focus & locks AF there!
-    const r = svg.getBoundingClientRect();
+    const r = svgEl.getBoundingClientRect();
     const nx = Math.max(0.02, Math.min(0.98, (e.clientX - r.left) / Math.max(1, r.width)));
     const ny = Math.max(0.02, Math.min(0.98, (e.clientY - r.top) / Math.max(1, r.height)));
     tapFocusSpot = { x: nx, y: ny };
@@ -1091,9 +1354,9 @@ function bindLivePointerHandlers(): void {
     });
   };
 
-  svg.onpointermove = (e: PointerEvent) => {
+  svgEl.onpointermove = (e: PointerEvent) => {
     if (!dragHandle || !state) return;
-    const r = svg.getBoundingClientRect();
+    const r = svgEl.getBoundingClientRect();
     const nx = Math.max(0.03, Math.min(0.97, (e.clientX - r.left) / Math.max(1, r.width)));
     const ny = Math.max(0.04, Math.min(0.96, (e.clientY - r.top) / Math.max(1, r.height)));
     if (dragHandle === "p1") {
@@ -1104,7 +1367,7 @@ function bindLivePointerHandlers(): void {
       state.gate.p2y = ny;
     }
     const { w: fw, h: fh } = currentFrameDims();
-    svg.innerHTML = gateGeometrySVG(state.gate, true, fw, fh);
+    svgEl.innerHTML = gateGeometrySVG(state.gate, true, fw, fh);
   };
 
   const finishDrag = () => {
@@ -1112,8 +1375,8 @@ function bindLivePointerHandlers(): void {
     dragHandle = null;
     void updateGate(state.gate);
   };
-  svg.onpointerup = finishDrag;
-  svg.onpointercancel = finishDrag;
+  svgEl.onpointerup = finishDrag;
+  svgEl.onpointercancel = finishDrag;
 }
 
 function bindTimelineScrubHandlers(): void {
@@ -1167,14 +1430,13 @@ async function updateCamera(next: CameraConfig): Promise<void> {
 
 appRoot.addEventListener("click", async (e) => {
   const el = (e.target as HTMLElement | null)?.closest<HTMLElement>(
-    "[data-nav],[data-open-pass],[data-fps],[data-zoom],[data-act],[data-insp-step],[data-insp-jump],[data-insp-toggle],[data-preset-url],[data-close-backdrop]"
+    "[data-nav],[data-open-pass],[data-fps],[data-zoom],[data-focus-val],[data-shutter-val],[data-pass-filter],[data-cfg-lb],[data-cfg-model],[data-theme-set],[data-act],[data-insp-step],[data-insp-jump],[data-insp-toggle],[data-preset-url]"
   );
   if (!el || !state) return;
 
-  if (el.hasAttribute("data-close-backdrop") && e.target === el) {
-    setupOpen = false;
-    updateNativeUnderlayVisibility();
-    render();
+  const themeAttr = el.getAttribute("data-theme-set");
+  if (themeAttr === "dark" || themeAttr === "light") {
+    setTheme(themeAttr);
     return;
   }
 
@@ -1196,9 +1458,36 @@ appRoot.addEventListener("click", async (e) => {
   const zoomAttr = el.getAttribute("data-zoom");
   if (zoomAttr) {
     const nextZoom = parseFloat(zoomAttr) || 1.0;
-    // Ultra-Wide (< 1.0x) requires standard 60 fps session on Android Camera2
     const nextFps = nextZoom < 0.9 && state.camera.targetFps > 60 ? 60 : state.camera.targetFps;
     await updateCamera({ ...state.camera, zoomRatio: nextZoom, targetFps: nextFps });
+    return;
+  }
+  const focusVal = el.getAttribute("data-focus-val");
+  if (focusVal) {
+    await updateCamera({ ...state.camera, focusMode: focusVal, focusLocked: true });
+    return;
+  }
+  const shutterVal = el.getAttribute("data-shutter-val");
+  if (shutterVal) {
+    await updateCamera({ ...state.camera, shutterUs: parseInt(shutterVal, 10) || 0 });
+    return;
+  }
+  const pf = el.getAttribute("data-pass-filter");
+  if (pf === "all" || pf === "valid" || pf === "review") {
+    passFilter = pf;
+    render();
+    return;
+  }
+  const cfgLb = el.getAttribute("data-cfg-lb");
+  if (cfgLb) {
+    settingsDraftLookback = parseInt(cfgLb, 10) || 450;
+    render();
+    return;
+  }
+  const cfgModel = el.getAttribute("data-cfg-model");
+  if (cfgModel) {
+    settingsDraftModel = cfgModel;
+    render();
     return;
   }
   const stepAttr = el.getAttribute("data-insp-step");
@@ -1290,59 +1579,30 @@ appRoot.addEventListener("click", async (e) => {
       state = await apiJSON<AppState>("POST", "/v1/gatecam/passes:clear", {});
       render();
       break;
-    case "open-setup":
-      setupOpen = true;
-      updateNativeUnderlayVisibility();
-      render();
-      break;
-    case "close-setup":
-      setupOpen = false;
-      updateNativeUnderlayVisibility();
-      render();
-      break;
     case "save-setup": {
       const urlVal = (document.getElementById("cfg-url") as HTMLInputElement).value.trim();
       const authVal = (document.getElementById("cfg-auth") as HTMLInputElement).value;
-      const gateVal = parseInt((document.getElementById("cfg-gate") as HTMLSelectElement).value, 10) || 0;
       const pilotVal = parseInt((document.getElementById("cfg-pilot") as HTMLSelectElement).value, 10) || 0;
-      const lbVal = parseInt((document.getElementById("cfg-lookback") as HTMLSelectElement).value, 10) || 450;
-      const modelVal = (document.getElementById("cfg-model") as HTMLSelectElement).value;
       const sensVal = parseFloat((document.getElementById("cfg-sens") as HTMLInputElement).value) || 16;
       const rsVal = (document.getElementById("cfg-rsshutter") as HTMLInputElement).checked;
 
       await apiJSON("PUT", "/v1/gatecam/camera", {
         ...state.camera,
-        lookbackHalfMs: lbVal,
-        motionModel: modelVal,
+        lookbackHalfMs: settingsDraftLookback,
+        motionModel: settingsDraftModel,
         sensitivity: sensVal,
         rollingShutterComp: rsVal,
       });
       state = await apiJSON<AppState>("PUT", "/v1/gatecam/link", {
         slaprfUrl: urlVal,
         basicAuth: authVal,
-        gateFilter: gateVal,
+        gateFilter: 0,
         pilotFilter: pilotVal,
         exposeLan: false,
       });
-      setupOpen = false;
-      updateNativeUnderlayVisibility();
-      render();
+      window.location.hash = "#/";
       break;
     }
-  }
-});
-
-appRoot.addEventListener("change", async (e) => {
-  const t = e.target as HTMLElement | null;
-  if (!t || !state) return;
-  if (t.hasAttribute("data-shutter")) {
-    const us = parseInt((t as HTMLSelectElement).value, 10) || 0;
-    await updateCamera({ ...state.camera, shutterUs: us });
-    return;
-  }
-  if (t.hasAttribute("data-focus-mode")) {
-    const fm = (t as HTMLSelectElement).value || "gate";
-    await updateCamera({ ...state.camera, focusMode: fm, focusLocked: true });
   }
 });
 
@@ -1370,26 +1630,21 @@ function connectLiveWS(): void {
       const msg = JSON.parse(String(ev.data));
       if (msg.type === "status" && msg.payload) {
         state = msg.payload as AppState;
-        if (!dragHandle) render();
+        if (!dragHandle && route !== "settings") render();
       } else if (msg.type === "hud" && msg.payload && state) {
         state.camInfo = msg.payload.camera;
         state.sync = msg.payload.sync;
-        // Fast DOM patch for 4 Hz HUD without touching SVG drag state
         const rssiEl = document.querySelector("[data-hud-rssi]");
         if (rssiEl) {
-          const items = state.sync.liveRssi ?? [];
-          rssiEl.innerHTML =
-            items.length > 0
-              ? items.map((r) => `${esc(r.callsign)} <b>${r.rssiDbm.toFixed(0)} dBm</b>`).join(" · ")
-              : `Waiting for 50 Hz RSSI on ${esc(state.sync.slaprfUrl)}...`;
+          rssiEl.innerHTML = fmtStartGateRssi(state.sync);
         }
         const ringEl = document.querySelector("[data-hud-ring]");
         if (ringEl) {
-          ringEl.textContent = `${fmtCamTelemetry(state.camInfo)} ●`;
+          ringEl.textContent = fmtCamTelemetry(state.camInfo);
         }
       } else if ((msg.type === "pass_added" || msg.type === "pass_updated") && state) {
         void refreshStateSilently().then(() => {
-          if (!dragHandle && route !== "inspector") render();
+          if (!dragHandle && route !== "inspector" && route !== "settings") render();
         });
       }
     } catch {
@@ -1403,6 +1658,8 @@ function connectLiveWS(): void {
 
 async function boot(): Promise<void> {
   state = await apiJSON<AppState>("GET", "/v1/gatecam/state");
+  settingsDraftLookback = state.camera.lookbackHalfMs || 450;
+  settingsDraftModel = state.camera.motionModel || "mog2";
   syncRouteFromHash();
   connectLiveWS();
 }

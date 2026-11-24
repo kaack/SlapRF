@@ -107,6 +107,69 @@ func TestGateCamLiveAlignmentInspectorAndStatsE2E(t *testing.T) {
 	if err != nil || !strings.Contains(txt, "GateCam Verification Report") {
 		t.Fatalf("unexpected stats view text (err=%v): %s", err, txt)
 	}
+
+	// 5. Verify Passes & Settings main navigation routes in mobile portrait viewport
+	mobCtx, err := suiteBrowser.NewContext(playwright.BrowserNewContextOptions{
+		Viewport:          &playwright.Size{Width: 412, Height: 915},
+		DeviceScaleFactor: playwright.Float(2.0),
+	})
+	if err != nil {
+		t.Fatalf("NewContext mobile: %v", err)
+	}
+	defer mobCtx.Close()
+	mobPage, err := mobCtx.NewPage()
+	if err != nil {
+		t.Fatalf("NewPage mobile: %v", err)
+	}
+	mobPage.OnPageError(func(err error) {
+		pageErrs = append(pageErrs, err.Error())
+	})
+	if _, err := mobPage.Goto(gcHTTP.URL+"/#/", playwright.PageGotoOptions{
+		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
+	}); err != nil {
+		t.Fatalf("Goto mobile GateCam: %v", err)
+	}
+	if err := mobPage.Locator("[data-open-pass='1']").WaitFor(); err != nil {
+		t.Fatalf("mobile pass card #1 missing: %v", err)
+	}
+	shotDir := strings.TrimSpace(os.Getenv("SLAPRF_GATECAM_SCREENSHOT_DIR"))
+	if shotDir != "" {
+		_, _ = mobPage.Screenshot(playwright.PageScreenshotOptions{Path: playwright.String(filepath.Join(shotDir, "ui_mobile_live.png"))})
+	}
+	if err := mobPage.Locator(".sidebar [data-nav='#/passes']").Click(); err != nil {
+		t.Fatalf("mobile click Passes tab: %v", err)
+	}
+	if err := mobPage.Locator("[data-pass-filter='valid']").WaitFor(); err != nil {
+		t.Fatalf("mobile Passes filter bar missing: %v", err)
+	}
+	if err := mobPage.Locator("[data-open-pass='1']").Click(); err != nil {
+		t.Fatalf("mobile open pass #1: %v", err)
+	}
+	if err := mobPage.Locator("#insp-img").WaitFor(); err != nil {
+		t.Fatalf("mobile inspector img missing: %v", err)
+	}
+	if shotDir != "" {
+		_, _ = mobPage.Screenshot(playwright.PageScreenshotOptions{Path: playwright.String(filepath.Join(shotDir, "ui_mobile_inspector.png"))})
+	}
+	if err := mobPage.Locator(".topbar [data-nav]").First().Click(); err != nil {
+		t.Fatalf("mobile click Back from inspector: %v", err)
+	}
+	if err := mobPage.Locator(".sidebar [data-nav='#/stats']").Click(); err != nil {
+		t.Fatalf("mobile click Accuracy tab: %v", err)
+	}
+	if shotDir != "" {
+		_, _ = mobPage.Screenshot(playwright.PageScreenshotOptions{Path: playwright.String(filepath.Join(shotDir, "ui_mobile_stats.png"))})
+	}
+	if err := mobPage.Locator(".sidebar [data-nav='#/settings']").Click(); err != nil {
+		t.Fatalf("mobile click Settings tab: %v", err)
+	}
+	if err := mobPage.Locator("#cfg-url").WaitFor(); err != nil {
+		t.Fatalf("mobile Settings #cfg-url missing: %v", err)
+	}
+	if shotDir != "" {
+		_, _ = mobPage.Screenshot(playwright.PageScreenshotOptions{Path: playwright.String(filepath.Join(shotDir, "ui_mobile_settings.png"))})
+	}
+
 	if len(pageErrs) > 0 {
 		t.Fatalf("unexpected browser page errors: %v", pageErrs)
 	}

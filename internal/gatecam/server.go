@@ -181,12 +181,22 @@ func (s *Server) loadSettings() {
 		s.gate = saved.Gate
 	}
 	if saved.Camera.TargetFPS > 0 {
+		defCam := DefaultCameraConfig()
 		if saved.Camera.FocusMode == "" {
-			saved.Camera.FocusMode = "gate"
+			saved.Camera.FocusMode = defCam.FocusMode
 			saved.Camera.FocusLocked = true
 		}
 		if saved.Camera.ZoomRatio <= 0 {
 			saved.Camera.ZoomRatio = 1.0
+		}
+		if saved.Camera.LookbackHalfMs < 150 {
+			saved.Camera.LookbackHalfMs = defCam.LookbackHalfMs
+		}
+		if saved.Camera.MotionModel == "" {
+			saved.Camera.MotionModel = defCam.MotionModel
+		}
+		if saved.Camera.Sensitivity <= 0 {
+			saved.Camera.Sensitivity = defCam.Sensitivity
 		}
 		s.camCfg = saved.Camera
 	}
@@ -210,6 +220,28 @@ func (s *Server) saveSettingsLocked() {
 	}
 }
 
+func isStartGateCrossing(ev domain.GateCrossingEvent, gates []GateInfo, explicitFilter int) bool {
+	if explicitFilter > 0 {
+		return int(ev.GateID) == explicitFilter
+	}
+	var startGateID uint8
+	for _, g := range gates {
+		if g.Role == string(domain.GateRoleStartFinish) {
+			startGateID = g.GateID
+			break
+		}
+	}
+	if startGateID > 0 {
+		return ev.GateID == startGateID
+	}
+	for _, g := range gates {
+		if g.GateID == ev.GateID && g.Role != "" && g.Role != string(domain.GateRoleStartFinish) {
+			return false
+		}
+	}
+	return ev.GateID <= 1
+}
+
 func (s *Server) handleSlapRFCrossing(ev domain.GateCrossingEvent) {
 	s.mu.RLock()
 	gateFilter := s.linkCfg.GateFilter
@@ -219,7 +251,8 @@ func (s *Server) handleSlapRFCrossing(ev domain.GateCrossingEvent) {
 	camCfg := s.camCfg
 	s.mu.RUnlock()
 
-	if gateFilter > 0 && int(ev.GateID) != gateFilter {
+	syncSt := s.client.Status()
+	if !isStartGateCrossing(ev, syncSt.Gates, gateFilter) {
 		return
 	}
 	if pilotFilter > 0 && ev.SlotIndex != pilotFilter {
@@ -229,7 +262,6 @@ func (s *Server) handleSlapRFCrossing(ev domain.GateCrossingEvent) {
 		halfMs = 450
 	}
 
-	syncSt := s.client.Status()
 	clockOffsetUs := syncSt.ClockOffsetUs
 	if !syncSt.ClockLocked {
 		// Estimate offset directly from current sensor clock if crossing arrived before sync finished
@@ -441,10 +473,21 @@ func (s *Server) handlePutGate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePutCamera(w http.ResponseWriter, r *http.Request) {
-	var next CameraConfig
+	s.mu.RLock()
+	next := s.camCfg
+	s.mu.RUnlock()
 	if err := json.NewDecoder(io.LimitReader(r.Body, 16384)).Decode(&next); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if next.LookbackHalfMs < 150 {
+		next.LookbackHalfMs = 450
+	}
+	if next.MotionModel == "" {
+		next.MotionModel = "mog2"
+	}
+	if next.Sensitivity <= 0 {
+		next.Sensitivity = 16
 	}
 	st, err := s.cam.Configure(next)
 	if err != nil {
