@@ -1187,6 +1187,43 @@ export function makeMockApiClient(store: AppStore): MockApiClientRecord {
     eventAction: record("eventAction"),
     stageControl: record("stageControl"),
     practiceAction: record("practiceAction"),
+    ensurePracticeSessionTrace: record("ensurePracticeSessionTrace"),
+    fetchMLStatus: (...args: unknown[]) => {
+      calls.push({ method: "fetchMLStatus", args });
+      return Promise.resolve(store.mlStatus);
+    },
+    updateMLConfig: (payload: {
+      detectorMode?: "classic" | "ai";
+      activeModelId?: string;
+      liveTuneEnabled?: boolean;
+      resetLiveTunes?: boolean;
+    }) => {
+      calls.push({ method: "updateMLConfig", args: [payload] });
+      const next = {
+        ...store.mlStatus,
+        config: {
+          ...store.mlStatus.config,
+          ...(payload.detectorMode ? { detectorMode: payload.detectorMode } : {}),
+          ...(payload.activeModelId ? { activeModelId: payload.activeModelId } : {}),
+          ...(payload.liveTuneEnabled !== undefined ? { liveTuneEnabled: payload.liveTuneEnabled } : {}),
+        },
+      };
+      store.ingestMLStatus(next);
+      return Promise.resolve(next);
+    },
+    startMLTraining: (...args: unknown[]) => {
+      calls.push({ method: "startMLTraining", args });
+      return Promise.resolve(store.mlStatus);
+    },
+    exportMLDatasetArchive: record("exportMLDatasetArchive", {
+      filename: "slaprf-ai-dataset.tar.gz",
+      archiveB64: "",
+      sizeBytes: 0,
+    }),
+    importMLDatasetArchive: record("importMLDatasetArchive", {
+      importedSessions: 1,
+      importedModels: 1,
+    }),
     bracketEdit: (...args: unknown[]) => {
       calls.push({ method: "bracketEdit", args });
       return Promise.resolve(store.raceState);

@@ -435,9 +435,14 @@ export class PilotRssiChart extends Component {
     return !this.chartLinesLocked && this.focus !== null && !this.isMultiPilotMode && !this.store.isHistoricalTrack;
   }
 
-  /** True when unlocked on a single timer and paused, enabling crossing-line dragging & deletion. */
+  /** True when unlocked on a single timer and paused (or viewing a stopped Practice pack), enabling crossing-line dragging & deletion. */
   private get canEditCrossings(): boolean {
-    return this.canEditLines && this.endUs !== null;
+    const canModifyCrossings =
+      !this.chartLinesLocked &&
+      this.focus !== null &&
+      !this.isMultiPilotMode &&
+      (this.contextMode === "practice" || !this.store.isHistoricalTrack);
+    return canModifyCrossings && (this.endUs !== null || !this.store.isScopeLive);
   }
 
   private get activePilotSlot(): number {
@@ -554,6 +559,7 @@ export class PilotRssiChart extends Component {
             <button class="scope-chart-action-btn" type="button" data-act="add-crossing" title="Unlock chart lines to add crossings" aria-label="Add crossing" disabled>${icons.plus(15)}</button>
             <button class="scope-chart-action-btn is-locked" type="button" data-act="toggle-chart-lock" aria-pressed="false" title="Unlock chart lines to adjust thresholds or crossings" aria-label="Unlock chart lines">${icons.lock(14)}</button>
           </div>
+          <span class="scope-ai-chip" data-slot="ai-chip" hidden></span>
         </div>
         <div class="canvas-host canvas-host-md scope-canvas" data-slot="chart" tabindex="0"
              aria-label="Signal chart. Space pauses, arrow keys jump between passes."></div>
@@ -1496,7 +1502,7 @@ export class PilotRssiChart extends Component {
       })
     );
     this.onDispose(
-      store.subscribe(["config", "status", "rules"], () => {
+      store.subscribe(["config", "status", "rules", "ml"], () => {
         this.syncHardwareModeScale();
         for (const gId of Array.from(this.selectedGates)) {
           if (!store.node(gId)) this.selectedGates.delete(gId);
@@ -1813,6 +1819,28 @@ export class PilotRssiChart extends Component {
     }
   }
 
+  /** Focuses a specific timer (or all timers if null) and centers the X-axis window around `centerTsUs`. */
+  public focusGateAndWindow(
+    gateId: number | null,
+    centerTsUs: number,
+    spanUs = 6_000_000,
+    unlockForEdit = false
+  ): void {
+    this.focus = gateId;
+    if (unlockForEdit && gateId !== null) {
+      this.chartLinesLocked = false;
+    }
+    this.autoX = false;
+    this.windowUs = Math.min(MAX_WINDOW_US, Math.max(MIN_WINDOW_US, spanUs));
+    const latest = this.latest;
+    this.refUs = latest > 0 ? latest : centerTsUs;
+    this.endUs = Math.round(centerTsUs + this.windowUs / 2);
+    this.renderControls();
+    this.renderCalib();
+    this.renderLegend();
+    this.renderTuningDrawer();
+  }
+
   public restoreDefaults(): void {
     this.windowUs = DEFAULT_WINDOW_US;
     this.autoX = true;
@@ -2009,7 +2037,12 @@ export class PilotRssiChart extends Component {
   }
 
   private async addManualCrossing(): Promise<void> {
-    if (this.chartLinesLocked || this.focus === null || this.isMultiPilotMode || this.store.isHistoricalTrack) {
+    if (
+      this.chartLinesLocked ||
+      this.focus === null ||
+      this.isMultiPilotMode ||
+      (this.contextMode !== "practice" && this.store.isHistoricalTrack)
+    ) {
       return;
     }
     const gateId = this.focus;
@@ -3648,7 +3681,10 @@ export class PilotRssiChart extends Component {
 
     const overlayEl = this.el.querySelector<HTMLElement>('[data-slot="chart-actions"]');
     if (overlayEl) {
-      const showOverlay = this.focus !== null && !this.isMultiPilotMode && !this.store.isHistoricalTrack;
+      const showOverlay =
+        this.focus !== null &&
+        !this.isMultiPilotMode &&
+        (this.contextMode === "practice" || !this.store.isHistoricalTrack);
       const overlaySig = `${showOverlay ? 1 : 0}:${this.focus ?? 0}:${this.chartLinesLocked ? 1 : 0}`;
       if (overlaySig !== this.lastOverlayActionsSig) {
         this.lastOverlayActionsSig = overlaySig;
@@ -3676,6 +3712,27 @@ export class PilotRssiChart extends Component {
             lockBtn.innerHTML = this.chartLinesLocked ? icons.lock(14) : icons.unlock(14);
           }
         }
+      }
+    }
+
+    const aiChipEl = this.el.querySelector<HTMLElement>('[data-slot="ai-chip"]');
+    if (aiChipEl) {
+      const mlSt = this.store.mlStatus;
+      if (mlSt?.config?.detectorMode === "ai") {
+        const mod = mlSt.models?.find((m) => m.modelId === mlSt.config.activeModelId);
+        const verLabel = mod ? `AI v${mod.version}` : "AI";
+        const activeSlot = this.activePilotSlot;
+        const tunes = (mlSt.liveTunes ?? []).filter((lt) => lt.slotIndex === activeSlot);
+        const tuneSuffix =
+          mlSt.config.liveTuneEnabled && tunes.length > 0
+            ? ` · Tuned (${tunes[0].lapsUsed}L)`
+            : mlSt.config.liveTuneEnabled
+              ? " · Live Tune"
+              : "";
+        aiChipEl.hidden = false;
+        aiChipEl.textContent = `${verLabel}${tuneSuffix}`;
+      } else {
+        aiChipEl.hidden = true;
       }
     }
 

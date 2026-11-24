@@ -2480,3 +2480,146 @@ function storeSnapshotFrom(store: ReturnType<typeof makeStore>) {
     practiceState: store.practiceState,
   };
 }
+
+describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
+  it("switches to AI Training mode, toggles detector & pack loop, and triages borderline events", async () => {
+    const store = makeStore();
+    const p1 = makePilot(1, { callsign: "OneEye", band: 1, channel: 7, frequencyMhz: 5880 });
+    const g1 = makeGate(1, { name: "H1", timerLabel: "H1", role: "START_FINISH", trackOrder: 0 });
+    const g2 = makeGate(2, { name: "T1", timerLabel: "T1", role: "SECTOR_GATE", trackOrder: 1 });
+    const pack1 = makePracticeSession("pack-1", {
+      name: "Pack 1",
+      active: false,
+      tags: ["ai-pack"],
+      pilots: [
+        {
+          slotIndex: 1,
+          callsign: "OneEye",
+          color: "#ef4444",
+          band: 1,
+          channel: 7,
+          frequencyMhz: 5880,
+        },
+      ],
+      trackInitialized: true,
+      trackSnapshot: [g1, g2],
+      laps: [makeLap(1, 1, 1, 12.4)],
+      crossings: [makeCrossing(10, 1, 1, 10_000_000), makeCrossing(11, 1, 1, 22_400_000)],
+      filtered: [
+        {
+          timestampUs: 15_800_000,
+          gateId: 2,
+          slotIndex: 1,
+          callsign: "OneEye",
+          reason: "OUT_OF_ORDER",
+          detail: "T1 out of track order",
+          peakRssiDbm: -64.2,
+        },
+      ],
+      traceSampleCount: 400,
+      traceDurationSec: 25.0,
+    });
+
+    store.hydrate({
+      ...storeSnapshotFrom(store),
+      pilots: [p1],
+      gates: [g1, g2],
+      practiceState: {
+        initialized: true,
+        activeSessionId: "",
+        selectedSessionId: "pack-1",
+        sessions: [pack1],
+      },
+      mlStatus: {
+        config: { detectorMode: "classic", activeModelId: "ai-base-v0", liveTuneEnabled: true },
+        training: { running: false, epoch: 0, totalEpochs: 0, loss: 0 },
+        models: [
+          {
+            modelId: "ai-base-v0",
+            name: "AI Base v0",
+            version: 0,
+            createdAt: "2026-11-24T00:00:00Z",
+            builtIn: true,
+            trainPacks: 10,
+            valPacks: 4,
+            trainPasses: 48,
+            trainDurationMs: 120,
+            finalLoss: 0.02,
+            aiMetrics: {
+              totalPasses: 16,
+              detectedPasses: 16,
+              missedPasses: 0,
+              falseTriggers: 0,
+              precision: 1,
+              recall: 1,
+              f1: 1,
+              meanJitterMs: 11,
+            },
+            classicMetrics: {
+              totalPasses: 16,
+              detectedPasses: 15,
+              missedPasses: 1,
+              falseTriggers: 1,
+              precision: 0.9375,
+              recall: 0.9375,
+              f1: 0.9375,
+              meanJitterMs: 18,
+            },
+          },
+        ],
+        verifiedPacks: 0,
+        unverifiedPacks: 1,
+        totalRecordedPacks: 1,
+        verifiedPasses: 0,
+        storageBytes: 65536,
+        liveTunes: [],
+      },
+    });
+    store.setSessionTrace("pack-1", [
+      { timerId: 1, seqNum: 1, timestampUs: 9_500_000, rssi: [-55, -127], batteryMv: 4100, noiseFloorDbm: -91 },
+      { timerId: 2, seqNum: 1, timestampUs: 15_800_000, rssi: [-64.2, -127], batteryMv: 4100, noiseFloorDbm: -91 },
+    ]);
+
+    replaceAppHash("#/practice");
+    const host = mountHtml(`<div></div>`);
+    const mock = makeMockApiClient(store);
+    const view = new PracticeView(host, store, mock.api);
+    try {
+      const aiTabBtn = host.querySelector<HTMLButtonElement>('[data-practice-act="set-dir-mode"][data-dir-mode="ai-training"]');
+      expect(aiTabBtn).not.toBeNull();
+      aiTabBtn!.click();
+      await flushMicrotasks();
+
+      expect(host.textContent ?? "").toContain("Hands-Free Pack Loop");
+      expect(host.textContent ?? "").toContain("On-Device Base Model Trainer");
+
+      // Switch detector mode to AI
+      const aiModeBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="set-detector-mode"][data-mode="ai"]');
+      expect(aiModeBtn).not.toBeNull();
+      aiModeBtn!.click();
+      await flushMicrotasks();
+      expect(store.mlStatus.config.detectorMode).toBe("ai");
+
+      // Open Review Unverified Pack and verify T1-OOO borderline event shows up
+      const reviewBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="review-next-unverified"]');
+      expect(reviewBtn).not.toBeNull();
+      reviewBtn!.click();
+      await flushMicrotasks();
+
+      expect(host.textContent ?? "").toContain("T1-OOO");
+      const verifyBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="toggle-verify-pack"]');
+      expect(verifyBtn).not.toBeNull();
+      verifyBtn!.click();
+      await flushMicrotasks();
+
+      const verifyCalls = mock.calls.filter(
+        (c) =>
+          c.method === "practiceAction" &&
+          (c.args[0] as { action?: string })?.action === "set_training_verified"
+      );
+      expect(verifyCalls.length).toBe(1);
+    } finally {
+      view.destroy();
+    }
+  });
+});

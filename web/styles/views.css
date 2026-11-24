@@ -27650,3 +27650,313 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
     margin: 0 14px 12px;
   }
 }
+
+/* --------------------------------------------------------------------------
+ * Practice AI Training & On-Device 1D TCN Trainer
+ * -------------------------------------------------------------------------- */
+
+.practice-dir-mode-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+
+.practice-ai-active-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent, #38bdf8);
+  margin-right: 6px;
+}
+
+.scope-ai-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent, #38bdf8);
+  background: color-mix(in srgb, var(--accent, #38bdf8) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent, #38bdf8) 32%, transparent);
+  white-space: nowrap;
+}
+
+.ai-train-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ai-train-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+.ai-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ai-card-title {
+  margin: 0 0 2px;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.ai-detector-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ai-check-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ai-pack-status-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.ai-pack-kpis {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.ai-quiet-select {
+  display: inline-block;
+  width: auto;
+  min-width: 68px;
+  height: 28px;
+  padding: 2px 8px;
+  margin-left: 4px;
+}
+
+.ai-progress-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-3, rgba(255, 255, 255, 0.08));
+  overflow: hidden;
+}
+
+.ai-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent, #38bdf8);
+  transition: width 180ms ease;
+}
+
+.ai-progress-fill.is-warn {
+  background: var(--warn, #f59e0b);
+}
+
+.ai-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ai-pass-badge {
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+}
+
+.ai-pack-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.ai-pack-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.09));
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ai-pack-chip.is-verified {
+  border-color: color-mix(in srgb, #10b981 45%, transparent);
+}
+
+.ai-pack-chip.is-live {
+  border-color: color-mix(in srgb, var(--accent, #38bdf8) 55%, transparent);
+}
+
+.ai-train-progress-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ai-train-progress-text {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.ai-scorecard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.ai-scorecard-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.ai-scorecard-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ai-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.ai-model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.ai-model-row.is-active {
+  border-color: color-mix(in srgb, var(--accent, #38bdf8) 55%, transparent);
+  background: color-mix(in srgb, var(--accent, #38bdf8) 8%, transparent);
+}
+
+.ai-model-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ai-export-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: auto;
+}
+
+.ai-import-label {
+  cursor: pointer;
+}
+
+.ai-train-banner {
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.ai-train-banner.is-error {
+  background: color-mix(in srgb, #ef4444 14%, transparent);
+  border: 1px solid color-mix(in srgb, #ef4444 40%, transparent);
+}
+
+.ai-train-banner.is-ok {
+  background: color-mix(in srgb, #10b981 14%, transparent);
+  border: 1px solid color-mix(in srgb, #10b981 40%, transparent);
+}
+
+.ai-review-topbar,
+.ai-review-meta-row,
+.ai-review-footer,
+.ai-borderline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ai-review-nav,
+.ai-borderline-nav,
+.ai-borderline-actions,
+.ai-review-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ai-borderline-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+@media (max-width: 860px) {
+  .practice-dir-mode-bar {
+    justify-content: stretch;
+  }
+
+  .practice-dir-mode-bar .segmented {
+    width: 100%;
+  }
+
+  .practice-dir-mode-bar .segmented > button {
+    flex: 1 1 50%;
+  }
+
+  .ai-scorecard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-train-card {
+    padding: 12px;
+  }
+}

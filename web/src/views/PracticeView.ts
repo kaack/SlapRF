@@ -48,6 +48,7 @@ import { mountTagPillEditor, renderTagPillBoxHtml } from "../widgets/TagPillEdit
 import { cleanConnectionInvalidReason, showToast } from "../widgets/Toast";
 import { AllPilotsPanel } from "./live/AllPilotsPanel";
 import { PilotPanel } from "./live/PilotPanel";
+import { PracticeAITrainingPanel } from "./live/PracticeAITrainingPanel";
 import { PilotView } from "./PilotView";
 
 type SessionDirStatusFilter = "all" | "live" | "stopped" | "laps";
@@ -94,6 +95,9 @@ export class PracticeView extends Component {
   private readonly api: ApiClient;
   private readonly scopedApi: ApiClient;
   private activeTab: PracticeViewTab = "directory";
+  private dirMode: "sessions" | "ai-training" = "sessions";
+  private aiPanel: PracticeAITrainingPanel | null = null;
+  private aiPanelHostEl: HTMLElement | null = null;
   private panel: Component | null = null;
   private shownFocus: number | null | undefined = undefined;
 
@@ -234,6 +238,7 @@ export class PracticeView extends Component {
 
     el.innerHTML = `
       <div class="settings" data-slot="directory"></div>
+      <div class="settings" data-slot="ai-training" style="display:none"></div>
       <div class="view-stack practice-workspace-page" data-slot="workspace" data-mobile-practice-view="overview" style="display:none">
         <div class="races-page-topbar practice-page-topbar" data-slot="mobile-topbar">
           <div class="rc-topbar-side is-left" aria-hidden="true"></div>
@@ -373,6 +378,8 @@ export class PracticeView extends Component {
       this.disposePracticeSignalsChart();
       this.disposePracticeTrackView();
       this.disposePracticeAnalyticsView();
+      this.aiPanel?.destroy();
+      this.aiPanel = null;
       this.panel?.destroy();
       setPracticeTopBarContext({
         tab: "directory",
@@ -571,18 +578,41 @@ export class PracticeView extends Component {
 
   private syncAll(pushHistory = false): void {
     const dirEl = this.slot("directory");
+    const aiEl = this.slot("ai-training");
     const wsEl = this.slot("workspace");
 
     if (this.activeTab === "directory") {
-      dirEl.style.display = "";
       wsEl.style.display = "none";
       this.disposePracticeSignalsChart();
       this.disposePracticeTrackView();
       this.disposePracticeAnalyticsView();
-      this.renderDirectory();
+      if (this.dirMode === "ai-training") {
+        dirEl.style.display = "none";
+        aiEl.style.display = "";
+        this.renderAITrainingDirectory();
+      } else {
+        aiEl.style.display = "none";
+        if (this.aiPanel) {
+          this.aiPanel.destroy();
+          this.aiPanel = null;
+          this.aiPanelHostEl = null;
+        }
+        dirEl.style.display = "";
+        this.renderDirectory();
+      }
     } else {
       dirEl.style.display = "none";
+      aiEl.style.display = "none";
+      if (this.aiPanel) {
+        this.aiPanel.destroy();
+        this.aiPanel = null;
+        this.aiPanelHostEl = null;
+      }
       wsEl.style.display = "";
+      const selSess = this.store.selectedPracticeSession;
+      if (selSess && !selSess.active) {
+        void this.api.ensurePracticeSessionTrace(selSess.sessionId).catch(() => undefined);
+      }
       wsEl.dataset.mobilePracticeView = this.mobilePracticeTab;
       this.ensureSinglePilotFocusForMobileTab(this.mobilePracticeTab);
       this.renderWorkspaceChrome();
@@ -976,6 +1006,16 @@ export class PracticeView extends Component {
               this.lastDirSig = "";
               this.renderDirectory(true);
             }
+          }
+          return;
+        }
+
+        case "set-dir-mode": {
+          const nextMode = actBtn.dataset.dirMode === "ai-training" ? "ai-training" : "sessions";
+          if (this.dirMode !== nextMode) {
+            this.dirMode = nextMode;
+            this.lastDirSig = "";
+            this.syncAll(false);
           }
           return;
         }
@@ -1980,6 +2020,7 @@ export class PracticeView extends Component {
                             <div class="races-cell-box is-single">
                               <div class="races-table-status-cell">
                                 <span class="race-state-pill ${statusCls}" title="${esc(`${statusLabel} · ${bestNote}`)}">${statusLabel}</span>
+                                ${s.trainingVerified ? `<span class="race-state-pill is-live" title="Verified training pack">✓</span>` : ""}
                               </div>
                             </div>
                           </td>
@@ -2322,6 +2363,67 @@ export class PracticeView extends Component {
     this.lastDirSig = this.computeDirSig(this.store.practiceSessions);
   }
 
+  private renderDirModeBarHtml(): string {
+    const ml = this.store.mlStatus;
+    const aiBadge =
+      ml.config.detectorMode === "ai"
+        ? `<span class="practice-ai-active-dot" title="AI Detector active"></span>`
+        : "";
+    return `
+      <div class="practice-dir-mode-bar">
+        <div class="segmented" role="tablist" aria-label="Practice directory mode">
+          <button
+            type="button"
+            role="tab"
+            aria-selected="${this.dirMode === "sessions" ? "true" : "false"}"
+            class="${this.dirMode === "sessions" ? "is-active" : ""}"
+            data-practice-act="set-dir-mode"
+            data-dir-mode="sessions"
+          >Sessions</button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected="${this.dirMode === "ai-training" ? "true" : "false"}"
+            class="${this.dirMode === "ai-training" ? "is-active" : ""}"
+            data-practice-act="set-dir-mode"
+            data-dir-mode="ai-training"
+          >${aiBadge}<span>AI Training</span></button>
+        </div>
+      </div>`;
+  }
+
+  private renderAITrainingDirectory(): void {
+    const aiHost = this.slot("ai-training");
+    if (!this.aiPanel || !this.aiPanelHostEl || !aiHost.contains(this.aiPanelHostEl)) {
+      this.aiPanel?.destroy();
+      aiHost.innerHTML = `
+        <section class="settings-section is-single-col">
+          <div class="settings-cards">
+            ${this.renderDirModeBarHtml()}
+            <div data-ai-training-panel-host></div>
+          </div>
+        </section>`;
+      this.aiPanelHostEl = aiHost.querySelector<HTMLElement>("[data-ai-training-panel-host]");
+      if (this.aiPanelHostEl) {
+        this.aiPanel = new PracticeAITrainingPanel(
+          this.aiPanelHostEl,
+          this.store,
+          this.api,
+          (sessionId: string) => {
+            this.dirMode = "sessions";
+            this.openPracticeSession(sessionId);
+          }
+        );
+      }
+    } else {
+      const modeBarWrap = aiHost.querySelector<HTMLElement>(".practice-dir-mode-bar");
+      if (modeBarWrap) {
+        modeBarWrap.outerHTML = this.renderDirModeBarHtml();
+      }
+      this.aiPanel.render();
+    }
+  }
+
   private renderDirectory(force = false): void {
     const dirHost = this.slot("directory");
     const activeEl = document.activeElement;
@@ -2428,6 +2530,7 @@ export class PracticeView extends Component {
     dirHost.innerHTML = `
       <section class="settings-section is-single-col">
         <div class="settings-cards">
+          ${this.renderDirModeBarHtml()}
           ${ongoingNote}
           <div class="card card-flush races-dir-card">
             ${filterToolbarMarkup}
