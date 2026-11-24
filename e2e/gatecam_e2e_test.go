@@ -166,8 +166,40 @@ func TestGateCamLiveAlignmentInspectorAndStatsE2E(t *testing.T) {
 	if err := mobPage.Locator("#cfg-url").WaitFor(); err != nil {
 		t.Fatalf("mobile Settings #cfg-url missing: %v", err)
 	}
+	if selCnt, _ := mobPage.Locator("select").Count(); selCnt != 0 {
+		t.Fatalf("expected zero native <select> elements, found %d", selCnt)
+	}
+	if err := mobPage.Locator("[data-act='discover-link']").Click(); err != nil {
+		t.Fatalf("click Discover button: %v", err)
+	}
+	if err := mobPage.Locator("[data-act='toggle-pilot-select']").Click(); err != nil {
+		t.Fatalf("open custom pilot selector: %v", err)
+	}
+	if err := mobPage.Locator(".custom-select-menu").WaitFor(); err != nil {
+		t.Fatalf("custom pilot selector menu did not open: %v", err)
+	}
 	if shotDir != "" {
 		_, _ = mobPage.Screenshot(playwright.PageScreenshotOptions{Path: playwright.String(filepath.Join(shotDir, "ui_mobile_settings.png"))})
+	}
+	if err := mobPage.Locator("[data-pilot-opt='0']").Click(); err != nil {
+		t.Fatalf("select All Active Pilots option: %v", err)
+	}
+	if err := mobPage.Locator("[data-act='toggle-more']").Click(); err != nil {
+		t.Fatalf("open More drawer: %v", err)
+	}
+	if err := mobPage.Locator(".more-drawer-sheet .more-theme-bar").WaitFor(); err != nil {
+		t.Fatalf("More drawer theme bar did not appear: %v", err)
+	}
+	// Click Light then Dark inside the More drawer to verify live theme switching
+	if err := mobPage.Locator(".more-drawer-sheet [data-theme-set='light']").Click(); err != nil {
+		t.Fatalf("click Light theme in More drawer: %v", err)
+	}
+	if err := mobPage.Locator(".more-drawer-sheet [data-theme-set='dark']").Click(); err != nil {
+		t.Fatalf("click Dark theme in More drawer: %v", err)
+	}
+	_, _ = mobPage.Evaluate(`() => new Promise(r => setTimeout(r, 240))`)
+	if shotDir != "" {
+		_, _ = mobPage.Screenshot(playwright.PageScreenshotOptions{Path: playwright.String(filepath.Join(shotDir, "ui_mobile_more.png"))})
 	}
 
 	if len(pageErrs) > 0 {

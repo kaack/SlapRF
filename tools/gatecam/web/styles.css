@@ -1184,7 +1184,288 @@ html.is-native-underlay.route-live .viewfinder-stage {
   background: var(--surface-2);
 }
 
-/* Settings Form ------------------------------------------------------------ */
+/* Custom Select Popover & Switch (SlapRF Form Controls) -------------------- */
+.custom-select {
+  position: relative;
+  width: 100%;
+}
+
+.custom-select-btn {
+  width: 100%;
+  height: 36px;
+  padding: 0 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.custom-select-btn:hover {
+  background: var(--surface-3);
+  border-color: var(--btn-hover-border);
+}
+
+.custom-select-btn.is-open {
+  border-color: var(--accent-line);
+}
+
+.custom-select-val {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pilot-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c, var(--text-3));
+  flex-shrink: 0;
+}
+
+.pilot-dot.is-hollow {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.8px var(--text-3);
+}
+
+.custom-select-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 5px);
+  z-index: 120;
+  padding: 4px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.62), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+html[data-theme="light"] .custom-select-menu {
+  background: #ffffff;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.05);
+}
+
+.custom-select-opt {
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.custom-select-opt:hover {
+  background: var(--surface-3);
+}
+
+.custom-select-opt.is-selected {
+  background: var(--surface-3);
+  font-weight: 600;
+}
+
+.custom-select-opt.is-selected .opt-check {
+  color: var(--accent);
+}
+
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.switch span {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.switch span::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-2);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.switch input:checked + span {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.switch input:checked + span::after {
+  transform: translateX(14px);
+  background: var(--accent-ink);
+}
+
+/* SlapRF "..." More Menu Bottom-Sheet Drawer ------------------------------- */
+.mobile-more-tab-btn {
+  display: none;
+}
+
+.more-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 780;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.more-drawer-overlay[hidden] {
+  display: none !important;
+}
+
+.more-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2.5px);
+  -webkit-backdrop-filter: blur(2.5px);
+}
+
+.more-drawer-sheet {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 0 16px calc(24px + env(safe-area-inset-bottom, 0px));
+  border-radius: 18px 18px 0 0;
+  border-top: 1.5px solid var(--border-strong);
+  background: var(--surface);
+  box-shadow: 0 -10px 32px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: slaprf-sheet-up 0.2s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes slaprf-sheet-up {
+  from {
+    transform: translate3d(0, 100%, 0);
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.more-drawer-handle {
+  width: 100%;
+  height: 26px;
+  border: 0;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.more-drawer-grip {
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+
+.more-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.more-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 70px;
+  padding: 10px 8px;
+  border-radius: 12px;
+  border: 1px solid #2b303b;
+  border-top-color: #363c49;
+  border-bottom: 2.5px solid #323846;
+  background: linear-gradient(180deg, #181c23 0%, #14171d 100%);
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: center;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 4px 10px rgba(0, 0, 0, 0.45);
+}
+
+html[data-theme="light"] .more-tile {
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  border: 1px solid #cbd5e1;
+  border-top-color: #dbe3ee;
+  border-bottom: 2.5px solid #94a3b8;
+  box-shadow: inset 0 1px 0 #ffffff, 0 4px 10px rgba(15, 23, 42, 0.08);
+}
+
+.more-tile svg {
+  color: var(--text-2);
+}
+
+.more-theme-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 4px;
+}
+
+.more-theme-bar .theme-btn {
+  width: auto;
+  height: 30px;
+  padding: 0 12px;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+}
 .settings-grid {
   max-width: 640px;
   display: flex;
@@ -1301,9 +1582,13 @@ html.is-native-underlay.route-live .viewfinder-stage {
     min-width: 0;
   }
 
+  .mobile-more-tab-btn {
+    display: flex;
+  }
+
   .sidebar .nav {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 2px;
   }
 

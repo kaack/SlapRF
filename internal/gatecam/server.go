@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -424,6 +425,7 @@ func (s *Server) RegisterAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /v1/gatecam/camera", s.handlePutCamera)
 	mux.HandleFunc("POST /v1/gatecam/camera:focus", s.handlePostFocus)
 	mux.HandleFunc("PUT /v1/gatecam/link", s.handlePutLink)
+	mux.HandleFunc("POST /v1/gatecam/link:discover", s.handleDiscoverLink)
 	mux.HandleFunc("GET /v1/gatecam/preview.jpg", s.handlePreviewJPEG)
 
 	mux.HandleFunc("GET /v1/gatecam/passes", s.handleListPasses)
@@ -563,6 +565,117 @@ func (s *Server) handlePutLink(w http.ResponseWriter, r *http.Request) {
 	snap := s.buildStateSnapshot()
 	s.broadcastWS("status", snap)
 	writeJSON(w, http.StatusOK, snap)
+}
+
+func (s *Server) handleDiscoverLink(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		HintURL   string `json:"hintUrl"`
+		BasicAuth string `json:"basicAuth"`
+	}
+	_ = json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body)
+
+	s.mu.RLock()
+	auth := body.BasicAuth
+	if auth == "" {
+		auth = s.linkCfg.BasicAuth
+	}
+	s.mu.RUnlock()
+
+	var candidates []string
+	seen := make(map[string]bool)
+	addCand := func(raw string) {
+		c := strings.TrimRight(strings.TrimSpace(raw), "/")
+		if c != "" && !seen[c] {
+			seen[c] = true
+			candidates = append(candidates, c)
+		}
+	}
+
+	addCand("http://127.0.0.1:18090")
+	addCand("http://127.0.0.1:8090")
+	if strings.TrimSpace(s.cfg.DefaultLink) != "" {
+		addCand(s.cfg.DefaultLink)
+	}
+	if rawHint := strings.TrimSpace(body.HintURL); rawHint != "" {
+		if !strings.Contains(rawHint, "://") {
+			rawHint = "http://" + rawHint
+		}
+		if u, err := url.Parse(rawHint); err == nil && u.Hostname() != "" {
+			scheme := u.Scheme
+			if scheme == "" {
+				scheme = "http"
+			}
+			host := u.Hostname()
+			addCand(fmt.Sprintf("%s://%s:18090", scheme, host))
+			addCand(fmt.Sprintf("%s://%s:8090", scheme, host))
+			if p := u.Port(); p != "" && p != "18090" && p != "8090" {
+				addCand(fmt.Sprintf("%s://%s:%s", scheme, host, p))
+			}
+		}
+	}
+
+	okVec := make([]bool, len(candidates))
+	hc := &http.Client{Timeout: 750 * time.Millisecond}
+	var wg sync.WaitGroup
+	for idx, cand := range candidates {
+		wg.Add(1)
+		go func(i int, base string) {
+			defer wg.Done()
+			req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, base+"/v1/status?lite=1", nil)
+			if err != nil {
+				return
+			}
+			if strings.TrimSpace(auth) != "" {
+				req.Header.Set("Authorization", basicAuthHeaderVal(auth))
+			}
+			resp, err := hc.Do(req)
+			if err != nil {
+				return
+			}
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				return
+			}
+			var st struct {
+				ServerTimestampUs uint64 `json:"serverTimestampUs"`
+			}
+			if json.Unmarshal(b, &st) == nil && st.ServerTimestampUs > 0 {
+				okVec[i] = true
+			}
+		}(idx, cand)
+	}
+	wg.Wait()
+
+	foundURL := ""
+	for i, ok := range okVec {
+		if ok {
+			foundURL = candidates[i]
+			break
+		}
+	}
+
+	if foundURL != "" {
+		s.mu.Lock()
+		s.linkCfg.SlapRFURL = foundURL
+		if body.BasicAuth != "" {
+			s.linkCfg.BasicAuth = body.BasicAuth
+		}
+		nextLink := s.linkCfg
+		s.saveSettingsLocked()
+		s.mu.Unlock()
+		s.client.UpdateConfig(nextLink)
+	}
+
+	snap := s.buildStateSnapshot()
+	if foundURL != "" {
+		s.broadcastWS("status", snap)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"found":     foundURL != "",
+		"slaprfUrl": foundURL,
+		"state":     snap,
+	})
 }
 
 func (s *Server) handlePreviewJPEG(w http.ResponseWriter, _ *http.Request) {

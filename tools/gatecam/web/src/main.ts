@@ -196,6 +196,17 @@ const icons = {
   flip: (s = 15) => svg(`<path d="m17 3 4 4-4 4"/><path d="M3 7h18"/><path d="m7 21-4-4 4-4"/><path d="M21 17H3"/>`, s),
   chevronLeft: (s = 16) => svg(`<path d="M15 6l-6 6 6 6"/>`, s),
   chevronRight: (s = 16) => svg(`<path d="M9 6l6 6-6 6"/>`, s),
+  chevronDown: (s = 15) => svg(`<path d="m6 9 6 6 6-6"/>`, s),
+  moreHorizontal: (s = 20) =>
+    svg(
+      `<circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/>`,
+      s
+    ),
+  radar: (s = 15) =>
+    svg(
+      `<path d="M5 12.85a11 11 0 0 1 14 0"/><path d="M8.5 16.4a6 6 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1.3" fill="currentColor" stroke="none"/><path d="M2 9.2a16 16 0 0 1 20 0"/>`,
+      s
+    ),
   play: (s = 14) => svg(`<path d="M7 4l13 8-13 8z"/>`, s),
   pause: (s = 14) => svg(`<path d="M9 5v14M15 5v14"/>`, s),
   pin: (s = 15) => svg(`<path d="M8 3h8"/><path d="M9 3v5l-3 3v2h12v-2l-3-3V3"/><path d="M12 13v8"/>`, s),
@@ -238,6 +249,26 @@ let tapFocusSpot: { x: number; y: number } | null = null;
 let tapFocusTimer: number | null = null;
 let settingsDraftLookback = 450;
 let settingsDraftModel = "mog2";
+let settingsDraftUrl = "";
+let settingsDraftAuth = "";
+let settingsDraftPilot = 0;
+let settingsDraftSens = 16;
+let settingsDraftRsComp = true;
+let pilotDropdownOpen = false;
+let moreDrawerOpen = false;
+let discoverBusy = false;
+let discoverNote = "";
+
+function loadSettingsDraftFromState(): void {
+  if (!state) return;
+  settingsDraftLookback = state.camera.lookbackHalfMs || 450;
+  settingsDraftModel = state.camera.motionModel || "mog2";
+  settingsDraftUrl = state.link.slaprfUrl || "http://127.0.0.1:18090";
+  settingsDraftAuth = state.link.basicAuth || "";
+  settingsDraftPilot = state.link.pilotFilter || 0;
+  settingsDraftSens = state.camera.sensitivity || 16;
+  settingsDraftRsComp = Boolean(state.camera.rollingShutterComp);
+}
 
 const appRoot = document.getElementById("app")!;
 
@@ -252,7 +283,9 @@ function setTheme(mode: "dark" | "light"): void {
   } catch {
     // ignore storage errors
   }
-  render();
+  document.querySelectorAll<HTMLElement>("[data-theme-set]").forEach((btn) => {
+    btn.classList.toggle("is-active", btn.getAttribute("data-theme-set") === mode);
+  });
 }
 
 function esc(s: string): string {
@@ -285,6 +318,8 @@ async function apiJSON<T>(method: string, path: string, body?: unknown): Promise
 function syncRouteFromHash(): void {
   const h = window.location.hash || "#/";
   stopSlowPlay();
+  pilotDropdownOpen = false;
+  moreDrawerOpen = false;
   if (h.startsWith("#/pass/")) {
     const id = parseInt(h.slice("#/pass/".length), 10);
     if (id > 0) {
@@ -308,10 +343,8 @@ function syncRouteFromHash(): void {
     route = "stats";
   } else if (h === "#/settings") {
     route = "settings";
-    if (state) {
-      settingsDraftLookback = state.camera.lookbackHalfMs || 450;
-      settingsDraftModel = state.camera.motionModel || "mog2";
-    }
+    discoverNote = "";
+    loadSettingsDraftFromState();
   } else {
     route = "live";
   }
@@ -533,6 +566,10 @@ function renderSidebar(): string {
             ${icons.settings(20)}
             <span>Settings</span>
           </button>
+          <button type="button" class="nav-item mobile-more-tab-btn ${moreDrawerOpen ? "is-active" : ""}" data-act="toggle-more" aria-expanded="${moreDrawerOpen ? "true" : "false"}" aria-label="More options">
+            ${icons.moreHorizontal(20)}
+            <span>More</span>
+          </button>
         </nav>
       </div>
       <div class="sidebar-footer">
@@ -547,6 +584,46 @@ function renderSidebar(): string {
         </div>
       </div>
     </aside>
+  `;
+}
+
+function renderMoreDrawer(): string {
+  if (!state) return "";
+  const theme = getTheme();
+  return `
+    <div class="more-drawer-overlay" data-more-overlay ${moreDrawerOpen ? "" : "hidden"}>
+      <div class="more-drawer-backdrop" data-act="close-more"></div>
+      <div class="more-drawer-sheet" role="dialog" aria-label="More options">
+        <button type="button" class="more-drawer-handle" data-act="close-more" aria-label="Close">
+          <span class="more-drawer-grip"></span>
+        </button>
+        <div class="more-grid">
+          <a class="more-tile" href="/v1/gatecam/export.zip" download>
+            ${icons.download(22)}
+            <span>Export ZIP</span>
+          </a>
+          <a class="more-tile" href="/v1/gatecam/report.csv" download>
+            ${icons.download(22)}
+            <span>Export CSV</span>
+          </a>
+          <button type="button" class="more-tile" data-act="clear-passes">
+            ${icons.trash(22)}
+            <span>Clear Passes</span>
+          </button>
+        </div>
+        <div class="more-theme-bar">
+          <span class="sidebar-theme-label">Appearance</span>
+          <div class="theme-toggler" role="group" aria-label="Color theme">
+            <button type="button" class="theme-btn ${theme === "dark" ? "is-active" : ""}" data-theme-set="dark">
+              ${icons.moon(14)}<span>Dark</span>
+            </button>
+            <button type="button" class="theme-btn ${theme === "light" ? "is-active" : ""}" data-theme-set="light">
+              ${icons.sun(14)}<span>Light</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   `;
 }
 
@@ -1170,14 +1247,19 @@ function renderStatsView(): string {
 
 function renderSettingsView(): string {
   if (!state) return "";
-  const l = state.link;
-  const c = state.camera;
   const pilots = state.sync.pilots ?? [];
-  const theme = getTheme();
   const startGate = (state.sync.gates ?? []).find((g) => g.role === "START_FINISH");
   const startGateLabel = startGate
     ? `Locked to Start / Finish Gate (#${startGate.gateId}${startGate.name ? ` ${startGate.name}` : ""})`
     : "Automatically locks onto SlapRF's Start / Finish Gate";
+
+  const activePilot = pilots.find((p) => p.slotIndex === settingsDraftPilot);
+  const pilotTriggerHtml = activePilot
+    ? `<span class="pilot-dot" style="--c:${esc(activePilot.color || "#34d399")}"></span>
+       <span>Slot ${activePilot.slotIndex} · ${esc(activePilot.callsign)}</span>
+       ${activePilot.frequencyMhz > 0 ? `<span class="badge mono">${activePilot.frequencyMhz} MHz</span>` : ""}`
+    : `<span class="pilot-dot is-hollow"></span>
+       <span>All Active Pilots</span>`;
 
   return `
     <div class="page-scroll">
@@ -1187,25 +1269,55 @@ function renderSettingsView(): string {
           <div style="display:flex;flex-direction:column;gap:12px;">
             <div class="field">
               <label for="cfg-url">SlapRF Server URL</label>
-              <div style="display:flex;gap:6px;">
-                <input class="input mono" type="text" id="cfg-url" style="flex:1" value="${esc(l.slaprfUrl)}" placeholder="http://127.0.0.1:18090" />
-                <button type="button" class="btn btn-sm mono" data-preset-url="http://127.0.0.1:18090">:18090</button>
-                <button type="button" class="btn btn-sm mono" data-preset-url="http://127.0.0.1:8090">:8090</button>
+              <div style="display:flex;gap:8px;">
+                <input class="input mono" type="text" id="cfg-url" style="flex:1" value="${esc(settingsDraftUrl)}" placeholder="http://127.0.0.1:18090" />
+                <button type="button" class="btn ${discoverBusy ? "btn-armed" : ""}" data-act="discover-link" ${discoverBusy ? "disabled" : ""}>
+                  ${icons.radar(15)}
+                  <span>${discoverBusy ? "Probing..." : "Discover"}</span>
+                </button>
               </div>
-              <span class="field-hint">${esc(startGateLabel)}</span>
+              <span class="field-hint">${esc(discoverNote || startGateLabel)}</span>
             </div>
 
             <div class="field">
-              <label for="cfg-pilot">Pilot Filter</label>
-              <select class="select" id="cfg-pilot">
-                <option value="0" ${l.pilotFilter === 0 ? "selected" : ""}>All Active Pilots</option>
-                ${pilots.map((p) => `<option value="${p.slotIndex}" ${l.pilotFilter === p.slotIndex ? "selected" : ""}>Slot ${p.slotIndex} (${esc(p.callsign)})</option>`).join("")}
-              </select>
+              <label>Pilot Filter</label>
+              <div class="custom-select" data-pilot-dropdown>
+                <button type="button" class="custom-select-btn ${pilotDropdownOpen ? "is-open" : ""}" data-act="toggle-pilot-select" aria-haspopup="listbox" aria-expanded="${pilotDropdownOpen ? "true" : "false"}">
+                  <span class="custom-select-val">${pilotTriggerHtml}</span>
+                  ${icons.chevronDown(15)}
+                </button>
+                ${
+                  pilotDropdownOpen
+                    ? `<div class="custom-select-menu" role="listbox">
+                         <button type="button" class="custom-select-opt ${settingsDraftPilot === 0 ? "is-selected" : ""}" data-pilot-opt="0">
+                           <span class="custom-select-val">
+                             <span class="pilot-dot is-hollow"></span>
+                             <span>All Active Pilots</span>
+                           </span>
+                           ${settingsDraftPilot === 0 ? `<span class="opt-check">${icons.check(14)}</span>` : ""}
+                         </button>
+                         ${pilots
+                           .map(
+                             (p) => `
+                           <button type="button" class="custom-select-opt ${settingsDraftPilot === p.slotIndex ? "is-selected" : ""}" data-pilot-opt="${p.slotIndex}">
+                             <span class="custom-select-val">
+                               <span class="pilot-dot" style="--c:${esc(p.color || "#34d399")}"></span>
+                               <span>Slot ${p.slotIndex} · ${esc(p.callsign)}</span>
+                               ${p.frequencyMhz > 0 ? `<span class="badge mono">${p.frequencyMhz} MHz</span>` : ""}
+                             </span>
+                             ${settingsDraftPilot === p.slotIndex ? `<span class="opt-check">${icons.check(14)}</span>` : ""}
+                           </button>`
+                           )
+                           .join("")}
+                       </div>`
+                    : ""
+                }
+              </div>
             </div>
 
             <div class="field">
               <label for="cfg-auth">HTTP Basic Auth (optional)</label>
-              <input class="input" type="password" id="cfg-auth" value="${esc(l.basicAuth)}" placeholder="user:password" />
+              <input class="input" type="password" id="cfg-auth" value="${esc(settingsDraftAuth)}" placeholder="user:password" />
             </div>
           </div>
         </div>
@@ -1231,26 +1343,18 @@ function renderSettingsView(): string {
             </div>
 
             <div class="field">
-              <label for="cfg-sens">Motion Threshold (<span id="sens-lbl" class="mono">${c.sensitivity.toFixed(0)}</span>)</label>
-              <input type="range" id="cfg-sens" min="6" max="40" step="2" value="${c.sensitivity}" />
+              <label for="cfg-sens">Motion Threshold (<span id="sens-lbl" class="mono">${settingsDraftSens.toFixed(0)}</span>)</label>
+              <input type="range" id="cfg-sens" min="6" max="40" step="2" value="${settingsDraftSens}" />
               <span class="field-hint">Lower values detect smaller distant drones; higher values reject wind shake.</span>
             </div>
 
-            <label class="check-row">
+            <div class="check-row">
               <span>Rolling-shutter readout skew compensation</span>
-              <input type="checkbox" id="cfg-rsshutter" ${c.rollingShutterComp ? "checked" : ""} />
-            </label>
-          </div>
-        </div>
-
-        <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
-          <div>
-            <div style="font-size:13px;font-weight:600;">Appearance</div>
-            <div class="field-hint">Match your SlapRF theme</div>
-          </div>
-          <div class="segmented" role="group" aria-label="Appearance theme">
-            <button type="button" class="${theme === "dark" ? "is-active" : ""}" data-theme-set="dark">${icons.moon(13)}<span>Dark</span></button>
-            <button type="button" class="${theme === "light" ? "is-active" : ""}" data-theme-set="light">${icons.sun(13)}<span>Light</span></button>
+              <label class="switch">
+                <input type="checkbox" id="cfg-rsshutter" ${settingsDraftRsComp ? "checked" : ""} />
+                <span></span>
+              </label>
+            </div>
           </div>
         </div>
 
@@ -1288,6 +1392,7 @@ function render(): void {
         ${renderTopBar()}
         <main class="outlet">${outletHtml}</main>
       </div>
+      ${renderMoreDrawer()}
     </div>
   `;
   bindLivePointerHandlers();
@@ -1408,9 +1513,26 @@ async function updateCamera(next: CameraConfig): Promise<void> {
   render();
 }
 
+document.addEventListener("pointerdown", (e) => {
+  if (!pilotDropdownOpen) return;
+  const t = e.target as HTMLElement | null;
+  if (!t?.closest("[data-pilot-dropdown]")) {
+    pilotDropdownOpen = false;
+    render();
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && (pilotDropdownOpen || moreDrawerOpen)) {
+    pilotDropdownOpen = false;
+    moreDrawerOpen = false;
+    render();
+  }
+});
+
 appRoot.addEventListener("click", async (e) => {
   const el = (e.target as HTMLElement | null)?.closest<HTMLElement>(
-    "[data-nav],[data-open-pass],[data-fps],[data-zoom],[data-focus-val],[data-shutter-val],[data-pass-filter],[data-cfg-lb],[data-cfg-model],[data-theme-set],[data-act],[data-insp-step],[data-insp-jump],[data-insp-toggle],[data-preset-url]"
+    "[data-nav],[data-open-pass],[data-fps],[data-zoom],[data-focus-val],[data-shutter-val],[data-pass-filter],[data-cfg-lb],[data-cfg-model],[data-pilot-opt],[data-theme-set],[data-act],[data-insp-step],[data-insp-jump],[data-insp-toggle]"
   );
   if (!el || !state) return;
 
@@ -1420,8 +1542,17 @@ appRoot.addEventListener("click", async (e) => {
     return;
   }
 
+  const pilotOpt = el.getAttribute("data-pilot-opt");
+  if (pilotOpt !== null) {
+    settingsDraftPilot = parseInt(pilotOpt, 10) || 0;
+    pilotDropdownOpen = false;
+    render();
+    return;
+  }
+
   const nav = el.getAttribute("data-nav");
   if (nav) {
+    moreDrawerOpen = false;
     window.location.hash = nav;
     return;
   }
@@ -1490,15 +1621,46 @@ appRoot.addEventListener("click", async (e) => {
     render();
     return;
   }
-  const presetURL = el.getAttribute("data-preset-url");
-  if (presetURL) {
-    const inp = document.getElementById("cfg-url") as HTMLInputElement | null;
-    if (inp) inp.value = presetURL;
-    return;
-  }
 
   const act = el.getAttribute("data-act");
   switch (act) {
+    case "toggle-more":
+      moreDrawerOpen = !moreDrawerOpen;
+      render();
+      break;
+    case "close-more":
+      moreDrawerOpen = false;
+      render();
+      break;
+    case "toggle-pilot-select":
+      pilotDropdownOpen = !pilotDropdownOpen;
+      render();
+      break;
+    case "discover-link": {
+      discoverBusy = true;
+      discoverNote = "Probing SlapRF ports (:18090, :8090)...";
+      render();
+      try {
+        const res = await apiJSON<{ found: boolean; slaprfUrl: string; state: AppState }>(
+          "POST",
+          "/v1/gatecam/link:discover",
+          { hintUrl: settingsDraftUrl, basicAuth: settingsDraftAuth }
+        );
+        state = res.state;
+        if (res.found && res.slaprfUrl) {
+          settingsDraftUrl = res.slaprfUrl;
+          discoverNote = `Connected to ${res.slaprfUrl}`;
+        } else {
+          discoverNote = "No SlapRF server responded on :18090 or :8090";
+        }
+      } catch {
+        discoverNote = "Discovery probe failed";
+      } finally {
+        discoverBusy = false;
+        render();
+      }
+      break;
+    }
     case "flip-dir":
       await updateGate({ ...state.gate, dirSign: state.gate.dirSign < 0 ? 1 : -1 });
       break;
@@ -1556,28 +1718,23 @@ appRoot.addEventListener("click", async (e) => {
       }
       break;
     case "clear-passes":
+      moreDrawerOpen = false;
       state = await apiJSON<AppState>("POST", "/v1/gatecam/passes:clear", {});
       render();
       break;
     case "save-setup": {
-      const urlVal = (document.getElementById("cfg-url") as HTMLInputElement).value.trim();
-      const authVal = (document.getElementById("cfg-auth") as HTMLInputElement).value;
-      const pilotVal = parseInt((document.getElementById("cfg-pilot") as HTMLSelectElement).value, 10) || 0;
-      const sensVal = parseFloat((document.getElementById("cfg-sens") as HTMLInputElement).value) || 16;
-      const rsVal = (document.getElementById("cfg-rsshutter") as HTMLInputElement).checked;
-
       await apiJSON("PUT", "/v1/gatecam/camera", {
         ...state.camera,
         lookbackHalfMs: settingsDraftLookback,
         motionModel: settingsDraftModel,
-        sensitivity: sensVal,
-        rollingShutterComp: rsVal,
+        sensitivity: settingsDraftSens,
+        rollingShutterComp: settingsDraftRsComp,
       });
       state = await apiJSON<AppState>("PUT", "/v1/gatecam/link", {
-        slaprfUrl: urlVal,
-        basicAuth: authVal,
+        slaprfUrl: settingsDraftUrl.trim(),
+        basicAuth: settingsDraftAuth,
         gateFilter: 0,
-        pilotFilter: pilotVal,
+        pilotFilter: settingsDraftPilot,
         exposeLan: false,
       });
       window.location.hash = "#/";
@@ -1588,9 +1745,22 @@ appRoot.addEventListener("click", async (e) => {
 
 appRoot.addEventListener("input", (e) => {
   const t = e.target as HTMLInputElement | null;
-  if (t?.id === "cfg-sens") {
+  if (!t) return;
+  if (t.id === "cfg-url") {
+    settingsDraftUrl = t.value;
+  } else if (t.id === "cfg-auth") {
+    settingsDraftAuth = t.value;
+  } else if (t.id === "cfg-sens") {
+    settingsDraftSens = parseFloat(t.value) || 16;
     const lbl = document.getElementById("sens-lbl");
     if (lbl) lbl.textContent = t.value;
+  }
+});
+
+appRoot.addEventListener("change", (e) => {
+  const t = e.target as HTMLInputElement | null;
+  if (t?.id === "cfg-rsshutter") {
+    settingsDraftRsComp = t.checked;
   }
 });
 
@@ -1634,8 +1804,7 @@ function connectLiveWS(): void {
 
 async function boot(): Promise<void> {
   state = await apiJSON<AppState>("GET", "/v1/gatecam/state");
-  settingsDraftLookback = state.camera.lookbackHalfMs || 450;
-  settingsDraftModel = state.camera.motionModel || "mog2";
+  loadSettingsDraftFromState();
   syncRouteFromHash();
   connectLiveWS();
 }
