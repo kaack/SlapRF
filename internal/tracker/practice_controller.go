@@ -19,18 +19,21 @@ type PracticeEventSubscriber interface {
 
 // PracticeActionPayload represents a Practice Session CRUD, RF activation, or session pilot action.
 type PracticeActionPayload struct {
-	Action         string      `json:"action"` // "create_session" | "select_session" | "rename_session" | "set_session_tags" | "delete_session" | "start_session" | "resume_session" | "pause_session" | "stop_session" | "add_session_pilot" | "remove_session_pilot" | "set_session_pilot_channel" | "clear_session_laps" | "toggle_session_lap"
-	SessionID      string      `json:"sessionId,omitempty"`
-	Name           string      `json:"name,omitempty"`
-	Tags           []string    `json:"tags,omitempty"`
-	DontSelect     bool        `json:"dontSelect,omitempty"`
-	PreemptOngoing bool        `json:"preemptOngoing,omitempty"`
-	SlotIndex      int         `json:"slotIndex,omitempty"`
-	Callsign       string      `json:"callsign,omitempty"`
-	PhoneticName   string      `json:"phoneticName,omitempty"`
-	Band           domain.Band `json:"band,omitempty"`
-	Channel        uint8       `json:"channel,omitempty"`
-	LapID          uint64      `json:"lapId,omitempty"`
+	Action           string      `json:"action"` // "create_session" | "select_session" | "rename_session" | "set_session_tags" | "delete_session" | "start_session" | "resume_session" | "pause_session" | "stop_session" | "add_session_pilot" | "remove_session_pilot" | "set_session_pilot_channel" | "clear_session_laps" | "toggle_session_lap" | "set_pack_loop" | "seal_and_split_pack" | "set_training_verified"
+	SessionID        string      `json:"sessionId,omitempty"`
+	Name             string      `json:"name,omitempty"`
+	Tags             []string    `json:"tags,omitempty"`
+	DontSelect       bool        `json:"dontSelect,omitempty"`
+	PreemptOngoing   bool        `json:"preemptOngoing,omitempty"`
+	SlotIndex        int         `json:"slotIndex,omitempty"`
+	Callsign         string      `json:"callsign,omitempty"`
+	PhoneticName     string      `json:"phoneticName,omitempty"`
+	Band             domain.Band `json:"band,omitempty"`
+	Channel          uint8       `json:"channel,omitempty"`
+	LapID            uint64      `json:"lapId,omitempty"`
+	PackLoopEnabled  *bool       `json:"packLoopEnabled,omitempty"`
+	PackLoopQuietSec *int        `json:"packLoopQuietSec,omitempty"`
+	TrainingVerified *bool       `json:"trainingVerified,omitempty"`
 }
 
 func clonePracticeSession(s domain.PracticeSession) domain.PracticeSession {
@@ -45,6 +48,7 @@ func clonePracticeSession(s domain.PracticeSession) domain.PracticeSession {
 	out.Laps = cloneLaps(s.Laps)
 	out.Crossings = append([]domain.GateCrossingEvent(nil), s.Crossings...)
 	out.Filtered = append([]domain.FilteredDetection(nil), s.Filtered...)
+	out.ManualDeletedCrossings = append([]domain.ManualDeletedCrossing(nil), s.ManualDeletedCrossings...)
 	out.Summaries = make([]domain.PilotTrackSummary, len(s.Summaries))
 	for i, sum := range s.Summaries {
 		cp := sum
@@ -56,10 +60,16 @@ func clonePracticeSession(s domain.PracticeSession) domain.PracticeSession {
 
 func clonePracticeManagerState(st domain.PracticeManagerState) domain.PracticeManagerState {
 	out := domain.PracticeManagerState{
-		Initialized:       st.Initialized,
-		ActiveSessionID:   st.ActiveSessionID,
-		SelectedSessionID: st.SelectedSessionID,
-		Sessions:          make([]domain.PracticeSession, len(st.Sessions)),
+		Initialized:          st.Initialized,
+		ActiveSessionID:      st.ActiveSessionID,
+		SelectedSessionID:    st.SelectedSessionID,
+		PackLoopEnabled:      st.PackLoopEnabled,
+		PackLoopQuietSec:     st.PackLoopQuietSec,
+		PackLoopQuietElapsed: st.PackLoopQuietElapsed,
+		PackLoopState:        st.PackLoopState,
+		LastSealedSessionID:  st.LastSealedSessionID,
+		LastSealedLapCount:   st.LastSealedLapCount,
+		Sessions:             make([]domain.PracticeSession, len(st.Sessions)),
 	}
 	for i, s := range st.Sessions {
 		out.Sessions[i] = clonePracticeSession(s)
@@ -819,16 +829,28 @@ func (e *Engine) deactivateActivePracticeSessionLocked(markPaused bool) bool {
 		return false
 	}
 	e.syncActivePracticeRecordsLocked()
+	ts := e.ensureTraceStoreLocked()
 	now := nowISO()
 	for i := range e.practiceState.Sessions {
 		if e.practiceState.Sessions[i].Active || e.practiceState.Sessions[i].SessionID == e.practiceState.ActiveSessionID {
 			e.ensurePracticeTrackInitializedLocked(&e.practiceState.Sessions[i])
+			sum := ts.SealSession(e.practiceState.Sessions[i].SessionID)
+			if sum.SampleCount > e.practiceState.Sessions[i].TraceSampleCount {
+				e.practiceState.Sessions[i].TraceSampleCount = sum.SampleCount
+			}
+			if sum.DurationSec > e.practiceState.Sessions[i].TraceDurationSec {
+				e.practiceState.Sessions[i].TraceDurationSec = math.Round(sum.DurationSec*100) / 100
+			}
 			e.practiceState.Sessions[i].Paused = markPaused
 			e.practiceState.Sessions[i].UpdatedAt = now
 		}
 		e.practiceState.Sessions[i].Active = false
 	}
 	e.practiceState.ActiveSessionID = ""
+	e.practiceState.PackLoopState = ""
+	e.practiceState.PackLoopQuietElapsed = 0
+	e.packLoopQuietSinceUs = 0
+	e.activeTraceFirstTsUs = 0
 	for i := range e.practiceState.Sessions {
 		e.practiceState.Sessions[i].Summaries = e.computePracticeSessionSummariesLocked(&e.practiceState.Sessions[i])
 	}
@@ -983,6 +1005,7 @@ func (e *Engine) PracticeAction(req PracticeActionPayload) (domain.PracticeManag
 			return snap, fmt.Errorf("cannot delete live practice session %q — pause it first", sName)
 		}
 		e.practiceState.Sessions = append(e.practiceState.Sessions[:idx], e.practiceState.Sessions[idx+1:]...)
+		_ = e.ensureTraceStoreLocked().DeleteSession(targetID)
 		if e.practiceState.SelectedSessionID == targetID {
 			if e.practiceState.ActiveSessionID != "" {
 				e.practiceState.SelectedSessionID = e.practiceState.ActiveSessionID
@@ -1052,6 +1075,13 @@ func (e *Engine) PracticeAction(req PracticeActionPayload) (domain.PracticeManag
 		target = e.findPracticeSessionLocked(targetID)
 		e.practiceState.ActiveSessionID = targetID
 		e.practiceState.SelectedSessionID = targetID
+		e.activeTraceFirstTsUs = 0
+		e.packLoopQuietSinceUs = 0
+		e.practiceState.PackLoopQuietElapsed = 0
+		if e.practiceState.PackLoopEnabled {
+			e.practiceState.PackLoopState = "waiting_vtx"
+		}
+		e.resetMLSessionDetectorsLocked()
 		target.Paused = false
 		target.UpdatedAt = now
 		e.applyPracticeSessionToEngineLocked(target)
@@ -1473,6 +1503,69 @@ func (e *Engine) PracticeAction(req PracticeActionPayload) (domain.PracticeManag
 		}
 		e.syncActivePracticeLapsLocked(target)
 		target.Summaries = e.computePracticeSessionSummariesLocked(target)
+
+	case "set_pack_loop":
+		if req.PackLoopQuietSec != nil {
+			q := *req.PackLoopQuietSec
+			if q < minPackLoopQuietSec {
+				q = minPackLoopQuietSec
+			} else if q > maxPackLoopQuietSec {
+				q = maxPackLoopQuietSec
+			}
+			e.practiceState.PackLoopQuietSec = q
+		} else if e.practiceState.PackLoopQuietSec < minPackLoopQuietSec {
+			e.practiceState.PackLoopQuietSec = defaultPackLoopQuietSec
+		}
+		if req.PackLoopEnabled != nil {
+			want := *req.PackLoopEnabled
+			e.practiceState.PackLoopEnabled = want
+			if !want {
+				e.practiceState.PackLoopState = ""
+				e.practiceState.PackLoopQuietElapsed = 0
+				e.packLoopQuietSinceUs = 0
+				if e.practiceState.ActiveSessionID != "" {
+					e.stopActivePracticeSessionLocked()
+					cfgChanged = true
+				}
+			} else {
+				if ongoing := e.findAnyOngoingRaceLocked(); ongoing != nil && req.PreemptOngoing {
+					if e.pauseAllOtherOngoingRacesLocked("") {
+						e.raceState.Mode = domain.ModePractice
+						e.practiceSnap = domain.PracticeSnapshot{}
+						e.syncActiveRaceToEventLocked()
+						raceChanged = true
+					}
+				}
+				if e.practiceState.ActiveSessionID == "" {
+					_ = e.sealAndAdvancePackLocked()
+					cfgChanged = true
+				} else {
+					e.practiceState.PackLoopState = "waiting_vtx"
+				}
+			}
+		}
+
+	case "seal_and_split_pack":
+		if e.practiceState.PackLoopQuietSec < minPackLoopQuietSec {
+			e.practiceState.PackLoopQuietSec = defaultPackLoopQuietSec
+		}
+		e.practiceState.PackLoopEnabled = true
+		_ = e.sealAndAdvancePackLocked()
+		cfgChanged = true
+
+	case "set_training_verified":
+		target := e.findPracticeSessionLocked(resolveTargetID())
+		if target == nil {
+			snap := clonePracticeManagerState(e.practiceState)
+			e.mu.Unlock()
+			return snap, fmt.Errorf("practice session not found")
+		}
+		if req.TrainingVerified != nil {
+			target.TrainingVerified = *req.TrainingVerified
+		} else {
+			target.TrainingVerified = !target.TrainingVerified
+		}
+		target.UpdatedAt = now
 
 	default:
 		snap := clonePracticeManagerState(e.practiceState)

@@ -47,6 +47,10 @@ func (d *datasetSubscriber) OnPracticeUpdated(domain.PracticeManagerState) {
 	d.worker.MarkDirty()
 }
 
+func (d *datasetSubscriber) OnMLUpdated(domain.MLStatus) {
+	d.worker.MarkDirty()
+}
+
 // PersistenceWorker mirrors live `realEngine`, `simEngine`, and `TrackSimulator` state into
 // `BoltStore` in the background without blocking engine ingestion, and flushes synchronously on shutdown.
 type PersistenceWorker struct {

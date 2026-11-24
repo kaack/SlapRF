@@ -529,6 +529,17 @@ func (e *Engine) AddPracticeSessionCrossing(
 	}
 
 	target.Crossings = append(target.Crossings, ev)
+	// Remove any matching negative mark within +-150 ms if user re-added a crossing here
+	if len(target.ManualDeletedCrossings) > 0 {
+		keptNeg := target.ManualDeletedCrossings[:0]
+		for _, m := range target.ManualDeletedCrossings {
+			if m.GateID == gateID && m.SlotIndex == slotIndex && absDiffUs(m.TimestampUs, timestampUs) <= 150_000 {
+				continue
+			}
+			keptNeg = append(keptNeg, m)
+		}
+		target.ManualDeletedCrossings = keptNeg
+	}
 	target.Crossings, target.Laps = e.replayPilotCrossingsLocked(
 		target.Crossings,
 		target.Laps,
@@ -541,10 +552,16 @@ func (e *Engine) AddPracticeSessionCrossing(
 	e.recomputePracticeSessionLapsLocked(target)
 	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
+	var mlChanged bool
+	var mlSnap domain.MLStatus
 	if isActive {
 		e.crossings = append([]domain.GateCrossingEvent(nil), target.Crossings...)
 		e.syncActivePracticeLapsLocked(target)
 		e.rebuildPilotLiveProgressFromCrossingsLocked(slotIndex, orderedGates)
+		if e.recomputeLiveGateTunesLocked(slotIndex, target.ManualDeletedCrossings) {
+			mlChanged = true
+			mlSnap = e.buildMLStatusLocked()
+		}
 	}
 	target.Summaries = e.computePracticeSessionSummariesLocked(target)
 
@@ -553,6 +570,9 @@ func (e *Engine) AddPracticeSessionCrossing(
 	e.mu.Unlock()
 
 	e.notifyPracticeUpdated(practiceSnap, subs)
+	if mlChanged {
+		e.notifyMLUpdated(mlSnap, subs)
+	}
 	return practiceSnap, ev.EventID, nil
 }
 
@@ -682,6 +702,24 @@ func (e *Engine) DeletePracticeSessionCrossing(
 
 	removed := target.Crossings[delIdx]
 	target.Crossings = append(target.Crossings[:delIdx], target.Crossings[delIdx+1:]...)
+	// Record non-manual false crossing deletions as verified hard-negative windows for ML training
+	if !removed.Manual {
+		dup := false
+		for _, m := range target.ManualDeletedCrossings {
+			if m.GateID == removed.GateID && m.SlotIndex == removed.SlotIndex && absDiffUs(m.TimestampUs, removed.TimestampUs) <= 150_000 {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			target.ManualDeletedCrossings = append(target.ManualDeletedCrossings, domain.ManualDeletedCrossing{
+				GateID:      removed.GateID,
+				SlotIndex:   removed.SlotIndex,
+				TimestampUs: removed.TimestampUs,
+				PeakRSSIDbm: removed.PeakRSSIDbm,
+			})
+		}
+	}
 	orderedGates := e.orderedGatesForPracticeSessionLocked(target)
 	target.Crossings, target.Laps = e.replayPilotCrossingsLocked(
 		target.Crossings,
@@ -695,10 +733,16 @@ func (e *Engine) DeletePracticeSessionCrossing(
 	e.recomputePracticeSessionLapsLocked(target)
 	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
+	var mlChanged bool
+	var mlSnap domain.MLStatus
 	if isActive {
 		e.crossings = append([]domain.GateCrossingEvent(nil), target.Crossings...)
 		e.syncActivePracticeLapsLocked(target)
 		e.rebuildPilotLiveProgressFromCrossingsLocked(removed.SlotIndex, orderedGates)
+		if e.recomputeLiveGateTunesLocked(removed.SlotIndex, target.ManualDeletedCrossings) {
+			mlChanged = true
+			mlSnap = e.buildMLStatusLocked()
+		}
 	}
 	target.Summaries = e.computePracticeSessionSummariesLocked(target)
 
@@ -707,6 +751,9 @@ func (e *Engine) DeletePracticeSessionCrossing(
 	e.mu.Unlock()
 
 	e.notifyPracticeUpdated(practiceSnap, subs)
+	if mlChanged {
+		e.notifyMLUpdated(mlSnap, subs)
+	}
 	return practiceSnap, nil
 }
 

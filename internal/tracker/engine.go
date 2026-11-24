@@ -10,6 +10,8 @@ import (
 
 	"slaprf/internal/domain"
 	"slaprf/internal/dsp"
+	"slaprf/internal/ml"
+	"slaprf/internal/tracestore"
 )
 
 // timerOfflineAfter marks a gate timer offline when no telemetry frame has arrived for this long.
@@ -107,6 +109,17 @@ type Engine struct {
 	savedRHUSBTimers    []domain.DetectedTimer
 	hasSavedRHUSBState  bool
 	rhDebugStreamTimers    map[uint8]bool
+	traceStore             tracestore.Store
+	activeTraceFirstTsUs   uint64
+	packLoopGateObs        map[uint8]gateSignalObs
+	packLoopQuietSinceUs   uint64
+	packLoopLastTickSec    int
+	mlDetectors            map[detKey]*ml.StreamDetector
+	mlState                domain.MLPersistedState
+	mlLiveTunes            map[detKey]domain.MLLiveGateTune
+	mlActiveTCN            *ml.TCN
+	mlActiveModelID        string
+	mlTraining             domain.MLTrainingProgress
 	subscribers            []EventSubscriber
 }
 
@@ -751,17 +764,27 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 		return
 	}
 	frame.TimerID = gate.GateID
+	rawRSSI := frame.RSSI
 	hwMode := domain.NormalizeTimingHardwareMode(e.timingHardwareMode)
 	isSlapRFMode := domain.IsSlapRFMode(hwMode)
+	useAIDetector := isSlapRFMode && e.mlState.Config.DetectorMode == domain.DetectorModeAI
+	var activeTCN *ml.TCN
+	if useAIDetector || e.mlState.Config.LiveTuneEnabled {
+		e.ensureMLInitializedLocked()
+		if useAIDetector {
+			activeTCN = e.resolveActiveTCNLocked()
+		}
+	}
 	var autoCalibChanged bool
 	var autoCalibSFChanged bool
 
 	for i := 0; i < len(e.pilots) && i < domain.MaxPilotPoolSize; i++ {
 		pilot := e.pilots[i]
-		det := e.detectors[detKey{gate.GateID, pilot.SlotIndex}]
+		dkey := detKey{gate.GateID, pilot.SlotIndex}
+		det := e.detectors[dkey]
 		if det == nil {
 			det = dsp.NewChannelDetector(gate.GateID, pilot.SlotIndex)
-			e.detectors[detKey{gate.GateID, pilot.SlotIndex}] = det
+			e.detectors[dkey] = det
 		}
 		var enter, exit float32
 		if domain.IsRotorHazardMode(e.timingHardwareMode) {
@@ -769,11 +792,38 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 		} else {
 			enter, exit = thresholdsFor(gate, i, pilot)
 		}
-		candidate := det.ProcessSample(frame.RSSI[i], frame.TimestampUs, enter, exit, detectorDebounceUs)
+		classicCand := det.ProcessSample(rawRSSI[i], frame.TimestampUs, enter, exit, detectorDebounceUs)
 		gate.LastRSSI[i] = det.SmoothedRSSI()
 		frame.RSSI[i] = det.SmoothedRSSI()
 
-		if isSlapRFMode && e.raceArmed && pilot.Enabled && pilot.Channel > 0 {
+		// Feed StreamDetector when AI mode is active (or while recording embeddings for live 2-lap tuning)
+		var mlDet *ml.StreamDetector
+		var aiCand *dsp.CrossingCandidate
+		if isSlapRFMode && pilot.Enabled && pilot.Channel > 0 && (useAIDetector || e.mlState.Config.LiveTuneEnabled) {
+			mlDet = e.mlDetectors[dkey]
+			if mlDet == nil {
+				if activeTCN == nil {
+					activeTCN = e.resolveActiveTCNLocked()
+				}
+				mlDet = ml.NewStreamDetector(gate.GateID, pilot.SlotIndex, activeTCN)
+				e.mlDetectors[dkey] = mlDet
+			}
+			var liveTunePtr *domain.MLLiveGateTune
+			if e.mlState.Config.LiveTuneEnabled {
+				if lt, ok := e.mlLiveTunes[dkey]; ok {
+					ltCopy := lt
+					liveTunePtr = &ltCopy
+				}
+			}
+			aiCand = mlDet.ProcessSample(rawRSSI[i], gate.NoiseFloorDbm, frame.TimestampUs, enter, exit, detectorDebounceUs, liveTunePtr)
+		}
+
+		candidate := classicCand
+		if useAIDetector {
+			candidate = aiCand
+		}
+
+		if isSlapRFMode && e.raceArmed && pilot.Enabled && pilot.Channel > 0 && !useAIDetector {
 			if chg, sfChg, recovered := e.recordAutoCalibSampleLocked(gate, i, pilot, det, frame.RSSI[i], frame.TimestampUs, candidate != nil); chg {
 				autoCalibChanged = true
 				if sfChg {
@@ -839,6 +889,9 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 		if out.rejected != nil {
 			if out.rejected.Reason == domain.FilterSpike {
 				det.RollbackRejectedSpike()
+				if mlDet != nil {
+					mlDet.RollbackRejectedSpike()
+				}
 			}
 			filtered = append(filtered, e.storeFilteredLocked(*out.rejected))
 			continue
@@ -879,8 +932,30 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 		}
 	}
 
+	var mlChanged bool
+	var mlSnap domain.MLStatus
 	if len(completedLaps) > 0 {
 		summariesSnapshot = e.computeSummariesLocked()
+		if isSlapRFMode && e.mlState.Config.LiveTuneEnabled {
+			var manualDeleted []domain.ManualDeletedCrossing
+			if !e.isLiveRaceHeatActiveLocked() && e.practiceState.ActiveSessionID != "" {
+				if sess := e.findPracticeSessionLocked(e.practiceState.ActiveSessionID); sess != nil {
+					manualDeleted = sess.ManualDeletedCrossings
+				}
+			}
+			seenSlot := make(map[int]bool)
+			for _, lap := range completedLaps {
+				if !seenSlot[lap.SlotIndex] {
+					seenSlot[lap.SlotIndex] = true
+					if e.recomputeLiveGateTunesLocked(lap.SlotIndex, manualDeleted) {
+						mlChanged = true
+					}
+				}
+			}
+			if mlChanged {
+				mlSnap = e.buildMLStatusLocked()
+			}
+		}
 	}
 	var practiceChanged bool
 	var practiceSnap domain.PracticeManagerState
@@ -891,6 +966,13 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 		if len(completedLaps) > 0 {
 			practiceChanged = true
 			practiceSnap = clonePracticeManagerState(e.practiceState)
+		}
+	}
+	if packSplit, quietTick := e.recordPracticeTraceAndPackLoopLocked(*gate, frame, rawRSSI); packSplit || quietTick {
+		practiceChanged = true
+		practiceSnap = clonePracticeManagerState(e.practiceState)
+		if packSplit {
+			autoCalibChanged = true
 		}
 	}
 	if autoCalibChanged {
@@ -950,6 +1032,9 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 	}
 	if practiceChanged {
 		e.notifyPracticeUpdated(practiceSnap, subs)
+	}
+	if mlChanged {
+		e.notifyMLUpdated(mlSnap, subs)
 	}
 	if raceChanged {
 		e.notifyRaceUpdated(raceSnap, raceAnn, subs)

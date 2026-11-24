@@ -47,7 +47,8 @@ type PersistedEngineState struct {
 	RaceState          *domain.RaceTournamentState `json:"raceState,omitempty"`
 	EventState         *domain.EventManagerState   `json:"eventState,omitempty"`
 	PracticeState      *domain.PracticeManagerState `json:"practiceState,omitempty"`
-	PracticeSnap       *domain.PracticeSnapshot    `json:"practiceSnap,omitempty"`
+	PracticeSnap       *domain.PracticeSnapshot     `json:"practiceSnap,omitempty"`
+	MLState            *domain.MLPersistedState     `json:"mlState,omitempty"`
 }
 
 // ExportState returns a deep copy of the engine's persistable configuration and session records.
@@ -144,6 +145,8 @@ func (e *Engine) ExportState() PersistedEngineState {
 		}
 	}
 
+	mlCopy := cloneMLPersistedState(e.mlState)
+
 	return PersistedEngineState{
 		ElapsedUs:          elapsedUs,
 		SavedAtUnixUs:      time.Now().UnixMicro(),
@@ -178,6 +181,7 @@ func (e *Engine) ExportState() PersistedEngineState {
 		EventState:         &eventCopy,
 		PracticeState:      &practiceStateCopy,
 		PracticeSnap:       practiceCopy,
+		MLState:            &mlCopy,
 	}
 }
 
@@ -614,6 +618,18 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 		e.practiceState = domain.PracticeManagerState{}
 		e.raceArmed = s.RaceArmed
 		e.ensurePracticeStateInitializedLocked()
+	}
+
+	if s.MLState != nil {
+		e.mlState = cloneMLPersistedState(*s.MLState)
+		e.mlActiveTCN = nil
+		e.mlActiveModelID = ""
+		e.rebuildLiveTuneMapLocked()
+	} else {
+		e.mlState = domain.MLPersistedState{Config: domain.DefaultMLConfig()}
+		e.mlActiveTCN = nil
+		e.mlActiveModelID = ""
+		e.mlLiveTunes = nil
 	}
 
 	domain.PruneTrackGateRuleOverrides(e.gates, e.rules)
