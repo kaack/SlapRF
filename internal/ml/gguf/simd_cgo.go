@@ -31,7 +31,13 @@ static inline void slaprf_scale_min_k4(int j, const uint8_t *q, uint8_t *d, uint
     }
 }
 
-static float slaprf_dot_q4k_q8k(const uint8_t *w_row, int nb, const slaprf_q8k_t *x_blocks, const float *fp16_tbl) {
+#if defined(__aarch64__) && defined(__clang__)
+#define SLAPRF_TARGET_DOTPROD __attribute__((target("dotprod")))
+#else
+#define SLAPRF_TARGET_DOTPROD
+#endif
+
+static SLAPRF_TARGET_DOTPROD float slaprf_dot_q4k_q8k(const uint8_t *w_row, int nb, const slaprf_q8k_t *x_blocks, const float *fp16_tbl) {
     float total = 0.0f;
     for (int b = 0; b < nb; ++b) {
         const uint8_t *blk = w_row + b * 144;
@@ -59,7 +65,22 @@ static float slaprf_dot_q4k_q8k(const uint8_t *w_row, int nb, const slaprf_q8k_t
             int32_t s1 = 0;
             int32_t s2 = 0;
 
-#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(__aarch64__) && defined(__clang__)
+            const uint8x16_t mask4 = vdupq_n_u8(0x0F);
+            int32x4_t acc1 = vdupq_n_s32(0);
+            int32x4_t acc2 = vdupq_n_s32(0);
+            for (int l = 0; l < 32; l += 16) {
+                uint8x16_t qv = vld1q_u8(q_sub + l);
+                int8x16_t q_lo = vreinterpretq_s8_u8(vandq_u8(qv, mask4));
+                int8x16_t q_hi = vreinterpretq_s8_u8(vshrq_n_u8(qv, 4));
+                int8x16_t xv1 = vld1q_s8(x1 + l);
+                int8x16_t xv2 = vld1q_s8(x2 + l);
+                acc1 = vdotq_s32(acc1, q_lo, xv1);
+                acc2 = vdotq_s32(acc2, q_hi, xv2);
+            }
+            s1 = vaddvq_s32(acc1);
+            s2 = vaddvq_s32(acc2);
+#elif defined(__aarch64__) || defined(_M_ARM64)
             const uint8x16_t mask4 = vdupq_n_u8(0x0F);
             int32x4_t acc1 = vdupq_n_s32(0);
             int32x4_t acc2 = vdupq_n_s32(0);
@@ -97,7 +118,7 @@ static float slaprf_dot_q4k_q8k(const uint8_t *w_row, int nb, const slaprf_q8k_t
     return total;
 }
 
-static float slaprf_dot_q6k_q8k(const uint8_t *w_row, int nb, const slaprf_q8k_t *x_blocks, const float *fp16_tbl) {
+static SLAPRF_TARGET_DOTPROD float slaprf_dot_q6k_q8k(const uint8_t *w_row, int nb, const slaprf_q8k_t *x_blocks, const float *fp16_tbl) {
     float total = 0.0f;
     for (int b = 0; b < nb; ++b) {
         const uint8_t *blk = w_row + b * 210;
@@ -120,7 +141,28 @@ static float slaprf_dot_q6k_q8k(const uint8_t *w_row, int nb, const slaprf_q8k_t
             for (int h16 = 0; h16 < 2; ++h16) {
                 int l_start = h16 * 16;
                 int32_t s1 = 0, s2 = 0, s3 = 0, s4 = 0;
-#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(__aarch64__) && defined(__clang__)
+                const uint8x16_t m0f = vdupq_n_u8(0x0F);
+                const uint8x16_t m03 = vdupq_n_u8(0x03);
+                uint8x16_t ql0 = vld1q_u8(ql_sub + l_start);
+                uint8x16_t ql1 = vld1q_u8(ql_sub + l_start + 32);
+                uint8x16_t qhv = vld1q_u8(qh_sub + l_start);
+
+                int8x16_t u1 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(ql0, m0f), vshlq_n_u8(vandq_u8(qhv, m03), 4)));
+                int8x16_t u2 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(ql1, m0f), vshlq_n_u8(vandq_u8(vshrq_n_u8(qhv, 2), m03), 4)));
+                int8x16_t u3 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(ql0, 4), vshlq_n_u8(vandq_u8(vshrq_n_u8(qhv, 4), m03), 4)));
+                int8x16_t u4 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(ql1, 4), vshlq_n_u8(vshrq_n_u8(qhv, 6), 4)));
+
+                int8x16_t x1 = vld1q_s8(x_sub + l_start);
+                int8x16_t x2 = vld1q_s8(x_sub + 32 + l_start);
+                int8x16_t x3 = vld1q_s8(x_sub + 64 + l_start);
+                int8x16_t x4 = vld1q_s8(x_sub + 96 + l_start);
+
+                s1 = vaddvq_s32(vdotq_s32(vdupq_n_s32(0), u1, x1));
+                s2 = vaddvq_s32(vdotq_s32(vdupq_n_s32(0), u2, x2));
+                s3 = vaddvq_s32(vdotq_s32(vdupq_n_s32(0), u3, x3));
+                s4 = vaddvq_s32(vdotq_s32(vdupq_n_s32(0), u4, x4));
+#elif defined(__aarch64__) || defined(_M_ARM64)
                 const uint8x16_t m0f = vdupq_n_u8(0x0F);
                 const uint8x16_t m03 = vdupq_n_u8(0x03);
                 uint8x16_t ql0 = vld1q_u8(ql_sub + l_start);

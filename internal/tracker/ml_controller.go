@@ -1175,6 +1175,8 @@ type MLSessionLabelRequest struct {
 	DryRun    bool   `json:"dryRun"`
 	SlotIndex int    `json:"slotIndex,omitempty"`
 	PackID    string `json:"packId,omitempty"`
+	StartUs   uint64 `json:"startUs,omitempty"`
+	EndUs     uint64 `json:"endUs,omitempty"`
 }
 
 // MLSessionLabelResponse returns the System 1 Teacher's decisions and (when `!DryRun`) the updated state.
@@ -1223,7 +1225,15 @@ func (e *Engine) LabelPracticeSession(ctx context.Context, sessionID string, req
 	if prefPack == "" {
 		prefPack = e.mlState.Config.TeacherPackID
 	}
+	// Cancel any prior in-flight `LabelPracticeSession` so back-to-back or abandoned calls never pile up!
+	prevCancel := e.mlLabelCancel
+	lblCtx, lblCancel := context.WithCancel(ctx)
+	e.mlLabelCancel = lblCancel
 	e.mu.Unlock()
+	if prevCancel != nil {
+		prevCancel()
+	}
+	defer lblCancel()
 
 	samples, err := ts.ReadSession(sessSnap.SessionID)
 	if err != nil || len(samples) < 16 {
@@ -1235,13 +1245,36 @@ func (e *Engine) LabelPracticeSession(ctx context.Context, sessionID string, req
 		return MLSessionLabelResponse{MLStatus: e.MLStatus()}, err
 	}
 
+	// When `[StartUs, EndUs]` is specified (single-lap Auto-Label in RSSI Editor), slice `.rfbin`
+	// strictly to `[StartUs - 2.0s .. EndUs + 2.0s]` for noise-floor context and keep ONLY candidates
+	// inside `[StartUs .. EndUs]` so single-lap Auto-Label completes in `< 0.5s`!
+	if req.EndUs > 0 && req.EndUs >= req.StartUs {
+		const floorPadUs = uint64(2_000_000)
+		loUs := uint64(0)
+		if req.StartUs > floorPadUs {
+			loUs = req.StartUs - floorPadUs
+		}
+		hiUs := req.EndUs + floorPadUs
+		sliced := make([]tracestore.Sample, 0, 2048)
+		for _, s := range samples {
+			if s.TimestampUs >= loUs && s.TimestampUs <= hiUs {
+				sliced = append(sliced, s)
+			}
+		}
+		samples = sliced
+	}
+
 	cands := ml.ExtractSessionCandidates(sessSnap, samples)
-	if req.SlotIndex > 0 {
+	if req.SlotIndex > 0 || (req.EndUs > 0 && req.EndUs >= req.StartUs) {
 		filtered := cands[:0]
 		for _, c := range cands {
-			if c.SlotIndex == req.SlotIndex {
-				filtered = append(filtered, c)
+			if req.SlotIndex > 0 && c.SlotIndex != req.SlotIndex {
+				continue
 			}
+			if req.EndUs > 0 && req.EndUs >= req.StartUs && (c.AnchorTsUs < req.StartUs || c.AnchorTsUs > req.EndUs) {
+				continue
+			}
+			filtered = append(filtered, c)
 		}
 		cands = filtered
 	}
@@ -1256,7 +1289,7 @@ func (e *Engine) LabelPracticeSession(ctx context.Context, sessionID string, req
 		}, nil
 	}
 
-	decisions, err := labeler.LabelCandidates(ctx, sessSnap, cands, nil)
+	decisions, err := labeler.LabelCandidates(lblCtx, sessSnap, cands, nil)
 	if err != nil {
 		return MLSessionLabelResponse{MLStatus: e.MLStatus()}, err
 	}
@@ -1605,11 +1638,13 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 	return st, nil
 }
 
-// CancelMLTraining aborts an in-flight on-device training/distillation run immediately.
+// CancelMLTraining aborts an in-flight on-device training/distillation or session Auto-Label run immediately.
 func (e *Engine) CancelMLTraining() domain.MLStatus {
 	e.mu.Lock()
 	cancel := e.mlTrainCancel
 	e.mlTrainCancel = nil
+	lblCancel := e.mlLabelCancel
+	e.mlLabelCancel = nil
 	if e.mlTraining.Running {
 		e.mlTraining.Running = false
 		e.mlTraining.Message = "Training canceled"
@@ -1620,6 +1655,9 @@ func (e *Engine) CancelMLTraining() domain.MLStatus {
 
 	if cancel != nil {
 		cancel()
+	}
+	if lblCancel != nil {
+		lblCancel()
 	}
 	e.notifyMLUpdated(st, subs)
 	return st

@@ -1327,8 +1327,12 @@ export function makeMockApiClient(store: AppStore): MockApiClientRecord {
       calls.push({ method: "labelPracticeSession", args });
       const [sessionId, payload] = args as [
         string,
-        { dryRun: boolean; slotIndex?: number; packId?: string },
+        { dryRun: boolean; slotIndex?: number; packId?: string; startUs?: number; endUs?: number },
       ];
+      const midTs =
+        payload?.startUs !== undefined && payload?.endUs !== undefined && payload.endUs >= payload.startUs
+          ? Math.round((payload.startUs + payload.endUs) / 2)
+          : 2_500_000;
       return Promise.resolve({
         sessionId,
         packId: "qwen3-1.7b-q4_k_m",
@@ -1342,9 +1346,9 @@ export function makeMockApiClient(store: AppStore): MockApiClientRecord {
             gateId: 1,
             slotIndex: payload?.slotIndex ?? 1,
             label: "crossing",
-            anchorTsUs: 2_500_000,
+            anchorTsUs: midTs,
             deltaMs: 0,
-            finalTsUs: 2_500_000,
+            finalTsUs: midTs,
             peakRssiDbm: -45,
             confidence: 0.96,
           },

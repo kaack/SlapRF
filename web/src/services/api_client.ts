@@ -1279,7 +1279,13 @@ export class ApiClient {
 
   public async labelPracticeSession(
     sessionId: string,
-    payload: { dryRun: boolean; slotIndex?: number; packId?: string }
+    payload: {
+      dryRun: boolean;
+      slotIndex?: number;
+      packId?: string;
+      startUs?: number;
+      endUs?: number;
+    }
   ): Promise<import("../types/models").MLSessionLabelResponse> {
     const res = await this.transport.request<import("../types/models").MLSessionLabelResponse>(
       "POST",

@@ -6459,6 +6459,10 @@ paths:
               properties:
                 packId:
                   type: string
+                startUs:
+                  type: integer
+                endUs:
+                  type: integer
                   example: qwen3-1.7b-q4_k_m
       responses:
         "202":
@@ -6512,6 +6516,10 @@ paths:
                   type: integer
                 packId:
                   type: string
+                startUs:
+                  type: integer
+                endUs:
+                  type: integer
       responses:
         "200":
           description: Candidate classification decisions and (when dryRun=false) updated Practice & ML state

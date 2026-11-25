@@ -56,25 +56,27 @@ interface DerivedPassRow {
   gateLbl: string;
   gateClr: string;
   offsetMs: number;
+  relMs: number; // ms relative to lap start (0 ms = Start crossing of this lap)
   label: string;
   splitSec: number | null;
   peakDbm: number | null;
 }
 
-interface LapWindowBounds {
-  lap: LapRecord;
+interface LockedLapBounds {
+  lapNumber: number | null;
+  lapTimeSec: number | null;
   startMs: number;
   endMs: number;
-  framedMinMs: number;
-  framedMaxMs: number;
+  hardMinMs: number;
+  hardMaxMs: number;
 }
 
 const DEFAULT_SVG_W = 850;
-const DEFAULT_SVG_H = 236;
-const PAD_L = 46;
-const PAD_R = 18;
-const PAD_T = 30;
-const PAD_B = 28;
+const DEFAULT_SVG_H = 260;
+const PAD_L = 28;
+const PAD_R = 6;
+const PAD_T = 28;
+const PAD_B = 24;
 const DBM_MIN = -98;
 const DBM_MAX = -22;
 const DBM_ABS_MIN = -108;
@@ -93,23 +95,24 @@ const RH_ABS_MIN = 0;
 const RH_ABS_MAX = 260;
 const RH_MIN_Y_SPAN = 24;
 const RH_MAX_Y_SPAN = 260;
-const MIN_X_SPAN_MS = 1000;
-const MAX_X_SPAN_MS = 600_000;
+const MIN_X_SPAN_MS = 800;
+const MAX_FALLBACK_X_SPAN_MS = 120_000;
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
-function fmtOffsetSec(ms: number): string {
+function fmtRelSec(ms: number): string {
   const sec = ms / 1000;
-  return `${sec >= 0 ? "+" : ""}${sec.toFixed(2)}s`;
+  if (Math.abs(sec) < 0.005) return "0.00s";
+  return `${sec > 0 ? "+" : ""}${sec.toFixed(2)}s`;
 }
 
 /**
- * Opens the Lap-Based Multi-Timer Practice RSSI & Gate Crossing Editor modal.
- * Shows all timers' `.rfbin` RSSI curves and marked crossings overlaid for the selected lap
- * (matching the `Signals` editor), and focuses any timer when clicked so you can drag/adjust
- * crossings, delete false triggers, add missing crossings, or tune thresholds.
+ * Opens the Single-Lap Practice RSSI Editor modal matching the `Signals` tab UX:
+ * - Viewport is locked to the selected lap (`Start` .. `Finish`), with stretchable X-axis and Y-axis scales.
+ * - Inside the chart area: compact `[ + ]` and `[ 🔒 / 🔓 ]` action buttons when a timer is focused.
+ * - Below the chart: timer selector row (`All`, `H1`, `T1`, …) and the lap's crossings row right underneath.
  */
 export function openPracticeLapEditorModal(
   rootStore: AppStore,
@@ -160,12 +163,11 @@ export function openPracticeLapEditorModal(
   };
 
   let focusedGateId: number | null = defaultFocusedGateId();
-  let selectedLapId: number | "all" = "all";
+  // Matches `PilotRssiChart.chartLinesLocked`: locked by default until the user taps the lock icon!
+  let chartLinesLocked = true;
   let selectedCrossingId: number | null = null;
-  let addMode = false;
   let customX: { minMs: number; maxMs: number } | null = null;
   let customY: { minDbm: number; maxDbm: number } | null = null;
-  let userAdjustedX = false;
   let panAnimFrame = 0;
   let isSaving = false;
   let isAutoLabeling = false;
@@ -175,7 +177,22 @@ export function openPracticeLapEditorModal(
   let isLoadingTrace = !rootStore.hasSessionTrace(sessionId) || needsFreshActiveTrace;
   let nextDraftId = -1;
 
-  // Map<gateId, DraftGateCrossing[]> for staged edits per timer
+  // Resolve the immutable target lap opened from Review
+  const initPilotLaps = getPilotLaps(initSess);
+  let lockedLap: LapRecord | undefined;
+  if (opts.initialLapId !== undefined) {
+    lockedLap = initPilotLaps.find((l) => l.lapId === opts.initialLapId);
+  }
+  if (!lockedLap && opts.focusEndUs !== undefined && opts.focusEndUs > 0) {
+    lockedLap = initPilotLaps.find((l) => Math.abs(l.completedAtUs - opts.focusEndUs!) <= 50_000);
+  }
+  if (!lockedLap && opts.focusStartUs === undefined && initPilotLaps.length > 0) {
+    lockedLap = initPilotLaps[initPilotLaps.length - 1];
+  }
+  const lockedLapId: number | null = lockedLap?.lapId ?? null;
+  const fallbackStartUs = opts.focusStartUs;
+  const fallbackEndUs = opts.focusEndUs;
+
   const draftByGate = new Map<number, DraftGateCrossing[]>();
   const draftThresholdsByGate = new Map<
     number,
@@ -210,78 +227,78 @@ export function openPracticeLapEditorModal(
     return Math.max(0, minUs - 500_000);
   };
 
+  const computeLockedLapBounds = (
+    sess: PracticeSession,
+    anchorUs: number
+  ): LockedLapBounds | null => {
+    const liveLap =
+      lockedLapId !== null
+        ? getPilotLaps(sess).find((l) => l.lapId === lockedLapId) ?? lockedLap
+        : undefined;
+    if (liveLap && liveLap.completedAtUs > 0) {
+      const startUs = Math.max(0, Math.round(liveLap.completedAtUs - liveLap.lapTimeSec * 1_000_000));
+      const endUs = liveLap.completedAtUs;
+      const startMs = Math.round((startUs - anchorUs) / 1000);
+      const endMs = Math.round((endUs - anchorUs) / 1000);
+      const padMs = clamp(Math.round(Math.max(1000, endMs - startMs) * 0.12), 800, 1800);
+      return {
+        lapNumber: liveLap.lapNumber,
+        lapTimeSec: liveLap.lapTimeSec,
+        startMs,
+        endMs,
+        hardMinMs: startMs - padMs,
+        hardMaxMs: Math.max(startMs + 1500, endMs + padMs),
+      };
+    }
+    if (
+      fallbackStartUs !== undefined &&
+      fallbackEndUs !== undefined &&
+      fallbackEndUs >= fallbackStartUs &&
+      fallbackEndUs > 0
+    ) {
+      const startMs = Math.round((fallbackStartUs - anchorUs) / 1000);
+      const endMs = Math.round((fallbackEndUs - anchorUs) / 1000);
+      const padMs = clamp(Math.round(Math.max(1000, endMs - startMs) * 0.12), 800, 1800);
+      return {
+        lapNumber: null,
+        lapTimeSec: Math.max(0, (fallbackEndUs - fallbackStartUs) / 1_000_000),
+        startMs,
+        endMs,
+        hardMinMs: startMs - padMs,
+        hardMaxMs: Math.max(startMs + 1500, endMs + padMs),
+      };
+    }
+    return null;
+  };
+
+  let activeHardBounds: LockedLapBounds | null = computeLockedLapBounds(
+    initSess,
+    computeSessionAnchorUs(initSess)
+  );
+
   const clampXDomain = (minMs: number, maxMs: number) => {
-    const span = clamp(maxMs - minMs, MIN_X_SPAN_MS, MAX_X_SPAN_MS);
+    if (activeHardBounds) {
+      const fullLapSpan = Math.max(MIN_X_SPAN_MS, activeHardBounds.hardMaxMs - activeHardBounds.hardMinMs);
+      const span = clamp(maxMs - minMs, MIN_X_SPAN_MS, fullLapSpan);
+      const maxLo = activeHardBounds.hardMaxMs - span;
+      const lo = clamp(minMs, activeHardBounds.hardMinMs, maxLo);
+      return { minMs: Math.round(lo), maxMs: Math.round(lo + span) };
+    }
+    const span = clamp(maxMs - minMs, MIN_X_SPAN_MS, MAX_FALLBACK_X_SPAN_MS);
     const lo = clamp(minMs, -1_000_000_000, 1_000_000_000);
     return { minMs: Math.round(lo), maxMs: Math.round(lo + span) };
   };
 
-  const computeLapBounds = (
-    sess: PracticeSession,
-    anchorUs: number,
-    lapId: number | "all"
-  ): LapWindowBounds | null => {
-    if (lapId === "all") return null;
-    const lap = getPilotLaps(sess).find((l) => l.lapId === lapId);
-    if (!lap || !(lap.completedAtUs > 0)) return null;
-    const startUs = Math.max(0, Math.round(lap.completedAtUs - lap.lapTimeSec * 1_000_000));
-    const endUs = lap.completedAtUs;
-    const startMs = Math.round((startUs - anchorUs) / 1000);
-    const endMs = Math.round((endUs - anchorUs) / 1000);
-    const padMs = Math.max(1600, Math.round(Math.max(1000, endMs - startMs) * 0.2));
-    const framed = clampXDomain(startMs - padMs, Math.max(startMs + 2800, endMs + padMs));
-    return {
-      lap,
-      startMs,
-      endMs,
-      framedMinMs: framed.minMs,
-      framedMaxMs: framed.maxMs,
-    };
+  const isCustomXZoomed = (): boolean => {
+    if (!customX) return false;
+    if (!activeHardBounds) return true;
+    return (
+      Math.abs(customX.minMs - activeHardBounds.hardMinMs) > 5 ||
+      Math.abs(customX.maxMs - activeHardBounds.hardMaxMs) > 5
+    );
   };
 
-  const applySelectedLapFrame = (sess: PracticeSession): void => {
-    userAdjustedX = false;
-    if (selectedLapId === "all") {
-      customX = null;
-      return;
-    }
-    const anchorUs = computeSessionAnchorUs(sess);
-    const bounds = computeLapBounds(sess, anchorUs, selectedLapId);
-    if (bounds) {
-      customX = { minMs: bounds.framedMinMs, maxMs: bounds.framedMaxMs };
-    } else {
-      customX = null;
-    }
-  };
-
-  // Initialize `selectedLapId` from `initialLapId`, matching `focusStartUs`/`focusEndUs`, or latest lap
-  {
-    const initLaps = getPilotLaps(initSess);
-    if (opts.initialLapId !== undefined && initLaps.some((l) => l.lapId === opts.initialLapId)) {
-      selectedLapId = opts.initialLapId;
-      applySelectedLapFrame(initSess);
-    } else if (
-      opts.focusStartUs !== undefined &&
-      opts.focusEndUs !== undefined &&
-      opts.focusEndUs >= opts.focusStartUs
-    ) {
-      const matched = initLaps.find((l) => Math.abs(l.completedAtUs - opts.focusEndUs!) <= 50_000);
-      if (matched) {
-        selectedLapId = matched.lapId;
-        applySelectedLapFrame(initSess);
-      } else {
-        const anchor = computeSessionAnchorUs(initSess);
-        const startMs = Math.round((opts.focusStartUs - anchor) / 1000);
-        const endMs = Math.round((opts.focusEndUs - anchor) / 1000);
-        const padMs = Math.max(1800, Math.round((endMs - startMs) * 0.22));
-        customX = clampXDomain(startMs - padMs, Math.max(startMs + 3000, endMs + padMs));
-        userAdjustedX = true;
-      }
-    } else if (initLaps.length > 0) {
-      selectedLapId = initLaps[initLaps.length - 1].lapId;
-      applySelectedLapFrame(initSess);
-    }
-  }
+  const canEditFocusedLines = (): boolean => focusedGateId !== null && !chartLinesLocked;
 
   const extractOriginalGateCrossings = (
     sess: PracticeSession,
@@ -315,44 +332,39 @@ export function openPracticeLapEditorModal(
   const hasUnsavedChanges = (): boolean =>
     draftByGate.size > 0 || draftThresholdsByGate.size > 0;
 
-  /**
-   * Slices `.rfbin` frames inside `[minMs, maxMs]` via binary search and preserves bucket peaks
-   * when zoomed out, so zoomed-in lap views always render full 50-100 Hz peak fidelity!
-   */
   const buildTraceMsInWindow = (
     sess: PracticeSession,
     anchorUs: number,
     gateId: number,
     slotIndex: number,
-    minMs?: number,
-    maxMs?: number
+    minMs: number,
+    maxMs: number
   ): Array<{ t: number; r: number }> => {
     const frames = getGateHistory(sess, gateId);
     if (frames.length === 0) return [];
     const slotZeroIdx = Math.max(0, slotIndex - 1);
 
-    let loIdx = 0;
-    let hiIdx = frames.length;
-    if (minMs !== undefined && maxMs !== undefined) {
-      const minUs = Math.max(0, anchorUs + (minMs - 2000) * 1000);
-      const maxUs = Math.max(minUs, anchorUs + (maxMs + 2000) * 1000);
-      let l = 0;
-      let r = frames.length;
-      while (l < r) {
-        const m = (l + r) >>> 1;
-        if (frames[m].timestampUs < minUs) l = m + 1;
-        else r = m;
-      }
-      loIdx = Math.max(0, l - 1);
-      l = loIdx;
-      r = frames.length;
-      while (l < r) {
-        const m = (l + r) >>> 1;
-        if (frames[m].timestampUs <= maxUs) l = m + 1;
-        else r = m;
-      }
-      hiIdx = Math.min(frames.length, l + 1);
+    const padMinMs = activeHardBounds ? activeHardBounds.hardMinMs - 200 : minMs - 2000;
+    const padMaxMs = activeHardBounds ? activeHardBounds.hardMaxMs + 200 : maxMs + 2000;
+    const minUs = Math.max(0, anchorUs + padMinMs * 1000);
+    const maxUs = Math.max(minUs, anchorUs + padMaxMs * 1000);
+
+    let l = 0;
+    let r = frames.length;
+    while (l < r) {
+      const m = (l + r) >>> 1;
+      if (frames[m].timestampUs < minUs) l = m + 1;
+      else r = m;
     }
+    const loIdx = Math.max(0, l - 1);
+    l = loIdx;
+    r = frames.length;
+    while (l < r) {
+      const m = (l + r) >>> 1;
+      if (frames[m].timestampUs <= maxUs) l = m + 1;
+      else r = m;
+    }
+    const hiIdx = Math.min(frames.length, l + 1);
 
     const spanCount = hiIdx - loIdx;
     if (spanCount <= 0) return [];
@@ -370,69 +382,92 @@ export function openPracticeLapEditorModal(
         }
       }
       if (bestVal === undefined || bestVal <= -125) continue;
-      out.push({
-        t: Math.round((bestFrame.timestampUs - anchorUs) / 1000),
-        r: bestVal,
-      });
+      const tMs = Math.round((bestFrame.timestampUs - anchorUs) / 1000);
+      if (activeHardBounds && (tMs < activeHardBounds.hardMinMs - 100 || tMs > activeHardBounds.hardMaxMs + 100)) {
+        continue;
+      }
+      out.push({ t: tMs, r: bestVal });
     }
     return out;
   };
 
-  const derivePassRows = (
+  const deriveLapPassRows = (
     sess: PracticeSession,
     anchorUs: number,
-    gateId: number
+    lapBounds: LockedLapBounds | null
   ): DerivedPassRow[] => {
-    const raw = activeGateCrossings(sess, gateId);
-    const isSf = gateId === sfGateId();
-    const gLbl = gateLabel(reviewStore, gateId);
-    const gClr = gateColor(reviewStore, gateId);
+    const sfId = sfGateId();
+    const zeroMs = lapBounds ? lapBounds.startMs : 0;
+    const rawItems: Array<{ crossing: DraftGateCrossing; offsetMs: number }> = [];
+
+    for (const g of nodesList()) {
+      for (const c of activeGateCrossings(sess, g.gateId)) {
+        const offsetMs = Math.round((c.timestampUs - anchorUs) / 1000);
+        if (lapBounds && c.crossingId >= 0) {
+          const tolMs = g.gateId === sfId ? 450 : 250;
+          if (offsetMs < lapBounds.startMs - tolMs || offsetMs > lapBounds.endMs + tolMs) {
+            continue;
+          }
+        }
+        rawItems.push({ crossing: c, offsetMs });
+      }
+    }
+
+    rawItems.sort((a, b) => a.offsetMs - b.offsetMs || a.crossing.gateId - b.crossing.gateId);
+
     const rows: DerivedPassRow[] = [];
-    let validIdx = 0;
-    let prevValidMs: number | null = null;
-    for (const c of raw) {
-      const offsetMs = Math.round((c.timestampUs - anchorUs) / 1000);
+    const perGateCount = new Map<number, number>();
+    let prevValidOffsetMs: number | null = null;
+
+    for (const item of rawItems) {
+      const { crossing: c, offsetMs } = item;
+      const gLbl = gateLabel(reviewStore, c.gateId);
+      const gClr = gateColor(reviewStore, c.gateId);
       const peakDbm =
         c.peakRssiDbm !== undefined && c.peakRssiDbm !== 0 ? Math.round(c.peakRssiDbm) : null;
       const isInv = Boolean(c.invalidReason && !c.manual);
       if (isInv) {
         rows.push({
           crossing: c,
-          gateId,
+          gateId: c.gateId,
           gateLbl: gLbl,
           gateClr: gClr,
           offsetMs,
+          relMs: offsetMs - zeroMs,
           label: "INV",
           splitSec: null,
           peakDbm,
         });
         continue;
       }
-      validIdx++;
+
+      const cnt = (perGateCount.get(c.gateId) ?? 0) + 1;
+      perGateCount.set(c.gateId, cnt);
+
       let label: string;
-      let splitSec: number | null = null;
-      if (isSf) {
-        if (validIdx === 1) {
-          label = "HS";
+      if (lapBounds && c.gateId === sfId) {
+        const distStart = Math.abs(offsetMs - lapBounds.startMs);
+        const distEnd = Math.abs(offsetMs - lapBounds.endMs);
+        if (distStart <= distEnd && cnt === 1) {
+          label = "Start";
         } else {
-          label = `L${validIdx - 1}`;
-          if (prevValidMs !== null) {
-            splitSec = Math.max(0, (offsetMs - prevValidMs) / 1000);
-          }
+          label = "Finish";
         }
       } else {
-        label = `P${validIdx}`;
-        if (prevValidMs !== null) {
-          splitSec = Math.max(0, (offsetMs - prevValidMs) / 1000);
-        }
+        label = cnt === 1 ? "Pass" : `Pass ${cnt}`;
       }
-      prevValidMs = offsetMs;
+
+      const splitSec =
+        prevValidOffsetMs !== null ? Math.max(0, (offsetMs - prevValidOffsetMs) / 1000) : null;
+      prevValidOffsetMs = offsetMs;
+
       rows.push({
         crossing: c,
-        gateId,
+        gateId: c.gateId,
         gateLbl: gLbl,
         gateClr: gClr,
         offsetMs,
+        relMs: offsetMs - zeroMs,
         label,
         splitSec,
         peakDbm,
@@ -441,35 +476,11 @@ export function openPracticeLapEditorModal(
     return rows;
   };
 
-  const deriveAllPassRows = (sess: PracticeSession, anchorUs: number): DerivedPassRow[] => {
-    const all: DerivedPassRow[] = [];
-    for (const g of nodesList()) {
-      all.push(...derivePassRows(sess, anchorUs, g.gateId));
-    }
-    all.sort((a, b) => a.offsetMs - b.offsetMs || a.gateId - b.gateId);
-    return all;
-  };
-
-  const findCrossingRow = (
-    sess: PracticeSession,
-    anchorUs: number,
-    crossingId: number,
-    preferGateId?: number | null
-  ): DerivedPassRow | undefined => {
-    if (preferGateId !== undefined && preferGateId !== null) {
-      const hit = derivePassRows(sess, anchorUs, preferGateId).find(
-        (r) => r.crossing.crossingId === crossingId
-      );
-      if (hit) return hit;
-    }
-    return deriveAllPassRows(sess, anchorUs).find((r) => r.crossing.crossingId === crossingId);
-  };
-
   let svgW = DEFAULT_SVG_W;
   let svgH = DEFAULT_SVG_H;
-  const getPlotW = (): number => Math.max(200, svgW - PAD_L - PAD_R);
+  const getPlotW = (): number => Math.max(180, svgW - PAD_L - PAD_R);
   const getPlotH = (): number => Math.max(120, svgH - PAD_T - PAD_B);
-  let lastDomain = { minMs: -1000, maxMs: 25_000 };
+  let lastDomain = { minMs: -1000, maxMs: 15_000 };
   let lastYDomain = { minDbm: DBM_MIN, maxDbm: DBM_MAX };
   let lastHwMode: TimingHardwareMode = "slaprf";
 
@@ -496,6 +507,7 @@ export function openPracticeLapEditorModal(
     startMaxMs: number;
     startMinDbm: number;
     startMaxDbm: number;
+    anchorFrac: number;
     tappedTraceGateId: number | null;
     panned: boolean;
   } | null = null;
@@ -617,7 +629,11 @@ export function openPracticeLapEditorModal(
     const plotW = getPlotW();
     const { svgX } = clientToSvgCoords(svgEl, clientX, 0);
     const frac = (clamp(svgX, PAD_L, PAD_L + plotW) - PAD_L) / plotW;
-    return Math.round(lastDomain.minMs + frac * (lastDomain.maxMs - lastDomain.minMs));
+    const rawMs = Math.round(lastDomain.minMs + frac * (lastDomain.maxMs - lastDomain.minMs));
+    if (activeHardBounds) {
+      return clamp(rawMs, activeHardBounds.hardMinMs, activeHardBounds.hardMaxMs);
+    }
+    return rawMs;
   };
 
   const sampleTraceAtMs = (trace: Array<{ t: number; r: number }>, ms: number): number | null => {
@@ -634,22 +650,28 @@ export function openPracticeLapEditorModal(
     return bestDist <= 600 ? Math.round(trace[bestIdx].r) : null;
   };
 
-  const computeAutoDomainMs = (
+  const computeDefaultDomainMs = (
     sess: PracticeSession,
     anchorUs: number,
-    allRows: DerivedPassRow[]
+    lapRows: DerivedPassRow[]
   ): { minMs: number; maxMs: number } => {
+    if (activeHardBounds) {
+      return { minMs: activeHardBounds.hardMinMs, maxMs: activeHardBounds.hardMaxMs };
+    }
     let minMs = 0;
-    let maxMs = 20_000;
+    let maxMs = 15_000;
     let sawTrace = false;
     for (const g of nodesList()) {
       const hist = getGateHistory(sess, g.gateId);
       if (hist.length > 0) {
-        const firstT = Math.round((hist[0].timestampUs - anchorUs) / 1000);
         const lastT = Math.round((hist[hist.length - 1].timestampUs - anchorUs) / 1000);
+        const firstT = Math.max(
+          Math.round((hist[0].timestampUs - anchorUs) / 1000),
+          lastT - 20_000
+        );
         if (!sawTrace) {
-          minMs = Math.min(0, firstT - 500);
-          maxMs = Math.max(minMs + 8000, lastT + 1000);
+          minMs = firstT - 500;
+          maxMs = Math.max(minMs + 5000, lastT + 1000);
           sawTrace = true;
         } else {
           minMs = Math.min(minMs, firstT - 500);
@@ -657,34 +679,30 @@ export function openPracticeLapEditorModal(
         }
       }
     }
-    for (const r of allRows) {
+    for (const r of lapRows) {
       if (r.offsetMs - 1000 < minMs) minMs = r.offsetMs - 1000;
-      if (r.offsetMs + 2000 > maxMs) maxMs = r.offsetMs + 2000;
+      if (r.offsetMs + 1500 > maxMs) maxMs = r.offsetMs + 1500;
     }
-    const laps = getPilotLaps(sess);
-    if (maxMs - minMs > 45_000 && laps.length >= 1) {
-      const latestBounds = computeLapBounds(sess, anchorUs, laps[laps.length - 1].lapId);
-      if (latestBounds) {
-        return { minMs: latestBounds.framedMinMs, maxMs: latestBounds.framedMaxMs };
-      }
-    }
-    return { minMs, maxMs: Math.max(minMs + 5000, maxMs) };
+    return { minMs, maxMs: Math.max(minMs + 4000, maxMs) };
   };
 
   const renderGraphSvg = (
     sess: PracticeSession,
     anchorUs: number,
-    allRows: DerivedPassRow[]
+    lapRows: DerivedPassRow[]
   ): string => {
     const plotW = getPlotW();
     const plotH = getPlotH();
     const refGateId = focusedGateId ?? sfGateId();
     const { enterDb, exitDb, hwMode } = getGateThresholds(refGateId, selectedPilotSlot);
     lastHwMode = hwMode;
-    lastDomain = customX ?? computeAutoDomainMs(sess, anchorUs, allRows);
+    activeHardBounds = computeLockedLapBounds(sess, anchorUs);
+    lastDomain = customX ? clampXDomain(customX.minMs, customX.maxMs) : computeDefaultDomainMs(sess, anchorUs, lapRows);
     lastYDomain = activeYDomain(hwMode);
     const spanMs = Math.max(1, lastDomain.maxMs - lastDomain.minMs);
     const ySpan = Math.max(1, lastYDomain.maxDbm - lastYDomain.minDbm);
+    const axisZeroMs = activeHardBounds ? activeHardBounds.startMs : 0;
+    const unlocked = canEditFocusedLines();
 
     const yStep =
       isLapRFMode(hwMode)
@@ -700,15 +718,11 @@ export function openPracticeLapEditorModal(
       const y = yNum.toFixed(1);
       yTicks.push(`
         <line x1="${PAD_L}" y1="${y}" x2="${svgW - PAD_R}" y2="${y}" class="lap-ed-grid-line" />
-        <text x="${PAD_L - 6}" y="${(yNum + 3.5).toFixed(1)}" class="lap-ed-axis-lbl" text-anchor="end">${db}</text>`);
+        <text x="${PAD_L - 4}" y="${(yNum + 3.5).toFixed(1)}" class="lap-ed-axis-lbl" text-anchor="end">${db}</text>`);
     }
 
-    // Lap window boundary framing when a specific lap is selected
-    const lapBounds = computeLapBounds(sess, anchorUs, selectedLapId);
-    const axisZeroMs = lapBounds ? lapBounds.startMs : 0;
-
     const stepMs =
-      spanMs <= 3000 ? 250 : spanMs <= 7000 ? 500 : spanMs <= 14_000 ? 1000 : spanMs <= 30_000 ? 2000 : spanMs <= 70_000 ? 5000 : 10_000;
+      spanMs <= 2500 ? 250 : spanMs <= 6000 ? 500 : spanMs <= 14_000 ? 1000 : spanMs <= 30_000 ? 2000 : 5000;
     const firstTickRel = Math.ceil((lastDomain.minMs - axisZeroMs) / stepMs) * stepMs;
     const lastTickRel = lastDomain.maxMs - axisZeroMs;
     const xTicks: string[] = [];
@@ -720,28 +734,22 @@ export function openPracticeLapEditorModal(
       const dec = stepMs < 500 ? 2 : rel % 1000 === 0 && stepMs >= 1000 ? 0 : 1;
       xTicks.push(`
         <line x1="${x}" y1="${PAD_T}" x2="${x}" y2="${svgH - PAD_B}" class="lap-ed-grid-line is-vert" />
-        <text x="${x}" y="${svgH - 8}" class="lap-ed-axis-lbl" text-anchor="middle">${(rel / 1000).toFixed(dec)}s</text>`);
+        <text x="${x}" y="${svgH - 7}" class="lap-ed-axis-lbl" text-anchor="middle">${(rel / 1000).toFixed(dec)}s</text>`);
     }
 
     let lapFrameHtml = "";
-    if (lapBounds) {
-      const xStart = clamp(msToX(lapBounds.startMs), PAD_L, svgW - PAD_R);
-      const xEnd = clamp(msToX(lapBounds.endMs), PAD_L, svgW - PAD_R);
+    if (activeHardBounds) {
+      const xStart = clamp(msToX(activeHardBounds.startMs), PAD_L, svgW - PAD_R);
+      const xEnd = clamp(msToX(activeHardBounds.endMs), PAD_L, svgW - PAD_R);
       if (xStart > PAD_L + 1) {
-        lapFrameHtml += `<rect x="${PAD_L}" y="${PAD_T}" width="${(xStart - PAD_L).toFixed(1)}" height="${plotH}" fill="rgba(0,0,0,0.18)" pointer-events="none" />`;
+        lapFrameHtml += `<rect x="${PAD_L}" y="${PAD_T}" width="${(xStart - PAD_L).toFixed(1)}" height="${plotH}" fill="rgba(0,0,0,0.20)" pointer-events="none" />`;
       }
       if (xEnd < svgW - PAD_R - 1) {
-        lapFrameHtml += `<rect x="${xEnd.toFixed(1)}" y="${PAD_T}" width="${(svgW - PAD_R - xEnd).toFixed(1)}" height="${plotH}" fill="rgba(0,0,0,0.18)" pointer-events="none" />`;
-      }
-      if (msToX(lapBounds.startMs) >= PAD_L && msToX(lapBounds.startMs) <= svgW - PAD_R) {
-        lapFrameHtml += `<line x1="${xStart.toFixed(1)}" y1="${PAD_T}" x2="${xStart.toFixed(1)}" y2="${svgH - PAD_B}" class="lap-ed-horn-line" pointer-events="none" />`;
-      }
-      if (msToX(lapBounds.endMs) >= PAD_L && msToX(lapBounds.endMs) <= svgW - PAD_R) {
-        lapFrameHtml += `<line x1="${xEnd.toFixed(1)}" y1="${PAD_T}" x2="${xEnd.toFixed(1)}" y2="${svgH - PAD_B}" class="lap-ed-horn-line" pointer-events="none" />`;
+        lapFrameHtml += `<rect x="${xEnd.toFixed(1)}" y="${PAD_T}" width="${(svgW - PAD_R - xEnd).toFixed(1)}" height="${plotH}" fill="rgba(0,0,0,0.20)" pointer-events="none" />`;
       }
     }
 
-    // Draggable Enter / Exit threshold lines when a specific timer is focused
+    // Threshold lines on focused timer (draggable when unlocked, matching `Signals`)
     let threshHtml = "";
     if (focusedGateId !== null) {
       const enterY = dbmToY(enterDb);
@@ -761,9 +769,9 @@ export function openPracticeLapEditorModal(
       threshHtml = `
         ${
           enterVisible
-            ? `<g class="lap-ed-thresh-group is-enter is-draggable ${threshDrag?.kind === "enter" ? "is-dragging" : ""}" data-thresh-handle="enter">
+            ? `<g class="lap-ed-thresh-group is-enter ${unlocked ? "is-draggable" : ""} ${threshDrag?.kind === "enter" ? "is-dragging" : ""}" ${unlocked ? 'data-thresh-handle="enter"' : 'pointer-events="none"'}>
                 <line x1="${PAD_L}" y1="${enterY.toFixed(1)}" x2="${svgW - PAD_R}" y2="${enterY.toFixed(1)}" class="lap-ed-thresh-line is-enter" />
-                <line x1="${PAD_L}" y1="${enterY.toFixed(1)}" x2="${svgW - PAD_R}" y2="${enterY.toFixed(1)}" class="lap-ed-thresh-hit" />
+                ${unlocked ? `<line x1="${PAD_L}" y1="${enterY.toFixed(1)}" x2="${svgW - PAD_R}" y2="${enterY.toFixed(1)}" class="lap-ed-thresh-hit" />` : ""}
                 <rect x="${enterPillX.toFixed(1)}" y="${(enterY - 8.5).toFixed(1)}" width="${enterPillW.toFixed(1)}" height="17" rx="4" class="lap-ed-thresh-pill is-enter" />
                 <text x="${(enterPillX + enterPillW / 2).toFixed(1)}" y="${(enterY + 3.4).toFixed(1)}" class="lap-ed-thresh-lbl is-enter" text-anchor="middle">${enterLbl}</text>
               </g>`
@@ -771,9 +779,9 @@ export function openPracticeLapEditorModal(
         }
         ${
           exitVisible
-            ? `<g class="lap-ed-thresh-group is-exit is-draggable ${threshDrag?.kind === "exit" ? "is-dragging" : ""}" data-thresh-handle="exit">
+            ? `<g class="lap-ed-thresh-group is-exit ${unlocked ? "is-draggable" : ""} ${threshDrag?.kind === "exit" ? "is-dragging" : ""}" ${unlocked ? 'data-thresh-handle="exit"' : 'pointer-events="none"'}>
                 <line x1="${PAD_L}" y1="${exitY.toFixed(1)}" x2="${svgW - PAD_R}" y2="${exitY.toFixed(1)}" class="lap-ed-thresh-line is-exit" />
-                <line x1="${PAD_L}" y1="${exitY.toFixed(1)}" x2="${svgW - PAD_R}" y2="${exitY.toFixed(1)}" class="lap-ed-thresh-hit" />
+                ${unlocked ? `<line x1="${PAD_L}" y1="${exitY.toFixed(1)}" x2="${svgW - PAD_R}" y2="${exitY.toFixed(1)}" class="lap-ed-thresh-hit" />` : ""}
                 <rect x="${exitPillX.toFixed(1)}" y="${(exitY - 8.5).toFixed(1)}" width="${exitPillW.toFixed(1)}" height="17" rx="4" class="lap-ed-thresh-pill is-exit" />
                 <text x="${(exitPillX + exitPillW / 2).toFixed(1)}" y="${(exitY + 3.4).toFixed(1)}" class="lap-ed-thresh-lbl is-exit" text-anchor="middle">${exitLbl}</text>
               </g>`
@@ -781,7 +789,6 @@ export function openPracticeLapEditorModal(
         }`;
     }
 
-    // Build per-timer colored RSSI curves (background unfocused timers first, focused timer or All timers on top)
     const nodes = nodesList();
     const orderedNodes =
       focusedGateId === null
@@ -846,13 +853,12 @@ export function openPracticeLapEditorModal(
         <text x="${PAD_L + plotW / 2}" y="${PAD_T + plotH / 2}" class="lap-ed-empty-svg" text-anchor="middle">${emptyLabel}</text>`);
     }
 
-    // Render crossing pins (background unfocused timers first, then focused / All timers with 2-lane pill stagger)
     const orderedRows =
       focusedGateId === null
-        ? allRows
+        ? lapRows
         : [
-            ...allRows.filter((r) => r.gateId !== focusedGateId),
-            ...allRows.filter((r) => r.gateId === focusedGateId),
+            ...lapRows.filter((r) => r.gateId !== focusedGateId),
+            ...lapRows.filter((r) => r.gateId === focusedGateId),
           ];
 
     let lastLane0Right = -9999;
@@ -871,7 +877,6 @@ export function openPracticeLapEditorModal(
         const inv = r.label === "INV";
 
         if (!isGateFocused && !isDragging) {
-          // Subtle reference pin for non-focused timers (clickable to switch focus to that timer)
           return `
             <g class="lap-ed-pin is-ref-pin" style="opacity:0.32;cursor:pointer" data-crossing-pin="${r.crossing.crossingId}" data-crossing-gate="${r.gateId}">
               <line x1="${xf}" y1="${PAD_T}" x2="${xf}" y2="${svgH - PAD_B}" class="lap-ed-pin-line" style="stroke:${esc(r.gateClr)};stroke-dasharray:3 3" />
@@ -879,9 +884,11 @@ export function openPracticeLapEditorModal(
             </g>`;
         }
 
+        const pinEditable = unlocked && r.gateId === focusedGateId;
         const cls = [
           "lap-ed-pin",
-          inv ? "is-invalid" : r.label === "HS" ? "is-holeshot" : "",
+          !pinEditable ? "is-locked" : "",
+          inv ? "is-invalid" : r.label === "Start" ? "is-holeshot" : "",
           r.crossing.manual ? "is-manual" : "",
           isSel ? "is-selected" : "",
           isDragging ? "is-dragging" : "",
@@ -889,30 +896,41 @@ export function openPracticeLapEditorModal(
           .filter(Boolean)
           .join(" ");
 
-        const subTime = isDragging
-          ? fmtOffsetSec(effMs)
-          : r.splitSec !== null
-            ? `${r.splitSec.toFixed(2)}s`
-            : fmtOffsetSec(effMs);
+        const relDragMs = effMs - axisZeroMs;
         const tagText =
           focusedGateId === null && nodes.length > 1
-            ? `${r.gateLbl} · ${r.label}`
-            : `${r.gateLbl} · ${r.label} · ${subTime}`;
-        const pillW = Math.max(50, tagText.length * 6.3 + 12);
+            ? r.label === "Start" || r.label === "Finish"
+              ? `${r.gateLbl} · ${r.label}`
+              : r.gateLbl
+            : `${r.gateLbl} · ${fmtRelSec(relDragMs)}`;
+        const showInlineDel = pinEditable && !isDragging;
+        const delExtraW = showInlineDel ? 16 : 0;
+        const pillW = Math.max(44, tagText.length * 6.3 + 12 + delExtraW);
         const pillX = clamp(x - pillW / 2, PAD_L, svgW - PAD_R - pillW);
-        let pillY = 3;
+        let pillY = 2;
         if (pillX < lastLane0Right + 4 && !isDragging && !isSel) {
-          pillY = 20;
+          pillY = 19;
         } else {
           lastLane0Right = pillX + pillW;
         }
+        const textCenterX = pillX + (pillW - delExtraW) / 2;
+        const delCx = pillX + pillW - 9;
+        const delCy = pillY + 8.25;
         const pinStroke = isSel || isDragging ? "" : `style="stroke:${esc(r.gateClr)}"`;
         return `
           <g class="${cls}" data-crossing-pin="${r.crossing.crossingId}" data-crossing-gate="${r.gateId}">
             <line x1="${xf}" y1="${PAD_T}" x2="${xf}" y2="${svgH - PAD_B}" class="lap-ed-pin-line" ${pinStroke} />
             <line x1="${xf}" y1="${PAD_T}" x2="${xf}" y2="${svgH - PAD_B}" class="lap-ed-pin-hit" />
             <rect x="${pillX.toFixed(1)}" y="${pillY}" width="${pillW.toFixed(1)}" height="16.5" rx="4.5" class="lap-ed-pin-pill" ${pinStroke} />
-            <text x="${(pillX + pillW / 2).toFixed(1)}" y="${(pillY + 11.7).toFixed(1)}" text-anchor="middle" class="lap-ed-pin-lbl">${esc(tagText)}</text>
+            <text x="${textCenterX.toFixed(1)}" y="${(pillY + 11.7).toFixed(1)}" text-anchor="middle" class="lap-ed-pin-lbl">${esc(tagText)}</text>
+            ${
+              showInlineDel
+                ? `<g class="lap-ed-pin-del" data-pin-delete="${r.crossing.crossingId}" data-pin-delete-gate="${r.gateId}">
+                    <circle cx="${delCx.toFixed(1)}" cy="${delCy.toFixed(1)}" r="6.5" fill="rgba(239,68,68,0.22)" />
+                    <path d="M ${(delCx - 2.6).toFixed(1)},${(delCy - 2.6).toFixed(1)} L ${(delCx + 2.6).toFixed(1)},${(delCy + 2.6).toFixed(1)} M ${(delCx + 2.6).toFixed(1)},${(delCy - 2.6).toFixed(1)} L ${(delCx - 2.6).toFixed(1)},${(delCy + 2.6).toFixed(1)}" stroke="#fca5a5" stroke-width="1.35" stroke-linecap="round" />
+                  </g>`
+                : ""
+            }
           </g>`;
       })
       .join("");
@@ -920,9 +938,9 @@ export function openPracticeLapEditorModal(
     let hoverHtml = "";
     if (hoverInfo && !dragState && !threshDrag && !viewDrag) {
       const hx = clamp(msToX(hoverInfo.offsetMs), PAD_L, svgW - PAD_R).toFixed(1);
-      const hLbl = `${fmtOffsetSec(hoverInfo.offsetMs)}${hoverInfo.dbm !== null ? ` · ${hoverInfo.gateLbl ? `${hoverInfo.gateLbl} ` : ""}${hoverInfo.dbm}${isSlapRFMode(hwMode) ? " dBm" : ""}` : ""}${addMode ? " (Click to add)" : ""}`;
+      const hLbl = `${fmtRelSec(hoverInfo.offsetMs - axisZeroMs)}${hoverInfo.dbm !== null ? ` · ${hoverInfo.gateLbl ? `${hoverInfo.gateLbl} ` : ""}${hoverInfo.dbm}${isSlapRFMode(hwMode) ? " dBm" : ""}` : ""}`;
       hoverHtml = `
-        <g class="lap-ed-hover-guide ${addMode ? "is-add" : ""}" pointer-events="none">
+        <g class="lap-ed-hover-guide" pointer-events="none">
           <line x1="${hx}" y1="${PAD_T}" x2="${hx}" y2="${svgH - PAD_B}" class="lap-ed-hover-line" />
           <text x="${clamp(Number(hx) + 6, PAD_L + 4, svgW - PAD_R - 140).toFixed(1)}" y="${svgH - PAD_B - 6}" class="lap-ed-hover-lbl">${esc(hLbl)}</text>
         </g>`;
@@ -930,7 +948,6 @@ export function openPracticeLapEditorModal(
 
     const svgStateCls = [
       "lap-ed-svg",
-      addMode ? "is-add-mode" : "",
       dragState || viewDrag?.mode === "xstretch" ? "is-dragging" : "",
       threshDrag || viewDrag?.mode === "ystretch" ? "is-dragging-thresh" : "",
       viewDrag?.mode === "pan" ? "is-panning" : "",
@@ -939,7 +956,7 @@ export function openPracticeLapEditorModal(
       .join(" ");
 
     return `
-      <svg class="${svgStateCls}" viewBox="0 0 ${svgW} ${svgH}" data-lap-ed-svg>
+      <svg class="${svgStateCls}" viewBox="0 0 ${svgW} ${svgH}" preserveAspectRatio="none" data-lap-ed-svg>
         <defs>
           ${gradDefs.join("")}
           <clipPath id="lapEdPlotClip">
@@ -956,8 +973,8 @@ export function openPracticeLapEditorModal(
         ${threshHtml}
         ${hoverHtml}
         ${pinsHtml}
-        <rect x="0" y="${PAD_T}" width="${PAD_L}" height="${plotH}" fill="transparent" class="lap-ed-y-axis-hit" data-axis-drag="y"></rect>
-        <rect x="${PAD_L}" y="${svgH - PAD_B}" width="${plotW}" height="${PAD_B}" fill="transparent" class="lap-ed-x-axis-hit" data-axis-drag="x"></rect>
+        <rect x="0" y="${PAD_T}" width="${PAD_L + 6}" height="${plotH}" fill="transparent" class="lap-ed-y-axis-hit" data-axis-drag="y"></rect>
+        <rect x="${PAD_L}" y="${svgH - PAD_B - 6}" width="${plotW}" height="${PAD_B + 6}" fill="transparent" class="lap-ed-x-axis-hit" data-axis-drag="x"></rect>
       </svg>`;
   };
 
@@ -972,8 +989,6 @@ export function openPracticeLapEditorModal(
       if (prevSvgWrap.clientWidth > 120) svgW = Math.round(prevSvgWrap.clientWidth);
       if (prevSvgWrap.clientHeight > 120) svgH = Math.round(prevSvgWrap.clientHeight);
     }
-    const prevTableWrap = backdrop.querySelector<HTMLElement>(".lap-ed-table-wrap");
-    const savedTableScrollTop = prevTableWrap ? prevTableWrap.scrollTop : 0;
 
     const nodes = nodesList();
     if (nodes.length === 1 && focusedGateId === null) {
@@ -982,30 +997,11 @@ export function openPracticeLapEditorModal(
       focusedGateId = defaultFocusedGateId();
     }
 
-    const pilotLaps = getPilotLaps(sess);
-    if (selectedLapId !== "all" && !pilotLaps.some((l) => l.lapId === selectedLapId)) {
-      selectedLapId = pilotLaps.length > 0 ? pilotLaps[pilotLaps.length - 1].lapId : "all";
-      applySelectedLapFrame(sess);
-    }
-
     const anchorUs = computeSessionAnchorUs(sess);
-    const allRows = deriveAllPassRows(sess, anchorUs);
-    const lapBounds = computeLapBounds(sess, anchorUs, selectedLapId);
-
-    // Filter table rows by selected timer (`All` or focused) and selected lap window
-    const visibleTableRows = allRows.filter((r) => {
-      if (focusedGateId !== null && r.gateId !== focusedGateId) return false;
-      if (selectedCrossingId !== null && r.crossing.crossingId === selectedCrossingId) return true;
-      if (r.crossing.crossingId < 0) {
-        // Keep staged crossings inside current chart domain visible
-        const curDom = customX ?? computeAutoDomainMs(sess, anchorUs, allRows);
-        return r.offsetMs >= curDom.minMs - 500 && r.offsetMs <= curDom.maxMs + 500;
-      }
-      if (lapBounds) {
-        return r.offsetMs >= lapBounds.startMs - 900 && r.offsetMs <= lapBounds.endMs + 900;
-      }
-      return true;
-    });
+    activeHardBounds = computeLockedLapBounds(sess, anchorUs);
+    const lapRows = deriveLapPassRows(sess, anchorUs, activeHardBounds);
+    const visibleCrossingRows =
+      focusedGateId === null ? lapRows : lapRows.filter((r) => r.gateId === focusedGateId);
 
     const pilot =
       sess.pilots.find((p) => p.slotIndex === selectedPilotSlot) ??
@@ -1015,92 +1011,83 @@ export function openPracticeLapEditorModal(
     const chLabel = pilot?.channel ? formatBandChannelShort(pilot.band, pilot.channel) : "";
     const { hwMode } = getGateThresholds(focusedGateId ?? sfGateId(), selectedPilotSlot);
 
-    // Lap switcher (`< | L1 · 12.40s ▾ | >`)
-    const curLapIdx =
-      selectedLapId === "all"
-        ? -1
-        : pilotLaps.findIndex((l) => l.lapId === selectedLapId);
-    const canPrevLap = pilotLaps.length > 0 && (selectedLapId === "all" || curLapIdx > 0);
-    const canNextLap =
-      pilotLaps.length > 0 && selectedLapId !== "all" && curLapIdx >= 0 && curLapIdx < pilotLaps.length - 1;
-    const lapNavHtml =
-      pilotLaps.length > 0
-        ? `<div class="lap-ed-lap-nav" role="group" aria-label="Select lap">
-            <button type="button" class="btn btn-ghost btn-xs lap-ed-lap-step-btn" data-lap-ed-prev-lap ${canPrevLap ? "" : "disabled"} title="Previous lap" aria-label="Previous lap">${icons.chevronLeft(14)}</button>
-            <select class="lap-ed-lap-select" data-lap-ed-lap-select aria-label="Select lap">
-              ${pilotLaps
-                .map(
-                  (l) =>
-                    `<option value="${l.lapId}" ${selectedLapId === l.lapId ? "selected" : ""}>L${l.lapNumber} · ${fmtTime(l.lapTimeSec)}${l.invalidated ? " (scratched)" : ""}</option>`
-                )
-                .join("")}
-              <option value="all" ${selectedLapId === "all" ? "selected" : ""}>All Laps (${pilotLaps.length})</option>
-            </select>
-            <button type="button" class="btn btn-ghost btn-xs lap-ed-lap-step-btn" data-lap-ed-next-lap ${canNextLap ? "" : "disabled"} title="Next lap" aria-label="Next lap">${icons.chevronRight(14)}</button>
-          </div>`
+    const lapBadgeHtml =
+      activeHardBounds?.lapNumber !== null && activeHardBounds?.lapNumber !== undefined
+        ? `<span class="lap-ed-badge mono">L${activeHardBounds.lapNumber}${activeHardBounds.lapTimeSec !== null ? ` · ${fmtTime(activeHardBounds.lapTimeSec)}` : ""}</span>`
         : "";
 
-    // Multi-timer pills (`[All] [● H1] [● T1] ...`) matching `Signals`
+    const hasCustomView = Boolean(isCustomXZoomed() || customY);
+    const isDirty = hasUnsavedChanges();
+    const curGateLabel = focusedGateId !== null ? gateLabel(reviewStore, focusedGateId) : null;
+    const unlocked = canEditFocusedLines();
+
+    // In-chart top bar matching `Signals` (`[Auto-Label] [Reset View]` on left, `[ + ] [ 🔒 ]` on right!)
+    const chartOverlayActionsHtml =
+      focusedGateId !== null && curGateLabel
+        ? `<div class="lap-ed-chart-lock-group" role="group" aria-label="Chart line controls">
+            <button
+              type="button"
+              class="scope-chart-action-btn"
+              data-lap-ed-add-crossing
+              ${unlocked ? "" : "disabled"}
+              title="${unlocked ? `Add ${esc(curGateLabel)} crossing` : `Unlock chart lines to add ${esc(curGateLabel)} crossings`}"
+              aria-label="${unlocked ? `Add ${esc(curGateLabel)} crossing` : `Unlock chart lines to add ${esc(curGateLabel)} crossings`}"
+            >${icons.plus(15)}</button>
+            <button
+              type="button"
+              class="scope-chart-action-btn ${chartLinesLocked ? "is-locked" : "is-unlocked"}"
+              data-lap-ed-toggle-lock
+              aria-pressed="${String(!chartLinesLocked)}"
+              title="${chartLinesLocked ? `Unlock ${esc(curGateLabel)} threshold and crossing lines` : `Lock ${esc(curGateLabel)} threshold and crossing lines`}"
+              aria-label="${chartLinesLocked ? `Unlock ${esc(curGateLabel)} threshold and crossing lines` : `Lock ${esc(curGateLabel)} threshold and crossing lines`}"
+            >${chartLinesLocked ? icons.lock(14) : icons.unlock(14)}</button>
+          </div>`
+        : `<span class="lap-ed-chart-select-hint muted">Select a timer below to unlock &amp; edit</span>`;
+
+    // Row 1 below chart: Timer selector pills (`All`, `H1`, `T1`, ...) matching `Signals`
     const allChipHtml =
       nodes.length > 1
-        ? `<button type="button" class="btn ${focusedGateId === null ? "btn-armed" : "btn-ghost"} btn-xs" data-lap-ed-gate="all" title="Show all timers overlaid">All</button>`
+        ? `<button type="button" class="btn ${focusedGateId === null ? "btn-armed" : "btn-ghost"} btn-xs lap-ed-gate-chip" data-lap-ed-gate="all" title="Show all timers overlaid"><span class="dot channel-all-dot"></span><span>All</span></button>`
         : "";
-    const gateChipsHtml = `<div class="lap-ed-gate-pills">${allChipHtml}${nodes
+    const gateChipsHtml = `<div class="lap-ed-timers-row" role="group" aria-label="Timers">${allChipHtml}${nodes
       .map((g) => {
         const gActive = focusedGateId === g.gateId;
         const gLbl = gateLabel(reviewStore, g.gateId);
         const gClr = gateColor(reviewStore, g.gateId);
-        return `<button type="button" class="btn ${gActive ? "btn-armed" : "btn-ghost"} btn-xs lap-ed-gate-chip" data-lap-ed-gate="${g.gateId}" title="${gActive && nodes.length > 1 ? `Editing ${esc(gLbl)} (tap again for All timers)` : `Focus ${esc(gLbl)} to edit crossings`}"><span class="dot" style="background:${esc(gClr)}"></span><span>${esc(gLbl)}</span></button>`;
+        return `<button type="button" class="btn ${gActive ? "btn-armed" : "btn-ghost"} btn-xs lap-ed-gate-chip" data-lap-ed-gate="${g.gateId}" title="${gActive && nodes.length > 1 ? `Viewing ${esc(gLbl)} (tap again for All timers)` : `Select ${esc(gLbl)}`}"><span class="dot" style="background:${esc(gClr)}"></span><span>${esc(gLbl)}</span></button>`;
       })
       .join("")}</div>`;
 
-    const hasCustomView = Boolean(userAdjustedX || customY);
-    const isDirty = hasUnsavedChanges();
-    const curGateLabel = focusedGateId !== null ? gateLabel(reviewStore, focusedGateId) : null;
-    const canAddCrossing = focusedGateId !== null;
-
-    const emptyMsg =
-      focusedGateId === null
-        ? lapBounds
-          ? `No crossings marked in L${lapBounds.lap.lapNumber}. Tap a timer chip above (e.g. ${esc(gateLabel(reviewStore, sfGateId()))}) to add a crossing.`
-          : `No crossings recorded yet. Tap a timer chip above to add crossings.`
-        : `No ${esc(curGateLabel)} passes in ${lapBounds ? `L${lapBounds.lap.lapNumber}` : "this view"}. Click <strong>Add Crossing</strong> or double-click a ${esc(curGateLabel)} peak above.`;
-
-    const tableRowsHtml =
-      visibleTableRows.length === 0
-        ? `<tr><td colspan="7" class="muted" style="text-align:center; padding: 18px 12px;">${emptyMsg}</td></tr>`
-        : visibleTableRows
+    // Row 2 below timers: Compact Crossings row for THIS lap
+    const crossingsRowHtml =
+      visibleCrossingRows.length === 0
+        ? `<div class="lap-ed-crossings-empty muted">${
+            focusedGateId === null
+              ? "No crossings marked in this lap."
+              : `No ${esc(curGateLabel ?? "")} crossing in this lap${chartLinesLocked ? " · tap lock icon in chart to add" : " · tap + in chart to add"}.`
+          }</div>`
+        : visibleCrossingRows
             .map((r) => {
               const isSel = selectedCrossingId !== null && r.crossing.crossingId === selectedCrossingId;
-              const splitCell =
-                r.splitSec !== null
-                  ? `<span class="lap-ed-num mono">${r.splitSec.toFixed(2)}s</span>`
-                  : `<span class="muted">—</span>`;
-              const rssiCell =
+              const chipEditable = !chartLinesLocked && focusedGateId === r.gateId;
+              const rolePrefix =
+                r.label === "Start" || r.label === "Finish" ? `${r.label} · ` : "";
+              const dbmSuffix =
                 r.peakDbm !== null
-                  ? `<span class="lap-ed-num mono">${r.peakDbm}<span class="lap-ed-rssi-unit">${isSlapRFMode(hwMode) ? " dBm" : ""}</span></span>`
-                  : `<span class="muted">—</span>`;
-              return `
-                <tr class="lap-ed-row ${r.label === "INV" ? "is-invalid-row" : ""} ${isSel ? "is-selected" : ""}" data-lap-ed-row="${r.crossing.crossingId}" data-lap-ed-row-gate="${r.gateId}">
-                  <td class="lap-ed-col-timer"><span class="lap-ed-timer-pill"><span class="dot" style="background:${esc(r.gateClr)}"></span><span class="mono">${esc(r.gateLbl)}</span></span></td>
-                  <td class="lap-ed-num mono lap-ed-col-pass">${esc(r.label)}</td>
-                  <td class="lap-ed-num mono lap-ed-col-gate">${fmtOffsetSec(r.offsetMs)}</td>
-                  <td class="lap-ed-col-split">${splitCell}</td>
-                  <td class="lap-ed-col-rssi">${rssiCell}</td>
-                  <td class="lap-ed-col-src"><span class="muted">${r.crossing.manual ? "Manual" : "Timer"}</span></td>
-                  <td class="lap-ed-col-act">
-                    <button type="button" class="btn btn-ghost lap-ed-act-btn lap-ed-del-btn" data-lap-ed-delete="${r.crossing.crossingId}" data-lap-ed-delete-gate="${r.gateId}" title="Delete ${esc(r.gateLbl)} crossing" aria-label="Delete ${esc(r.gateLbl)} crossing">
-                      ${icons.trash(16)}
-                    </button>
-                  </td>
-                </tr>`;
+                  ? ` · ${r.peakDbm}${isSlapRFMode(hwMode) ? "dBm" : ""}`
+                  : "";
+              return `<div class="lap-ed-crossing-chip ${isSel ? "is-selected" : ""} ${r.label === "INV" ? "is-invalid" : ""}" data-lap-ed-row="${r.crossing.crossingId}" data-lap-ed-row-gate="${r.gateId}">
+                <span class="dot" style="background:${esc(r.gateClr)}"></span>
+                <strong class="mono">${esc(r.gateLbl)}</strong>
+                <span class="lap-ed-chip-meta mono">${esc(rolePrefix)}${fmtRelSec(r.relMs)}${esc(dbmSuffix)}</span>
+                ${
+                  chipEditable
+                    ? `<button type="button" class="lap-ed-chip-del" data-lap-ed-delete="${r.crossing.crossingId}" data-lap-ed-delete-gate="${r.gateId}" title="Delete ${esc(r.gateLbl)} crossing" aria-label="Delete ${esc(r.gateLbl)} crossing">${icons.close(12)}</button>`
+                    : ""
+                }
+              </div>`;
             })
             .join("");
-
-    const captionHtml =
-      focusedGateId === null && nodes.length > 1
-        ? `Showing all timers for ${lapBounds ? `Lap ${lapBounds.lap.lapNumber}` : "session"}. Tap any timer chip, signal curve, or crossing pin to adjust, add, or remove crossings.`
-        : `Editing <strong>${esc(curGateLabel ?? "")}</strong> — drag pins to adjust timing, double-click a peak to add a crossing, or drag Enter/Exit thresholds.`;
 
     backdrop.innerHTML = `
       <div class="slaprf-modal card rc-modal-xl lap-editor-modal" role="document">
@@ -1110,72 +1097,50 @@ export function openPracticeLapEditorModal(
               <span class="lap-ed-title-pilot">
                 <span class="dot" style="background:${esc(color)}"></span>
                 <span>${esc(callsign)}${chLabel ? ` (${esc(chLabel)})` : ""}</span>
+                ${lapBadgeHtml}
               </span>
             </h3>
           </div>
-          <div class="lap-ed-head-right">
-            ${lapNavHtml}
-            <button type="button" class="btn btn-ghost btn-xs lap-ed-desktop-close-btn" data-lap-ed-close aria-label="Close">
-              ${icons.close(15)}
-            </button>
-          </div>
+          <button type="button" class="btn btn-ghost btn-xs lap-ed-desktop-close-btn" data-lap-ed-close aria-label="Close">
+            ${icons.close(15)}
+          </button>
         </div>
         <div class="slaprf-modal-body lap-ed-body">
-          <div class="lap-ed-controls-strip">
-            <div class="lap-ed-controls-left">${gateChipsHtml}</div>
-            <div class="lap-ed-controls-right" role="group" aria-label="Crossing actions">
-              <button type="button" class="btn btn-ghost btn-xs" data-lap-ed-reset-view ${hasCustomView ? "" : "hidden"}>
-                ${icons.maximize(13)}<span>Reset View</span>
-              </button>
-              <button
-                type="button"
-                class="btn btn-ghost btn-xs"
-                data-lap-ed-auto-label
-                ${isAutoLabeling || isSaving || Boolean(rootStore.mlStatus.teacher?.download?.running) ? "disabled" : ""}
-                title="Auto-label crossings on-device with AI"
-              >
-                ${icons.reviewCheck(13)}<span>${
-                  isAutoLabeling
-                    ? "Labeling…"
-                    : rootStore.mlStatus.teacher?.download?.running
-                      ? `AI ${Math.round(rootStore.mlStatus.teacher.download.percent || 0)}%`
-                      : "Auto-Label"
-                }</span>
-              </button>
-              <button
-                type="button"
-                class="btn ${addMode ? "btn-armed" : "btn-ghost"} btn-xs"
-                data-lap-ed-add-mode
-                ${canAddCrossing ? "" : "disabled"}
-                title="${canAddCrossing ? `Add a crossing on ${esc(curGateLabel ?? "")}` : "Select a timer chip (H1, T1, …) first to add a crossing"}"
-              >
-                ${icons.plus(13)}<span>${addMode ? "Click Peak…" : curGateLabel && nodes.length > 1 ? `Add ${esc(curGateLabel)}` : "Add Crossing"}</span>
-              </button>
-            </div>
-          </div>
-
           <div class="lap-ed-graph-card">
-            <div class="lap-ed-svg-wrap" data-lap-ed-svg-wrap>
-              ${renderGraphSvg(sess, anchorUs, allRows)}
+            <div class="lap-ed-chart-toolbar">
+              <div class="lap-ed-chart-toolbar-left">
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-xs"
+                  data-lap-ed-auto-label
+                  ${isSaving || Boolean(rootStore.mlStatus.teacher?.download?.running) ? "disabled" : ""}
+                  title="${isAutoLabeling ? "Cancel AI auto-labeling" : "Auto-label crossings in this lap on-device"}"
+                >
+                  ${isAutoLabeling ? icons.close(12) : icons.reviewCheck(13)}<span>${
+                    isAutoLabeling
+                      ? "Cancel AI"
+                      : rootStore.mlStatus.teacher?.download?.running
+                        ? `AI ${Math.round(rootStore.mlStatus.teacher.download.percent || 0)}%`
+                        : "Auto-Label"
+                  }</span>
+                </button>
+                <button type="button" class="btn btn-ghost btn-xs" data-lap-ed-reset-view ${hasCustomView ? "" : "hidden"}>
+                  ${icons.maximize(13)}<span>Reset Scale</span>
+                </button>
+              </div>
+              <div class="lap-ed-chart-toolbar-right">
+                ${chartOverlayActionsHtml}
+              </div>
             </div>
-            <div class="lap-ed-graph-caption">${captionHtml}</div>
+            <div class="lap-ed-svg-wrap" data-lap-ed-svg-wrap>
+              ${renderGraphSvg(sess, anchorUs, lapRows)}
+            </div>
           </div>
 
-          <div class="lap-ed-table-wrap">
-            <table class="table rc-compact-table lap-ed-table">
-              <thead>
-                <tr>
-                  <th class="lap-ed-col-timer">Timer</th>
-                  <th class="lap-ed-col-pass">Pass</th>
-                  <th class="lap-ed-col-gate">Time</th>
-                  <th class="lap-ed-col-split">Split</th>
-                  <th class="lap-ed-col-rssi">RSSI</th>
-                  <th class="lap-ed-col-src">Source</th>
-                  <th class="lap-ed-col-act" aria-label="Actions"></th>
-                </tr>
-              </thead>
-              <tbody>${tableRowsHtml}</tbody>
-            </table>
+          ${gateChipsHtml}
+
+          <div class="lap-ed-crossings-strip" role="list" aria-label="Lap crossings">
+            ${crossingsRowHtml}
           </div>
         </div>
         <div class="slaprf-modal-foot lap-ed-save-foot">
@@ -1188,9 +1153,9 @@ export function openPracticeLapEditorModal(
         </div>
       </div>`;
 
-    const nextTableWrap = backdrop.querySelector<HTMLElement>(".lap-ed-table-wrap");
-    if (nextTableWrap && savedTableScrollTop > 0) {
-      nextTableWrap.scrollTop = savedTableScrollTop;
+    const nextSvgWrap = backdrop.querySelector<HTMLElement>("[data-lap-ed-svg-wrap]");
+    if (resizeObserver && nextSvgWrap) {
+      resizeObserver.observe(nextSvgWrap);
     }
   };
 
@@ -1201,60 +1166,82 @@ export function openPracticeLapEditorModal(
     if (wrap.clientWidth > 120) svgW = Math.round(wrap.clientWidth);
     if (wrap.clientHeight > 120) svgH = Math.round(wrap.clientHeight);
     const anchorUs = computeSessionAnchorUs(sess);
-    const allRows = deriveAllPassRows(sess, anchorUs);
-    wrap.innerHTML = renderGraphSvg(sess, anchorUs, allRows);
+    activeHardBounds = computeLockedLapBounds(sess, anchorUs);
+    const lapRows = deriveLapPassRows(sess, anchorUs, activeHardBounds);
+    wrap.innerHTML = renderGraphSvg(sess, anchorUs, lapRows);
     const resetBtn = backdrop.querySelector<HTMLButtonElement>("[data-lap-ed-reset-view]");
-    if (resetBtn) resetBtn.hidden = !(userAdjustedX || customY);
+    if (resetBtn) resetBtn.hidden = !(isCustomXZoomed() || customY);
   };
 
-  const focusPassRow = (crossingId: number, rowGateId?: number): void => {
+  const focusPassRow = (crossingId: number): void => {
     const sess = getSession();
     if (!sess) return;
     const anchorUs = computeSessionAnchorUs(sess);
-    const row = findCrossingRow(sess, anchorUs, crossingId, rowGateId ?? focusedGateId);
+    const lapRows = deriveLapPassRows(sess, anchorUs, computeLockedLapBounds(sess, anchorUs));
+    const row = lapRows.find((r) => r.crossing.crossingId === crossingId);
     if (!row) return;
     focusedGateId = row.gateId;
     selectedCrossingId = crossingId;
-    if (selectedLapId === "all") {
-      customX = clampXDomain(row.offsetMs - 4000, row.offsetMs + 4000);
-      userAdjustedX = true;
-    } else if (
-      lastDomain &&
-      (row.offsetMs < lastDomain.minMs + 250 || row.offsetMs > lastDomain.maxMs - 250)
-    ) {
-      customX = clampXDomain(row.offsetMs - 3500, row.offsetMs + 3500);
-      userAdjustedX = true;
-    }
     renderModal();
   };
 
-  const stageAddCrossingAt = (offsetMs: number, targetGateId?: number): void => {
+  /**
+   * Matches `PilotRssiChart.addManualCrossing()`: immediately drops a new crossing onto the focused
+   * timer's strongest uncrossed RSSI peak inside the visible lap window (or window midpoint if flat)
+   * so the user can drag it directly without an extra click-mode step!
+   */
+  const stageAddManualCrossing = (): void => {
     const sess = getSession();
-    const gid = targetGateId ?? focusedGateId;
-    if (!sess || gid === null) return;
+    if (!sess || focusedGateId === null || chartLinesLocked) return;
+    const gid = focusedGateId;
     const anchorUs = computeSessionAnchorUs(sess);
-    const trace = buildTraceMsInWindow(
-      sess,
-      anchorUs,
-      gid,
-      selectedPilotSlot,
-      offsetMs - 1000,
-      offsetMs + 1000
-    );
-    const peak = sampleTraceAtMs(trace, offsetMs);
+    const dom = customX ? clampXDomain(customX.minMs, customX.maxMs) : computeDefaultDomainMs(sess, anchorUs, []);
+    const searchLo = activeHardBounds ? Math.max(dom.minMs, activeHardBounds.startMs - 200) : dom.minMs;
+    const searchHi = activeHardBounds ? Math.min(dom.maxMs, activeHardBounds.endMs + 200) : dom.maxMs;
+    const trace = buildTraceMsInWindow(sess, anchorUs, gid, selectedPilotSlot, searchLo, searchHi);
     const draft = ensureDraftGateCrossings(sess, gid);
+
+    // Pick strongest uncrossed peak in `[searchLo, searchHi]`, falling back to window center
+    let targetMs = Math.round((searchLo + searchHi) * 0.5);
+    let bestPeakDbm: number | null = null;
+    for (const pt of trace) {
+      if (pt.t < searchLo || pt.t > searchHi) continue;
+      const candUs = Math.max(1000, anchorUs + pt.t * 1000);
+      const nearExisting = draft.some((c) => Math.abs(c.timestampUs - candUs) < 280_000);
+      if (!nearExisting && (bestPeakDbm === null || pt.r > bestPeakDbm)) {
+        bestPeakDbm = pt.r;
+        targetMs = pt.t;
+      }
+    }
+
+    let tsUs = Math.max(1000, anchorUs + targetMs * 1000);
+    while (draft.some((c) => Math.abs(c.timestampUs - tsUs) < 35_000)) {
+      tsUs += 150_000;
+    }
+    const sampledPeak = sampleTraceAtMs(trace, Math.round((tsUs - anchorUs) / 1000));
     const newId = nextDraftId--;
     draft.push({
       crossingId: newId,
       gateId: gid,
-      timestampUs: Math.max(1000, anchorUs + offsetMs * 1000),
-      peakRssiDbm: peak ?? -52,
+      timestampUs: tsUs,
+      peakRssiDbm: sampledPeak ?? (bestPeakDbm !== null ? Math.round(bestPeakDbm) : -52),
       manual: true,
     });
     draft.sort((a, b) => a.timestampUs - b.timestampUs);
-    focusedGateId = gid;
     selectedCrossingId = newId;
     renderModal();
+  };
+
+  const deleteDraftCrossing = (cid: number, delGateId: number | null): void => {
+    const sess = getSession();
+    if (!sess || cid === 0 || delGateId === null) return;
+    const draft = ensureDraftGateCrossings(sess, delGateId);
+    const idx = draft.findIndex((c) => c.crossingId === cid);
+    if (idx >= 0) {
+      draft.splice(idx, 1);
+      if (selectedCrossingId === cid) selectedCrossingId = null;
+      renderModal();
+    }
   };
 
   const saveChanges = async (): Promise<void> => {
@@ -1358,6 +1345,17 @@ export function openPracticeLapEditorModal(
     const svg = backdrop.querySelector<SVGSVGElement>("[data-lap-ed-svg]");
     if (!target || !sess || !svg || !target.closest("[data-lap-ed-svg]")) return;
 
+    // Inline `×` delete button on an unlocked crossing pin
+    const pinDel = target.closest<SVGGElement>("[data-pin-delete]");
+    if (pinDel) {
+      e.preventDefault();
+      e.stopPropagation();
+      const cid = Number(pinDel.getAttribute("data-pin-delete") || "0");
+      const gid = Number(pinDel.getAttribute("data-pin-delete-gate") || "0") || focusedGateId;
+      deleteDraftCrossing(cid, gid);
+      return;
+    }
+
     const plotW = getPlotW();
     const { svgX, svgY } = clientToSvgCoords(svg, e.clientX, e.clientY);
 
@@ -1402,8 +1400,64 @@ export function openPracticeLapEditorModal(
       }
     }
 
+    // 1. Stretchable Y-axis (left) and X-axis (bottom)
+    const axisEl = target.closest("[data-axis-drag]");
+    const axisKind = axisEl?.getAttribute("data-axis-drag");
+    if (axisKind === "y" || (svgX < PAD_L && svgY >= PAD_T && svgY <= svgH - PAD_B)) {
+      e.preventDefault();
+      const yFrac = clamp(1 - (svgY - PAD_T) / getPlotH(), 0, 1);
+      viewDrag = {
+        mode: "ystretch",
+        pointerId: e.pointerId,
+        startSvgX: svgX,
+        startSvgY: svgY,
+        startMinMs: lastDomain.minMs,
+        startMaxMs: lastDomain.maxMs,
+        startMinDbm: lastYDomain.minDbm,
+        startMaxDbm: lastYDomain.maxDbm,
+        anchorFrac: yFrac,
+        tappedTraceGateId: null,
+        panned: true,
+      };
+      hoverInfo = null;
+      try {
+        backdrop.setPointerCapture(e.pointerId);
+      } catch {
+        // Ignore
+      }
+      refreshSvgOnly();
+      return;
+    }
+
+    if (axisKind === "x" || (svgY > svgH - PAD_B && svgX >= PAD_L && svgX <= svgW - PAD_R)) {
+      e.preventDefault();
+      const xFrac = clamp((svgX - PAD_L) / plotW, 0, 1);
+      viewDrag = {
+        mode: "xstretch",
+        pointerId: e.pointerId,
+        startSvgX: svgX,
+        startSvgY: svgY,
+        startMinMs: lastDomain.minMs,
+        startMaxMs: lastDomain.maxMs,
+        startMinDbm: lastYDomain.minDbm,
+        startMaxDbm: lastYDomain.maxDbm,
+        anchorFrac: xFrac,
+        tappedTraceGateId: null,
+        panned: true,
+      };
+      hoverInfo = null;
+      try {
+        backdrop.setPointerCapture(e.pointerId);
+      } catch {
+        // Ignore
+      }
+      refreshSvgOnly();
+      return;
+    }
+
+    // 2. Threshold drag (when unlocked on a focused timer)
     const threshHandle = target.closest<SVGGElement>("[data-thresh-handle]");
-    if (threshHandle && !addMode && focusedGateId !== null) {
+    if (threshHandle && canEditFocusedLines() && focusedGateId !== null) {
       e.preventDefault();
       const kind = threshHandle.getAttribute("data-thresh-handle") === "exit" ? "exit" : "enter";
       const cur = getGateThresholds(focusedGateId, selectedPilotSlot);
@@ -1422,18 +1476,15 @@ export function openPracticeLapEditorModal(
       return;
     }
 
+    // 3. Crossing pin select / drag (draggable when unlocked on that timer; selects timer when tapped in All mode)
     const pin = target.closest<SVGGElement>("[data-crossing-pin]");
-    if (pin && !addMode) {
+    if (pin) {
       e.preventDefault();
       const cid = Number(pin.getAttribute("data-crossing-pin") || "0");
-      const pinGateAttr = Number(pin.getAttribute("data-crossing-gate") || "0");
       const anchorUs = computeSessionAnchorUs(sess);
-      const row = findCrossingRow(sess, anchorUs, cid, pinGateAttr || focusedGateId);
+      const lapRows = deriveLapPassRows(sess, anchorUs, computeLockedLapBounds(sess, anchorUs));
+      const row = lapRows.find((r) => r.crossing.crossingId === cid);
       if (!row) return;
-      if (!customX) {
-        customX = { ...lastDomain };
-      }
-      // If clicking a non-focused timer's pin, focus that timer; if already focused (or 1-timer), allow dragging!
       if (focusedGateId !== row.gateId) {
         focusedGateId = row.gateId;
         selectedCrossingId = cid;
@@ -1441,6 +1492,10 @@ export function openPracticeLapEditorModal(
         return;
       }
       selectedCrossingId = cid;
+      if (chartLinesLocked) {
+        renderModal();
+        return;
+      }
       dragState = {
         crossingId: cid,
         gateId: row.gateId,
@@ -1455,15 +1510,6 @@ export function openPracticeLapEditorModal(
         // Ignore
       }
       refreshSvgOnly();
-      return;
-    }
-
-    if (addMode && focusedGateId !== null) {
-      e.preventDefault();
-      const offsetMs = clientXToMs(svg, e.clientX);
-      addMode = false;
-      hoverInfo = null;
-      stageAddCrossingAt(offsetMs, focusedGateId);
       return;
     }
 
@@ -1482,6 +1528,7 @@ export function openPracticeLapEditorModal(
         startMaxMs: lastDomain.maxMs,
         startMinDbm: lastYDomain.minDbm,
         startMaxDbm: lastYDomain.maxDbm,
+        anchorFrac: 0.5,
         tappedTraceGateId,
         panned: false,
       };
@@ -1531,12 +1578,14 @@ export function openPracticeLapEditorModal(
           const pinch = computeDirectionalPinch(pinchState.p1Start, pinchState.p2Start, pt1.px, pt2.px);
           if (pinch.mode === "x" || pinch.mode === "xy") {
             const startSpan = pinchState.startMaxMs - pinchState.startMinMs;
-            const nextSpan = clamp(startSpan * pinch.xSpanFactor, MIN_X_SPAN_MS, MAX_X_SPAN_MS);
+            const maxSpan = activeHardBounds
+              ? Math.max(MIN_X_SPAN_MS, activeHardBounds.hardMaxMs - activeHardBounds.hardMinMs)
+              : MAX_FALLBACK_X_SPAN_MS;
+            const nextSpan = clamp(startSpan * pinch.xSpanFactor, MIN_X_SPAN_MS, maxSpan);
             const anchorMs = pinchState.startMinMs + pinchState.anchorXFrac * startSpan;
             const liveXFrac = clamp(((pt1.svgX + pt2.svgX) * 0.5 - PAD_L) / plotW, 0, 1);
             const nextMin = anchorMs - liveXFrac * nextSpan;
             customX = clampXDomain(nextMin, nextMin + nextSpan);
-            userAdjustedX = true;
           }
           if (pinch.mode === "y" || pinch.mode === "xy") {
             const startSpanDb = pinchState.startMaxDbm - pinchState.startMinDbm;
@@ -1558,14 +1607,42 @@ export function openPracticeLapEditorModal(
       const { svgX, svgY } = clientToSvgCoords(svg, e.clientX, e.clientY);
       const dx = svgX - viewDrag.startSvgX;
       const dy = svgY - viewDrag.startSvgY;
+
+      if (viewDrag.mode === "ystretch") {
+        const startSpan = viewDrag.startMaxDbm - viewDrag.startMinDbm;
+        const factor = Math.exp(dy / 135);
+        const { minSpan, maxSpan } = ySpanBounds(lastHwMode);
+        const nextSpan = clamp(startSpan * factor, minSpan, maxSpan);
+        const anchorDbm = viewDrag.startMinDbm + viewDrag.anchorFrac * startSpan;
+        const nextMin = anchorDbm - viewDrag.anchorFrac * nextSpan;
+        customY = clampYDomain(nextMin, nextMin + nextSpan);
+        refreshSvgOnly();
+        return;
+      }
+
+      if (viewDrag.mode === "xstretch") {
+        const startSpan = viewDrag.startMaxMs - viewDrag.startMinMs;
+        const factor = Math.exp(-dx / 145);
+        const maxSpan = activeHardBounds
+          ? Math.max(MIN_X_SPAN_MS, activeHardBounds.hardMaxMs - activeHardBounds.hardMinMs)
+          : MAX_FALLBACK_X_SPAN_MS;
+        const nextSpan = clamp(startSpan * factor, MIN_X_SPAN_MS, maxSpan);
+        const anchorMs = viewDrag.startMinMs + viewDrag.anchorFrac * startSpan;
+        const nextMin = anchorMs - viewDrag.anchorFrac * nextSpan;
+        customX = clampXDomain(nextMin, nextMin + nextSpan);
+        refreshSvgOnly();
+        return;
+      }
+
       if (Math.hypot(dx, dy) >= 4.5) {
         viewDrag.panned = true;
       }
       if (viewDrag.panned) {
-        const spanMs = viewDrag.startMaxMs - viewDrag.startMinMs;
-        const deltaMs = -(dx / plotW) * spanMs;
-        customX = clampXDomain(viewDrag.startMinMs + deltaMs, viewDrag.startMaxMs + deltaMs);
-        userAdjustedX = true;
+        if (!activeHardBounds || isCustomXZoomed()) {
+          const spanMs = viewDrag.startMaxMs - viewDrag.startMinMs;
+          const deltaMs = -(dx / plotW) * spanMs;
+          customX = clampXDomain(viewDrag.startMinMs + deltaMs, viewDrag.startMaxMs + deltaMs);
+        }
         if (Math.abs(dy) >= 2.5 || customY) {
           const spanDb = viewDrag.startMaxDbm - viewDrag.startMinDbm;
           const deltaDb = (dy / getPlotH()) * spanDb;
@@ -1610,7 +1687,6 @@ export function openPracticeLapEditorModal(
           gateLbl: gateLabel(reviewStore, focusedGateId),
         };
       } else {
-        // In `All` mode, show the strongest timer's RSSI at the hovered timestamp
         let bestDbm: number | null = null;
         let bestLbl = "";
         for (const g of nodesList()) {
@@ -1700,11 +1776,13 @@ export function openPracticeLapEditorModal(
     const { xSpanFactor, ySpanFactor, mode } = computeWheelZoomFactors(e);
     if (mode === "x" || mode === "xy") {
       const spanMs = lastDomain.maxMs - lastDomain.minMs;
-      const nextSpan = clamp(spanMs * xSpanFactor, MIN_X_SPAN_MS, MAX_X_SPAN_MS);
+      const maxSpan = activeHardBounds
+        ? Math.max(MIN_X_SPAN_MS, activeHardBounds.hardMaxMs - activeHardBounds.hardMinMs)
+        : MAX_FALLBACK_X_SPAN_MS;
+      const nextSpan = clamp(spanMs * xSpanFactor, MIN_X_SPAN_MS, maxSpan);
       const frac = clamp((svgX - PAD_L) / plotW, 0, 1);
       const anchor = lastDomain.minMs + frac * spanMs;
       customX = clampXDomain(anchor - frac * nextSpan, anchor + (1 - frac) * nextSpan);
-      userAdjustedX = true;
     }
     if (mode === "y" || mode === "xy") {
       const spanDb = lastYDomain.maxDbm - lastYDomain.minDbm;
@@ -1717,50 +1795,6 @@ export function openPracticeLapEditorModal(
     refreshSvgOnly();
   };
 
-  const onDblClick = (e: MouseEvent): void => {
-    const svg = backdrop.querySelector<SVGSVGElement>("[data-lap-ed-svg]");
-    if (!svg || !(e.target instanceof Element) || !e.target.closest("[data-lap-ed-svg]")) return;
-    if (focusedGateId === null) {
-      showToast("Select a timer chip (H1, T1, …) first to add a crossing", "info");
-      return;
-    }
-    const { svgX, svgY } = clientToSvgCoords(svg, e.clientX, e.clientY);
-    if (svgX >= PAD_L && svgX <= svgW - PAD_R && svgY >= PAD_T && svgY <= svgH - PAD_B) {
-      stageAddCrossingAt(clientXToMs(svg, e.clientX), focusedGateId);
-    }
-  };
-
-  const stepSelectedLap = (dir: -1 | 1): void => {
-    const sess = getSession();
-    if (!sess) return;
-    const laps = getPilotLaps(sess);
-    if (laps.length === 0) return;
-    if (selectedLapId === "all") {
-      selectedLapId = dir < 0 ? laps[laps.length - 1].lapId : laps[0].lapId;
-    } else {
-      const idx = laps.findIndex((l) => l.lapId === selectedLapId);
-      const nextIdx = clamp(idx + dir, 0, laps.length - 1);
-      selectedLapId = laps[nextIdx].lapId;
-    }
-    selectedCrossingId = null;
-    applySelectedLapFrame(sess);
-    renderModal();
-  };
-
-  const onChange = (e: Event): void => {
-    const target = e.target as HTMLElement | null;
-    if (!target) return;
-    const lapSel = target.closest<HTMLSelectElement>("[data-lap-ed-lap-select]");
-    if (lapSel) {
-      const sess = getSession();
-      if (!sess) return;
-      selectedLapId = lapSel.value === "all" ? "all" : Number(lapSel.value || "0") || "all";
-      selectedCrossingId = null;
-      applySelectedLapFrame(sess);
-      renderModal();
-    }
-  };
-
   const onClick = (e: MouseEvent): void => {
     const target = e.target as HTMLElement | null;
     if (!target) return;
@@ -1768,25 +1802,15 @@ export function openPracticeLapEditorModal(
       close();
       return;
     }
-    if (target.closest("[data-lap-ed-prev-lap]")) {
-      stepSelectedLap(-1);
-      return;
-    }
-    if (target.closest("[data-lap-ed-next-lap]")) {
-      stepSelectedLap(1);
-      return;
-    }
     const gateBtn = target.closest<HTMLButtonElement>("[data-lap-ed-gate]");
     if (gateBtn) {
       const rawGate = gateBtn.dataset.lapEdGate || "all";
       if (rawGate === "all") {
         focusedGateId = null;
-        addMode = false;
       } else {
         const nextGate = Number(rawGate || "1");
         if (nodesList().length > 1 && focusedGateId === nextGate) {
           focusedGateId = null;
-          addMode = false;
         } else {
           focusedGateId = nextGate;
         }
@@ -1795,28 +1819,36 @@ export function openPracticeLapEditorModal(
       renderModal();
       return;
     }
+    if (target.closest("[data-lap-ed-toggle-lock]")) {
+      if (focusedGateId !== null) {
+        chartLinesLocked = !chartLinesLocked;
+        renderModal();
+      }
+      return;
+    }
+    if (target.closest("[data-lap-ed-add-crossing]")) {
+      stageAddManualCrossing();
+      return;
+    }
     if (target.closest("[data-lap-ed-reset-view]")) {
-      const sess = getSession();
+      customX = null;
       customY = null;
-      if (sess) applySelectedLapFrame(sess);
-      else customX = null;
       refreshSvgOnly();
       return;
     }
-    if (target.closest("[data-lap-ed-add-mode]")) {
-      if (focusedGateId === null) return;
-      addMode = !addMode;
-      renderModal();
-      return;
-    }
     if (target.closest("[data-lap-ed-auto-label]")) {
-      void runAutoLabelPreview();
+      if (isAutoLabeling) {
+        isAutoLabeling = false;
+        void rootApi.cancelMLTraining().catch(() => undefined);
+        renderModal();
+      } else {
+        void runAutoLabelPreview();
+      }
       return;
     }
     if (target.closest("[data-lap-ed-discard]")) {
       draftByGate.clear();
       draftThresholdsByGate.clear();
-      addMode = false;
       renderModal();
       return;
     }
@@ -1829,35 +1861,20 @@ export function openPracticeLapEditorModal(
       e.stopPropagation();
       const cid = Number(delBtn.dataset.lapEdDelete || "0");
       const delGateId = Number(delBtn.dataset.lapEdDeleteGate || "0") || focusedGateId;
-      const sess = getSession();
-      if (sess && cid !== 0 && delGateId !== null) {
-        const draft = ensureDraftGateCrossings(sess, delGateId);
-        const idx = draft.findIndex((c) => c.crossingId === cid);
-        if (idx >= 0) {
-          draft.splice(idx, 1);
-          if (selectedCrossingId === cid) selectedCrossingId = null;
-          renderModal();
-        }
-      }
+      deleteDraftCrossing(cid, delGateId);
       return;
     }
     const rowEl = target.closest<HTMLElement>("[data-lap-ed-row]");
     if (rowEl) {
       const cid = Number(rowEl.dataset.lapEdRow || "0");
-      const rgid = Number(rowEl.dataset.lapEdRowGate || "0") || undefined;
-      if (cid !== 0) focusPassRow(cid, rgid);
+      if (cid !== 0) focusPassRow(cid);
     }
   };
 
   const onKeyDown = (e: KeyboardEvent): void => {
     if (e.key === "Escape") {
       e.preventDefault();
-      if (addMode) {
-        addMode = false;
-        renderModal();
-      } else {
-        close();
-      }
+      close();
     }
   };
 
@@ -1895,19 +1912,32 @@ export function openPracticeLapEditorModal(
     }
 
     isAutoLabeling = true;
-    addMode = false;
     renderModal();
     try {
+      const preAnchorUs = computeSessionAnchorUs(sess);
+      const preBounds = computeLockedLapBounds(sess, preAnchorUs);
+      const reqStartUs = preBounds
+        ? Math.max(0, preAnchorUs + (preBounds.startMs - 450) * 1000)
+        : undefined;
+      const reqEndUs = preBounds ? preAnchorUs + (preBounds.endMs + 450) * 1000 : undefined;
       const res = await rootApi.labelPracticeSession(sessionId, {
         dryRun: true,
         slotIndex: selectedPilotSlot,
+        startUs: reqStartUs,
+        endUs: reqEndUs,
       });
+      if (!document.body.contains(backdrop) || !isAutoLabeling) return;
       const latestSess = getSession();
       if (!latestSess) return;
+      const anchorUs = computeSessionAnchorUs(latestSess);
+      const bounds = computeLockedLapBounds(latestSess, anchorUs);
+      const minBoundUs = bounds ? Math.max(0, anchorUs + (bounds.startMs - 450) * 1000) : 0;
+      const maxBoundUs = bounds ? anchorUs + (bounds.endMs + 450) * 1000 : Number.POSITIVE_INFINITY;
 
       const byGateDecs = new Map<number, typeof res.decisions>();
       for (const d of res.decisions ?? []) {
         if (d.slotIndex !== selectedPilotSlot) continue;
+        if (d.finalTsUs < minBoundUs || d.finalTsUs > maxBoundUs) continue;
         let arr = byGateDecs.get(d.gateId);
         if (!arr) {
           arr = [];
@@ -1916,24 +1946,32 @@ export function openPracticeLapEditorModal(
         arr.push(d);
       }
 
+      let stagedInLap = 0;
       for (const node of nodesList()) {
         const gid = node.gateId;
         const orig = extractOriginalGateCrossings(latestSess, gid, selectedPilotSlot);
-        const manualKept = orig.filter((c) => Boolean(c.manual)).map((c) => ({ ...c }));
-        const nonManualOrig = orig.filter((c) => !c.manual);
+        const preserved = orig
+          .filter(
+            (c) =>
+              Boolean(c.manual) || c.timestampUs < minBoundUs || c.timestampUs > maxBoundUs
+          )
+          .map((c) => ({ ...c }));
+        const nonManualInLap = orig.filter(
+          (c) => !c.manual && c.timestampUs >= minBoundUs && c.timestampUs <= maxBoundUs
+        );
         const usedOrigIds = new Set<number>();
-        const nextList: DraftGateCrossing[] = [...manualKept];
+        const nextList: DraftGateCrossing[] = [...preserved];
 
         const gateDecs = (byGateDecs.get(gid) ?? []).filter(
           (d) => d.label === "crossing" && d.confidence >= 0.5
         );
         for (const dec of gateDecs) {
-          if (manualKept.some((m) => Math.abs(m.timestampUs - dec.finalTsUs) <= 220_000)) {
+          if (preserved.some((m) => Math.abs(m.timestampUs - dec.finalTsUs) <= 220_000)) {
             continue;
           }
           let bestOrig: DraftGateCrossing | null = null;
           let bestDiff = 220_001;
-          for (const cand of nonManualOrig) {
+          for (const cand of nonManualInLap) {
             if (usedOrigIds.has(cand.crossingId)) continue;
             const diff = Math.abs(cand.timestampUs - dec.finalTsUs);
             if (diff < bestDiff) {
@@ -1941,6 +1979,7 @@ export function openPracticeLapEditorModal(
               bestOrig = cand;
             }
           }
+          stagedInLap++;
           if (bestOrig) {
             usedOrigIds.add(bestOrig.crossingId);
             nextList.push({
@@ -1963,14 +2002,18 @@ export function openPracticeLapEditorModal(
       }
 
       showToast(
-        `Staged ${res.crossingsCount} AI pass${res.crossingsCount === 1 ? "" : "es"} (${res.hardNegsCount} bleed/noise rejected)`,
+        `Staged ${stagedInLap} AI pass${stagedInLap === 1 ? "" : "es"} in this lap`,
         "info"
       );
     } catch (err) {
-      showToast(err instanceof Error ? err.message : String(err), "error");
+      if (isAutoLabeling) {
+        showToast(err instanceof Error ? err.message : String(err), "error");
+      }
     } finally {
       isAutoLabeling = false;
-      renderModal();
+      if (document.body.contains(backdrop)) {
+        renderModal();
+      }
     }
   };
 
@@ -1992,6 +2035,10 @@ export function openPracticeLapEditorModal(
 
   function close(): void {
     if (panAnimFrame) cancelAnimationFrame(panAnimFrame);
+    if (isAutoLabeling) {
+      isAutoLabeling = false;
+      void rootApi.cancelMLTraining().catch(() => undefined);
+    }
     unsubStore();
     resizeObserver?.disconnect();
     resizeObserver = null;
@@ -2006,8 +2053,6 @@ export function openPracticeLapEditorModal(
     window.removeEventListener("pointerup", onPointerUp);
     window.removeEventListener("pointercancel", onPointerUp);
     backdrop.removeEventListener("wheel", onWheel);
-    backdrop.removeEventListener("dblclick", onDblClick);
-    backdrop.removeEventListener("change", onChange);
     backdrop.removeEventListener("click", onClick);
     window.removeEventListener("keydown", onKeyDown, true);
     window.removeEventListener("click", onTopBarBackCapture, true);
@@ -2024,8 +2069,6 @@ export function openPracticeLapEditorModal(
   window.addEventListener("pointerup", onPointerUp);
   window.addEventListener("pointercancel", onPointerUp);
   backdrop.addEventListener("wheel", onWheel, { passive: false });
-  backdrop.addEventListener("dblclick", onDblClick);
-  backdrop.addEventListener("change", onChange);
   backdrop.addEventListener("click", onClick);
   window.addEventListener("keydown", onKeyDown, true);
   window.addEventListener("click", onTopBarBackCapture, true);
@@ -2057,16 +2100,15 @@ export function openPracticeLapEditorModal(
       }
     });
     resizeObserver.observe(backdrop);
+    if (mountedWrap) {
+      resizeObserver.observe(mountedWrap);
+    }
   }
   void rootApi
     .ensurePracticeSessionTrace(sessionId, needsFreshActiveTrace)
     .then(() => {
       isLoadingTrace = false;
       if (document.body.contains(backdrop) && !dragState && !threshDrag && !viewDrag) {
-        const latestSess = getSession();
-        if (latestSess && !userAdjustedX && selectedLapId !== "all") {
-          applySelectedLapFrame(latestSess);
-        }
         renderModal();
       }
     })

@@ -142,17 +142,25 @@ func (l *Qwen3GGUFLabeler) LabelCandidates(
 	}
 
 	kvSess := model.NewSession(2048)
-	// Prefill static System 1 instruction prefix ONCE and rewind `kvSess.SetPos(sysPos)` per batch!
-	sysToks := tok.Encode(system1StaticPromptPrefix)
-	if err := kvSess.ForwardTokensCtx(ctx, sysToks); err != nil {
-		return nil, fmt.Errorf("teacher system prefill: %w", err)
+	enableFastTriage := model.NLayer > 2
+	var sysPos int
+	sysPrefilled := false
+	ensureSysPrefill := func() error {
+		if sysPrefilled {
+			return nil
+		}
+		sysToks := tok.Encode(system1StaticPromptPrefix)
+		if err := kvSess.ForwardTokensCtx(ctx, sysToks); err != nil {
+			return fmt.Errorf("teacher system prefill: %w", err)
+		}
+		sysPos = kvSess.Pos()
+		sysPrefilled = true
+		return nil
 	}
-	sysPos := kvSess.Pos()
 
 	decisionsByID := make(map[string]CandidateDecision, len(candidates))
 	doneCount := 0
 	totalCount := len(candidates)
-	enableFastTriage := totalCount > 4
 
 	const windowSize = 8
 	for _, slot := range slots {
@@ -173,6 +181,9 @@ func (l *Qwen3GGUFLabeler) LabelCandidates(
 				}
 				batch := pendingBatch[start:end]
 
+				if err := ensureSysPrefill(); err != nil {
+					return err
+				}
 				// Append `batch[0].ID + ":"` directly to user prompt so `batch[0]` needs 0 extra forward sweeps!
 				userDelta := buildSystem1UserPromptDelta(trackSeq, minLapSec, prevCrossGate, prevCrossSec, batch) + batch[0].ID + ":"
 				kvSess.SetPos(sysPos)
@@ -321,13 +332,7 @@ func formatTrackTopology(gates []domain.TrackGate) string {
 }
 
 const system1StaticPromptPrefix = "<|im_start|>system\n" +
-	"You classify 5.8GHz FPV drone gate RSSI peaks into one label per candidate:\n" +
-	"- crossing: real pass through that gate (strong bell or M-saddle curve, dominant over coincident gates, respects min gate lockout).\n" +
-	"- bleed: weaker simultaneous leakage while another gate has a much stronger peak (+8dB or more) at the same timestamp.\n" +
-	"- echo: secondary multipath reflection bump within 0.45s of a stronger crossing on the same gate.\n" +
-	"- noise: weak pit walk-by, wide flat hover shelf, or isolated tiny spike (<14dB prominence).\n" +
-	"Output strictly `ID: <label>` per line.\n" +
-	"Example:\nC1: crossing\nC2: bleed\nC3: echo\nC4: noise<|im_end|>\n"
+	"Classify 5.8GHz FPV gate peaks (`ID: crossing|bleed|echo|noise`): crossing=dominant gate pass; bleed=weaker peak while another gate is >=+8dB stronger; echo=bump <0.45s from stronger same-gate pass; noise=weak blip.<|im_end|>\n"
 
 func buildSystem1UserPromptDelta(trackSeq string, minLapSec float64, prevGate string, prevSec float64, batch []CandidatePeak) string {
 	var sb strings.Builder

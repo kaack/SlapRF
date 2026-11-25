@@ -123,6 +123,7 @@ type Engine struct {
 	mlActiveModelID        string
 	mlTraining             domain.MLTrainingProgress
 	mlTrainCancel          func()
+	mlLabelCancel          func()
 	mlTeacher              *ml.TeacherManager
 	subscribers            []EventSubscriber
 }

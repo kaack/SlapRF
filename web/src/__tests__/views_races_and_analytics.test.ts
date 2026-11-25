@@ -2723,40 +2723,40 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       expect(editorModal.querySelector(".slaprf-modal-head")?.textContent ?? "").toContain(
         "OneEye (R7)"
       );
-      expect(editorModal.querySelector(".lap-ed-metrics-strip")).toBeNull();
-      // Lap-based selector defaults to the clicked Lap 1 (`1`), and multi-timer defaults to `All` timers!
-      const lapSelect = editorModal.querySelector<HTMLSelectElement>("[data-lap-ed-lap-select]")!;
-      expect(lapSelect).not.toBeNull();
-      expect(lapSelect.value).toBe("1");
+      expect(editorModal.querySelector(".slaprf-modal-head")?.textContent ?? "").toContain("L1");
+      // Single-lap locked editor has NO lap-switcher dropdown; defaults to `All` timers overlaid!
+      expect(editorModal.querySelector("[data-lap-ed-lap-select]")).toBeNull();
       const allGatesChip = editorModal.querySelector<HTMLButtonElement>('[data-lap-ed-gate="all"]')!;
       expect(allGatesChip).not.toBeNull();
       expect(allGatesChip.classList.contains("btn-armed")).toBe(true);
       expect(editorModal.querySelector('[data-lap-ed-gate="1"]')).not.toBeNull();
       expect(editorModal.querySelector('[data-lap-ed-gate="2"]')).not.toBeNull();
       expect(editorModal.querySelector("line.lap-ed-rssi-line.is-synthetic")).not.toBeNull();
-      // In `All` mode on multi-timer tracks, Add Crossing is disabled until a timer chip is clicked
-      expect(
-        editorModal.querySelector<HTMLButtonElement>("[data-lap-ed-add-mode]")!.disabled
-      ).toBe(true);
+      // Only Lap 1's 2 crossings (Start & Finish) appear in the crossings row — NOT Lap 2's crossings!
+      expect(editorModal.querySelectorAll("[data-lap-ed-row]").length).toBe(2);
 
-      // Step forward to Lap 2 (`>`) and click timer T1 (`gate="2"`) to unlock editing for T1!
-      editorModal.querySelector<HTMLButtonElement>("[data-lap-ed-next-lap]")!.click();
+      // Select timer T1 (`gate="2"`) -> reveals Signals-style in-chart `[ + ]` + `[ lock ]` buttons!
+      editorModal.querySelector<HTMLButtonElement>('[data-lap-ed-gate="2"]')!.click();
       await flushMicrotasks();
       expect(
-        document.body.querySelector<HTMLSelectElement>(".lap-editor-modal [data-lap-ed-lap-select]")!
-          .value
-      ).toBe("2");
+        document.body.querySelector<HTMLButtonElement>(".lap-editor-modal [data-lap-ed-add-crossing]")!
+          .disabled
+      ).toBe(true);
       document.body
-        .querySelector<HTMLButtonElement>('.lap-editor-modal [data-lap-ed-gate="2"]')!
+        .querySelector<HTMLButtonElement>(".lap-editor-modal [data-lap-ed-toggle-lock]")!
         .click();
       await flushMicrotasks();
-      const addT1Btn = document.body.querySelector<HTMLButtonElement>(
-        ".lap-editor-modal [data-lap-ed-add-mode]"
+      const addCrossBtn = document.body.querySelector<HTMLButtonElement>(
+        ".lap-editor-modal [data-lap-ed-add-crossing]"
       )!;
-      expect(addT1Btn.disabled).toBe(false);
-      expect(addT1Btn.textContent ?? "").toContain("Add T1");
+      expect(addCrossBtn.disabled).toBe(false);
+      addCrossBtn.click();
+      await flushMicrotasks();
+      expect(
+        document.body.querySelectorAll(".lap-editor-modal [data-lap-ed-row]").length
+      ).toBe(1);
 
-      // Auto-Label triggers on-device teacher download on first tap, then stages dry-run crossings once ready
+      // Auto-Label triggers on-device teacher download on first tap, then stages single-lap dry-run crossings
       const autoLabelBtn = document.body.querySelector<HTMLButtonElement>(
         ".lap-editor-modal [data-lap-ed-auto-label]"
       )!;
@@ -2776,7 +2776,8 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
         mock.calls.some(
           (c) =>
             c.method === "labelPracticeSession" &&
-            (c.args[1] as { dryRun?: boolean })?.dryRun === true
+            (c.args[1] as { dryRun?: boolean; startUs?: number; endUs?: number })?.dryRun === true &&
+            ((c.args[1] as { startUs?: number })?.startUs ?? 0) > 0
         )
       ).toBe(true);
       expect(
