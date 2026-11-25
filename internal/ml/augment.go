@@ -179,11 +179,11 @@ func AugmentTrace(src LabeledTrace, rng *rand.Rand) LabeledTrace {
 	if len(src.Points) < 16 {
 		return src
 	}
-	gainShift := float32((rng.Float64()*2.0 - 1.0) * 9.0)        // -9..+9 dB VTX power / range shift
-	floorShift := float32((rng.Float64()*2.0 - 1.0) * 2.5)       // -2.5..+2.5 dB environment shift
-	timeScale := 0.72 + rng.Float64()*0.66                       // 0.72x..1.38x speed warp
-	injectShelf := rng.Float64() < 0.35
-	injectDipole := rng.Float64() < 0.25
+	gainShift := float32((rng.Float64()*2.0 - 1.0) * 6.0)        // -6..+6 dB VTX power / range shift
+	floorShift := float32((rng.Float64()*2.0 - 1.0) * 2.0)       // -2..+2 dB environment shift
+	timeScale := 0.90 + rng.Float64()*0.22                       // gentle 0.90x..1.12x speed warp
+	injectShelf := false
+	injectDipole := rng.Float64() < 0.12
 
 	t0 := src.Points[0].TimestampUs
 	scaleTs := func(ts uint64) uint64 {

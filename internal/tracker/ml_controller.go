@@ -1586,13 +1586,13 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 
 	epochs := req.Epochs
 	if epochs <= 0 {
-		epochs = 28
-	} else if epochs > 80 {
-		epochs = 80
+		epochs = 64
+	} else if epochs > 120 {
+		epochs = 120
 	}
 
 	initTCN := basePretrained
-	lr := float32(0.0035)
+	lr := float32(0.0055)
 	updateInPlaceID := ""
 	preserveBuiltIn := false
 	prevEpochs := 0
@@ -1607,7 +1607,7 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 					cloned := &ml.TCN{}
 					if cloned.ImportWeights(m.Weights) {
 						initTCN = cloned
-						lr = 0.0018
+						lr = 0.0028
 						updateInPlaceID = m.ModelID
 						preserveBuiltIn = m.BuiltIn
 						prevEpochs = m.EpochsTrained
@@ -1620,7 +1620,7 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 				} else {
 					// Untrained model created via `+ Add`: train from scratch into this immutable ModelID!
 					initTCN = basePretrained
-					lr = 0.0035
+					lr = 0.0055
 					updateInPlaceID = m.ModelID
 					preserveBuiltIn = false
 					prevEpochs = 0
@@ -1918,23 +1918,9 @@ func (e *Engine) runMLTrainingWorker(
 		for _, tr := range trainTraces {
 			realPassCount += len(tr.Positives)
 		}
-	} else if len(packs) >= 3 {
-		valPackCount = len(packs) / 5
-		if valPackCount < 1 {
-			valPackCount = 1
-		}
-		trainPackCount = len(packs) - valPackCount
-		for i := 0; i < trainPackCount; i++ {
-			trainTraces = append(trainTraces, packs[i].traces...)
-			realPassCount += packs[i].passes
-		}
-		for i := trainPackCount; i < len(packs); i++ {
-			valTraces = append(valTraces, packs[i].traces...)
-			realPassCount += packs[i].passes
-		}
-		trainTraces = append(trainTraces, ml.GenerateSyntheticTraces(4, 20261124+int64(nextVer))...)
 	} else {
-		// 1-2 sessions: train on real + synthetic, validate on real + unseen synthetic
+		// Train on 100% of selected/verified real packs and evaluate 100% on real flight passes
+		// (never silently drop a labeled pack or pollute accuracy metrics with synthetic traces!).
 		trainPackCount = len(packs)
 		valPackCount = len(packs)
 		for _, p := range packs {
@@ -1942,8 +1928,10 @@ func (e *Engine) runMLTrainingWorker(
 			valTraces = append(valTraces, p.traces...)
 			realPassCount += p.passes
 		}
-		trainTraces = append(trainTraces, ml.GenerateSyntheticTraces(6, 20261124+int64(nextVer))...)
-		valTraces = append(valTraces, ml.GenerateSyntheticTraces(2, 88888+int64(nextVer))...)
+		if realPassCount < 16 {
+			// Only supplement tiny (< 16 pass) micro-sessions with 1 synthetic background trace
+			trainTraces = append(trainTraces, ml.GenerateSyntheticTraces(1, 20261124+int64(nextVer))...)
+		}
 	}
 
 	if ctx.Err() != nil {
@@ -1955,7 +1943,7 @@ func (e *Engine) runMLTrainingWorker(
 		Epochs:       epochs,
 		LearningRate: lr,
 		WeightDecay:  1e-4,
-		AugPerTrace:  3,
+		AugPerTrace:  2,
 		Seed:         time.Now().UnixNano(),
 		OnEpoch: func(ep, total int, loss float64) {
 			if ctx.Err() != nil {

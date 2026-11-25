@@ -111,9 +111,9 @@ func (n *FeatureNormalizer) Step(rawRssiDbm float32, reportedFloorDbm float32) (
 
 	minPeakTarget := n.floorDbm + 20.0
 	if med > n.peakEnvDbm {
-		n.peakEnvDbm = 0.35*n.peakEnvDbm + 0.65*med
+		n.peakEnvDbm = 0.40*n.peakEnvDbm + 0.60*med
 	} else {
-		n.peakEnvDbm = 0.9995*n.peakEnvDbm + 0.0005*minPeakTarget
+		n.peakEnvDbm = 0.9992*n.peakEnvDbm + 0.0008*minPeakTarget
 		if n.peakEnvDbm < minPeakTarget {
 			n.peakEnvDbm = minPeakTarget
 		}

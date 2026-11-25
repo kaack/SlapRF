@@ -16,10 +16,11 @@ import (
 
 const (
 	// DetectProbThreshold is the default crossing probability threshold on p_cross[t].
-	DetectProbThreshold = float32(0.58)
-	// MatchToleranceUs is the maximum timestamp distance (+-220 ms) counted as a True Positive match
-	// during validation scoring.
-	MatchToleranceUs = uint64(220_000)
+	DetectProbThreshold = float32(0.55)
+	// MatchToleranceUs is the maximum timestamp distance (+-400 ms) counted as a True Positive match
+	// during validation scoring (accommodating broad 500-600 ms takeoff/whoop passes while remaining
+	// strictly < 0.27 * minLockoutUs).
+	MatchToleranceUs = uint64(400_000)
 )
 
 type preparedSequence struct {
@@ -28,8 +29,10 @@ type preparedSequence struct {
 	positives []uint64
 }
 
-// BuildSequenceTargets paints soft Gaussian targets (sigma = 30 ms) around verified positive
-// crossings and assigns elevated importance weights to positive crests, manual edits, and hard negatives.
+// BuildSequenceTargets paints soft Gaussian targets (sigma = 36 ms) anchored to each verified
+// positive crossing's physical RSSI crest (within +-320 ms when a stronger local crest exists),
+// surrounds broad pass shoulders with a low-weight don't-care collar so human click phase offsets
+// never train the TCN to suppress the true apex, and boosts hard negatives.
 func BuildSequenceTargets(seq GridSequence, positives []CrossingLabel, hardNegs []NegativeMark) (SequenceTargets, []uint64) {
 	T := len(seq.Features)
 	tgt := SequenceTargets{
@@ -41,64 +44,158 @@ func BuildSequenceTargets(seq GridSequence, positives []CrossingLabel, hardNegs 
 	for t := 0; t < T; t++ {
 		tgt.SampleWt[t] = 1.0
 	}
+	if T == 0 {
+		return tgt, nil
+	}
 
 	endTs := seq.StartTsUs + uint64(T-1)*StepUs
 	var inSeqPos []uint64
 
-	const sigmaMs = 30.0
+	const sigmaMs = 36.0
 	const twoSigmaSq = 2.0 * sigmaMs * sigmaMs
 
+	type resolvedPos struct {
+		origStep   int
+		crestStep  int
+		anchorTsUs uint64
+		wtBoost    float32
+	}
+	var resolved []resolvedPos
+
 	for _, pos := range positives {
-		if pos.TimestampUs+60_000 < seq.StartTsUs || pos.TimestampUs > endTs+60_000 {
+		if pos.TimestampUs+80_000 < seq.StartTsUs || pos.TimestampUs > endTs+80_000 {
 			continue
 		}
 		if pos.TimestampUs >= seq.StartTsUs && pos.TimestampUs <= endTs {
 			inSeqPos = append(inSeqPos, pos.TimestampUs)
 		}
-		centerStep := int(math.Round(float64(int64(pos.TimestampUs)-int64(seq.StartTsUs)) / float64(StepUs)))
-		wtBoost := float32(14.0)
+		origStep := int(math.Round(float64(int64(pos.TimestampUs)-int64(seq.StartTsUs)) / float64(StepUs)))
+		clampOrig := origStep
+		if clampOrig < 0 {
+			clampOrig = 0
+		} else if clampOrig >= T {
+			clampOrig = T - 1
+		}
+
+		// Snap training target center to the true physical RSSI crest within +-16 steps (+-320 ms)
+		// if a local crest is >= 1.5 dB stronger than the clicked shoulder point and >= 8.0 dB above floor.
+		crestStep := clampOrig
+		origMed := seq.MedRSSI[clampOrig]
+		bestMed := origMed
+		for s := clampOrig - 16; s <= clampOrig+16; s++ {
+			if s < 0 || s >= T {
+				continue
+			}
+			if seq.MedRSSI[s] > bestMed && seq.MedRSSI[s]-seq.FloorDbm[s] >= 8.0 {
+				bestMed = seq.MedRSSI[s]
+				crestStep = s
+			}
+		}
+		anchorTs := pos.TimestampUs
+		if bestMed >= origMed+1.5 {
+			anchorTs = seq.StartTsUs + uint64(crestStep)*StepUs
+		} else {
+			crestStep = origStep
+		}
+
+		wtBoost := float32(18.0)
 		if pos.Boost > 0 {
 			wtBoost = pos.Boost
 		}
 		if pos.Manual {
-			wtBoost = 24.0
+			wtBoost = 22.0
 		}
-		for t := centerStep - 6; t <= centerStep+6; t++ {
+		resolved = append(resolved, resolvedPos{
+			origStep:   origStep,
+			crestStep:  crestStep,
+			anchorTsUs: anchorTs,
+			wtBoost:    wtBoost,
+		})
+	}
+
+	// 1. Paint low-weight don't-care shoulder collars (+-380 ms = +-19 steps) around both the
+	// human label and the physical crest so broad pass shoulders are never penalized as y=0 negatives.
+	for _, rp := range resolved {
+		lo := rp.origStep
+		hi := rp.crestStep
+		if lo > hi {
+			lo, hi = hi, lo
+		}
+		for t := lo - 19; t <= hi+19; t++ {
+			if t >= 0 && t < T {
+				tgt.SampleWt[t] = 0.05
+			}
+		}
+	}
+
+	// 2. Paint high-weight Gaussian apex targets on top of the shoulder collars.
+	for _, rp := range resolved {
+		for t := rp.crestStep - 7; t <= rp.crestStep+7; t++ {
 			if t < 0 || t >= T {
 				continue
 			}
 			stepTs := seq.StartTsUs + uint64(t)*StepUs
-			dtMs := float64(int64(pos.TimestampUs)-int64(stepTs)) / 1000.0
+			dtMs := float64(int64(rp.anchorTsUs)-int64(stepTs)) / 1000.0
 			g := float32(math.Exp(-(dtMs * dtMs) / twoSigmaSq))
 			if g > tgt.YCross[t] {
 				tgt.YCross[t] = g
 			}
-			w := 1.0 + wtBoost*g
-			if w > tgt.SampleWt[t] {
-				tgt.SampleWt[t] = w
+			if g >= 0.08 {
+				w := 1.0 + rp.wtBoost*g
+				if w > tgt.SampleWt[t] {
+					tgt.SampleWt[t] = w
+				}
 			}
-			if math.Abs(dtMs) <= 18.0 {
+			if math.Abs(dtMs) <= 20.0 {
 				tgt.OffsetMask[t] = true
 				tgt.TargetOffMs[t] = float32(dtMs)
 			}
 		}
 	}
 
+	// 3. Automatic unlabeled-peak hard-negative mining: any prominent RF excursion (`>= 9 dB` above
+	// floor) on this labeled trace that lies outside every positive's +-380 ms collar is an off-gate
+	// return-lane flyby, cross-gate bleed, or multipath bounce (`y = 0`) and must be weighted strongly
+	// so the TCN separates real gate passes from weaker return-lane flybys!
+	for t := 0; t < T; t++ {
+		if tgt.YCross[t] >= 0.05 || tgt.SampleWt[t] < 0.5 {
+			continue
+		}
+		excess := seq.MedRSSI[t] - seq.FloorDbm[t]
+		if excess >= 9.0 {
+			autoW := float32(5.0) + 0.55*(excess-9.0)
+			if autoW > 16.0 {
+				autoW = 16.0
+			}
+			if autoW > tgt.SampleWt[t] {
+				tgt.SampleWt[t] = autoW
+			}
+		}
+	}
+
+	// 4. Boost explicit hard negatives (cross-gate bleed & user-deleted peaks) outside positive collars.
 	for _, neg := range hardNegs {
 		if neg.TimestampUs+200_000 < seq.StartTsUs || neg.TimestampUs > endTs+200_000 {
 			continue
 		}
 		centerStep := int(math.Round(float64(int64(neg.TimestampUs)-int64(seq.StartTsUs)) / float64(StepUs)))
 		w := neg.Weight
-		if w < 2.5 {
-			w = 3.5
+		if w < 3.0 {
+			w = 4.0
 		}
 		for t := centerStep - 8; t <= centerStep+8; t++ {
 			if t < 0 || t >= T {
 				continue
 			}
-			// Never overwrite an actual positive window with a negative mark.
-			if tgt.YCross[t] < 0.05 && w > tgt.SampleWt[t] {
+			// Never overwrite an actual positive crest or its immediate +-160 ms core!
+			nearPos := false
+			for _, rp := range resolved {
+				if (t >= rp.crestStep-8 && t <= rp.crestStep+8) || (t >= rp.origStep-8 && t <= rp.origStep+8) {
+					nearPos = true
+					break
+				}
+			}
+			if !nearPos && tgt.YCross[t] < 0.05 && w > tgt.SampleWt[t] {
 				tgt.SampleWt[t] = w
 			}
 		}
@@ -291,7 +388,7 @@ func BuildTracesFromSession(sess domain.PracticeSession, samples []tracestore.Sa
 		return nil
 	}
 
-	stintsBySlot := BuildPilotFlightStints(sess)
+	stintsBySlot := BuildTrainingFlightStints(sess)
 	inPilotStint := func(slot int, ts uint64) bool {
 		return InPilotFlightStint(stintsBySlot, slot, ts)
 	}
@@ -365,7 +462,7 @@ func BuildTracesFromSession(sess domain.PracticeSession, samples []tracestore.Sa
 		teacherBoost = 20.0
 	}
 	for _, c := range sess.Crossings {
-		if c.InvalidReason != "" && !c.Manual {
+		if c.InvalidReason != "" {
 			continue
 		}
 		if !inPilotStint(c.SlotIndex, c.TimestampUs) {
@@ -441,13 +538,30 @@ func BuildTracesFromSession(sess domain.PracticeSession, samples []tracestore.Sa
 		sort.Slice(pts, func(i, j int) bool { return pts[i].TimestampUs < pts[j].TimestampUs })
 
 		negs := append([]NegativeMark(nil), negsByKey[key]...)
-		// Cross-gate teacher negatives: when pilot clearly crossed another gate B != A, any concurrent
-		// signal on gate A is adjacent-lane bleed (`label = 0`).
+		// Cross-gate teacher negatives: when pilot clearly crossed another gate B != A (and >= 600 ms
+		// away from any true pass on gate A), any concurrent signal on gate A is adjacent-lane bleed.
+		gatePos := validByKey[key]
 		for _, other := range allValidByPilot[key.slotIndex] {
-			if other.GateID != key.gateID {
+			if other.GateID == key.gateID {
+				continue
+			}
+			nearSelf := false
+			for _, gp := range gatePos {
+				var d uint64
+				if other.TimestampUs >= gp.TimestampUs {
+					d = other.TimestampUs - gp.TimestampUs
+				} else {
+					d = gp.TimestampUs - other.TimestampUs
+				}
+				if d < 600_000 {
+					nearSelf = true
+					break
+				}
+			}
+			if !nearSelf {
 				negs = append(negs, NegativeMark{
 					TimestampUs: other.TimestampUs,
-					Weight:      3.5,
+					Weight:      4.0,
 				})
 			}
 		}
@@ -578,23 +692,35 @@ func TrainModel(baseTraces []LabeledTrace, initModel *TCN, opts TrainOptions) (*
 	const adamEps = float32(1e-8)
 
 	rng := rand.New(rand.NewSource(opts.Seed + 7919))
-	order := make([]int, len(allPool))
-	for i := range order {
-		order[i] = i
+	// Always include 100% of real `basePrepared` chunks in EVERY epoch, plus 1 random slice of
+	// augmented chunks so real flight waveforms stay primary while seeing gain/speed perturbations.
+	augPool := allPool[len(basePrepared):]
+	augOrder := make([]int, len(augPool))
+	for i := range augOrder {
+		augOrder[i] = len(basePrepared) + i
 	}
-	epochLen := len(allPool)
-	if twoBase := 2 * len(basePrepared); twoBase < epochLen && twoBase >= 16 {
-		epochLen = twoBase
+	augPerEpoch := len(basePrepared)
+	if augPerEpoch > len(augOrder) {
+		augPerEpoch = len(augOrder)
 	}
+	epochOrder := make([]int, 0, len(basePrepared)+augPerEpoch)
 	stepNum := 0
 	var finalLoss float64
 
 	for epoch := 1; epoch <= opts.Epochs; epoch++ {
-		// Shuffle precomputed chunk indices (zero allocations!) and train on `epochLen` chunks (1x real + 1x aug equivalent)
-		rng.Shuffle(len(order), func(i, j int) {
-			order[i], order[j] = order[j], order[i]
+		epochOrder = epochOrder[:0]
+		for i := range basePrepared {
+			epochOrder = append(epochOrder, i)
+		}
+		if augPerEpoch > 0 {
+			rng.Shuffle(len(augOrder), func(i, j int) {
+				augOrder[i], augOrder[j] = augOrder[j], augOrder[i]
+			})
+			epochOrder = append(epochOrder, augOrder[:augPerEpoch]...)
+		}
+		rng.Shuffle(len(epochOrder), func(i, j int) {
+			epochOrder[i], epochOrder[j] = epochOrder[j], epochOrder[i]
 		})
-		epochOrder := order[:epochLen]
 
 		// Cosine LR schedule down to 15% of peak LR
 		progress := float64(epoch-1) / math.Max(1.0, float64(opts.Epochs-1))

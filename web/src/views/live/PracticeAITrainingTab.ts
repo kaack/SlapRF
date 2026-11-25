@@ -822,11 +822,11 @@ export class PracticeAITrainingTab extends Component {
         this.statusMsg = "";
         this.selectedModelId = modelId;
         this.startingTraining = true;
-        this.startingEpochs = 28;
+        this.startingEpochs = 64;
         this.render(true);
         void this.api
           .startMLTraining({
-            epochs: 28,
+            epochs: 64,
             includeUnverified: true,
             autoLabel: Boolean(
               this.store.mlStatus.teacher?.ready &&
@@ -858,11 +858,11 @@ export class PracticeAITrainingTab extends Component {
         if (!modelId) return;
         this.selectedModelId = modelId;
         this.startingTraining = true;
-        this.startingEpochs = 20;
+        this.startingEpochs = 40;
         this.render(true);
         void this.api
           .startMLTraining({
-            epochs: 20,
+            epochs: 40,
             includeUnverified: true,
             autoLabel: Boolean(
               this.store.mlStatus.teacher?.ready &&

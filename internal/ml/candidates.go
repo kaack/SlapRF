@@ -71,9 +71,19 @@ type FlightStintSpan struct {
 }
 
 // BuildPilotFlightStints merges recorded lap intervals (`[lapStart - 2.2s .. lapEnd + 2.2s]`,
-// bridging gaps `<= 5.0s`) plus manual crossing edits so both candidate extraction and TCN training
-// ignore pre-flight, landing/pack-swap, and post-flight bench dead-air!
+// bridging gaps `<= 5.0s`) plus manual crossing edits so candidate extraction ignores bench dead-air.
 func BuildPilotFlightStints(sess domain.PracticeSession) map[int][]FlightStintSpan {
+	return buildPilotFlightStintsWithPad(sess, 2_200_000)
+}
+
+// BuildTrainingFlightStints builds tight `[lapStart - 0.35s .. lapEnd + 0.35s]` flight stints
+// matching the exact single-lap RSSI Editor bounds so unlabeled pre-start lead-in flybys before `H1`
+// are never mislabeled as background negatives or penalized as false triggers.
+func BuildTrainingFlightStints(sess domain.PracticeSession) map[int][]FlightStintSpan {
+	return buildPilotFlightStintsWithPad(sess, 350_000)
+}
+
+func buildPilotFlightStintsWithPad(sess domain.PracticeSession, stintPadUs uint64) map[int][]FlightStintSpan {
 	stintsBySlot := make(map[int][]FlightStintSpan)
 	addSpan := func(slot int, lo, hi uint64) {
 		if slot <= 0 || hi <= lo {
@@ -81,7 +91,6 @@ func BuildPilotFlightStints(sess domain.PracticeSession) map[int][]FlightStintSp
 		}
 		stintsBySlot[slot] = append(stintsBySlot[slot], FlightStintSpan{LoUs: lo, HiUs: hi})
 	}
-	const stintPadUs = uint64(2_200_000)
 	for _, l := range sess.Laps {
 		if l.Invalidated || l.CompletedAtUs == 0 || l.LapTimeSec <= 0 {
 			continue
@@ -94,7 +103,7 @@ func BuildPilotFlightStints(sess domain.PracticeSession) map[int][]FlightStintSp
 		addSpan(l.SlotIndex, startUs, l.CompletedAtUs+stintPadUs)
 	}
 	for _, c := range sess.Crossings {
-		if c.Manual && c.TimestampUs > 0 {
+		if c.Manual && c.InvalidReason == "" && c.TimestampUs > 0 {
 			lo := uint64(0)
 			if c.TimestampUs > stintPadUs {
 				lo = c.TimestampUs - stintPadUs

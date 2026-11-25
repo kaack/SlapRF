@@ -33,12 +33,13 @@ type StreamDetector struct {
 	hasSmoothed  bool
 	prevRawTsUs  uint64
 
-	nextGridUs uint64
+	nextGridUs   uint64
 	binHasSample bool
 	binMaxRssi   float32
 	binFloor     float32
 	lastRssi     float32
 	lastFloor    float32
+	lastRawTsUs  uint64
 
 	featRing  [ringWinSize][InputChannels]float32
 	medRing   [ringWinSize]float32
@@ -136,13 +137,31 @@ func (d *StreamDetector) ProcessSample(
 		d.smoothedRSSI = rawRSSIDbm
 		d.hasSmoothed = true
 		d.prevRawTsUs = timestampUs
+		d.lastRawTsUs = timestampUs
 		d.nextGridUs = timestampUs + StepUs
 		d.binHasSample = false
 		d.lastRssi = rawRSSIDbm
 		d.lastFloor = noiseFloorDbm
-		d.ringCount = 0
+		// Pre-fill left-side receptive field (`LookaheadSteps = 14`) with replicate edge padding
+		// matching `TCN.forwardInto` so peaks right at stint start (t = 0..340 ms) are never dropped!
+		initFeat, initMed, initFl := d.norm.Step(rawRSSIDbm, noiseFloorDbm)
+		for i := 0; i < LookaheadSteps; i++ {
+			d.featRing[i] = initFeat
+			d.medRing[i] = initMed
+			d.floorRing[i] = initFl
+			if timestampUs > uint64(LookaheadSteps-i)*StepUs {
+				d.tsRing[i] = timestampUs - uint64(LookaheadSteps-i)*StepUs
+			} else {
+				d.tsRing[i] = timestampUs
+			}
+		}
+		d.featRing[LookaheadSteps] = initFeat
+		d.medRing[LookaheadSteps] = initMed
+		d.floorRing[LookaheadSteps] = initFl
+		d.tsRing[LookaheadSteps] = timestampUs
+		d.ringCount = LookaheadSteps + 1
 		d.probCount = 0
-		return d.pushGridStep(timestampUs, rawRSSIDbm, noiseFloorDbm, enterThresholdDbm, exitThresholdDbm, minLockoutUs, liveTune)
+		return nil
 	}
 
 	dtUs := timestampUs - d.prevRawTsUs
@@ -158,24 +177,44 @@ func (d *StreamDetector) ProcessSample(
 	}
 
 	var emitted *dsp.CrossingCandidate
-	stepsGuard := 0
-	for timestampUs >= d.nextGridUs && stepsGuard < 32 {
-		stepsGuard++
-		var stepRssi, stepFloor float32
-		if d.binHasSample {
-			stepRssi = d.binMaxRssi
-			stepFloor = d.binFloor
-			d.binHasSample = false
-		} else {
-			stepRssi = d.lastRssi
-			stepFloor = d.lastFloor
+	if timestampUs >= d.nextGridUs {
+		anchorTs := d.lastRawTsUs
+		anchorRssi := d.lastRssi
+		anchorFloor := d.lastFloor
+		spanUs := float64(0)
+		if timestampUs > anchorTs {
+			spanUs = float64(timestampUs - anchorTs)
 		}
-		d.lastRssi = stepRssi
-		d.lastFloor = stepFloor
-		gridTs := d.nextGridUs
-		d.nextGridUs += StepUs
-		if cand := d.pushGridStep(gridTs, stepRssi, stepFloor, enterThresholdDbm, exitThresholdDbm, minLockoutUs, liveTune); cand != nil {
-			emitted = cand
+		stepsGuard := 0
+		for timestampUs >= d.nextGridUs && stepsGuard < 80 {
+			stepsGuard++
+			gridTs := d.nextGridUs
+			d.nextGridUs += StepUs
+			var stepRssi, stepFloor float32
+			// Use the accumulated bin max on the final bin containing `timestampUs`; linearly
+			// interpolate intermediate missing 20 ms bins across packet gaps (matching ResampleSegments!).
+			if timestampUs < d.nextGridUs && d.binHasSample {
+				stepRssi = d.binMaxRssi
+				stepFloor = d.binFloor
+				d.binHasSample = false
+			} else if spanUs > 0 && gridTs > anchorTs {
+				frac := float32(math.Min(1.0, float64(gridTs-anchorTs)/spanUs))
+				stepRssi = anchorRssi + frac*(rawRSSIDbm-anchorRssi)
+				stepFloor = anchorFloor + frac*(noiseFloorDbm-anchorFloor)
+			} else {
+				stepRssi = anchorRssi
+				stepFloor = anchorFloor
+			}
+			d.lastRssi = stepRssi
+			d.lastFloor = stepFloor
+			d.lastRawTsUs = gridTs
+			if cand := d.pushGridStep(gridTs, stepRssi, stepFloor, enterThresholdDbm, exitThresholdDbm, minLockoutUs, liveTune); cand != nil {
+				emitted = cand
+			}
+		}
+		d.binHasSample = false
+		if timestampUs >= d.nextGridUs {
+			d.nextGridUs = timestampUs + StepUs
 		}
 	}
 	return emitted
