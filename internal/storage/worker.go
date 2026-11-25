@@ -47,7 +47,10 @@ func (d *datasetSubscriber) OnPracticeUpdated(domain.PracticeManagerState) {
 	d.worker.MarkDirty()
 }
 
-func (d *datasetSubscriber) OnMLUpdated(domain.MLStatus) {
+func (d *datasetSubscriber) OnMLUpdated(st domain.MLStatus) {
+	if st.Training.Running || st.Teacher.Download.Running {
+		return
+	}
 	d.worker.MarkDirty()
 }
 

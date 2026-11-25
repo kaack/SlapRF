@@ -136,23 +136,58 @@ type forwardCache struct {
 	rawOff []float32
 	tanhO  []float32
 	dtMs   []float32
+	dEmbed [][HiddenDim]float32
+	dPre3  [][HiddenDim]float32
+	dAct2  [][HiddenDim]float32
+	dPre2  [][HiddenDim]float32
+	dAct1  [][HiddenL1]float32
 }
 
 func newForwardCache(T int) *forwardCache {
-	return &forwardCache{
-		T:      T,
-		pre1:   make([][HiddenL1]float32, T),
-		act1:   make([][HiddenL1]float32, T),
-		pre2:   make([][HiddenDim]float32, T),
-		act2:   make([][HiddenDim]float32, T),
-		pre3:   make([][HiddenDim]float32, T),
-		embed:  make([][HiddenDim]float32, T),
-		logitC: make([]float32, T),
-		probC:  make([]float32, T),
-		rawOff: make([]float32, T),
-		tanhO:  make([]float32, T),
-		dtMs:   make([]float32, T),
+	c := &forwardCache{}
+	c.ensureLen(T)
+	return c
+}
+
+func (c *forwardCache) ensureLen(T int) {
+	if cap(c.pre1) < T {
+		c.pre1 = make([][HiddenL1]float32, T)
+		c.act1 = make([][HiddenL1]float32, T)
+		c.pre2 = make([][HiddenDim]float32, T)
+		c.act2 = make([][HiddenDim]float32, T)
+		c.pre3 = make([][HiddenDim]float32, T)
+		c.embed = make([][HiddenDim]float32, T)
+		c.logitC = make([]float32, T)
+		c.probC = make([]float32, T)
+		c.rawOff = make([]float32, T)
+		c.tanhO = make([]float32, T)
+		c.dtMs = make([]float32, T)
+		c.dEmbed = make([][HiddenDim]float32, T)
+		c.dPre3 = make([][HiddenDim]float32, T)
+		c.dAct2 = make([][HiddenDim]float32, T)
+		c.dPre2 = make([][HiddenDim]float32, T)
+		c.dAct1 = make([][HiddenL1]float32, T)
+	} else {
+		c.pre1 = c.pre1[:T]
+		c.act1 = c.act1[:T]
+		c.pre2 = c.pre2[:T]
+		c.act2 = c.act2[:T]
+		c.pre3 = c.pre3[:T]
+		c.embed = c.embed[:T]
+		c.logitC = c.logitC[:T]
+		c.probC = c.probC[:T]
+		c.rawOff = c.rawOff[:T]
+		c.tanhO = c.tanhO[:T]
+		c.dtMs = c.dtMs[:T]
+		c.dEmbed = c.dEmbed[:T]
+		c.dPre3 = c.dPre3[:T]
+		c.dAct2 = c.dAct2[:T]
+		c.dPre2 = c.dPre2[:T]
+		c.dAct1 = c.dAct1[:T]
+		clear(c.dAct2)
+		clear(c.dAct1)
 	}
+	c.T = T
 }
 
 func clampIdx(idx, T int) int {
@@ -352,6 +387,7 @@ func (m *TCN) LossAndGrad(x [][InputChannels]float32, tgt SequenceTargets, c *fo
 	if T == 0 {
 		return 0
 	}
+	c.ensureLen(T)
 	m.forwardInto(x, c)
 
 	w2 := m.Weights[offW2 : offW2+lenW2]
@@ -359,11 +395,11 @@ func (m *TCN) LossAndGrad(x [][InputChannels]float32, tgt SequenceTargets, c *fo
 	wC := m.Weights[offWC : offWC+lenWC]
 	wO := m.Weights[offWO : offWO+lenWO]
 
-	dEmbed := make([][HiddenDim]float32, T)
-	dPre3 := make([][HiddenDim]float32, T)
-	dAct2 := make([][HiddenDim]float32, T)
-	dPre2 := make([][HiddenDim]float32, T)
-	dAct1 := make([][HiddenL1]float32, T)
+	dEmbed := c.dEmbed
+	dPre3 := c.dPre3
+	dAct2 := c.dAct2
+	dPre2 := c.dPre2
+	dAct1 := c.dAct1
 
 	const eps = 1e-6
 	invT := float32(1.0 / float64(T))
@@ -390,7 +426,13 @@ func (m *TCN) LossAndGrad(x [][InputChannels]float32, tgt SequenceTargets, c *fo
 		// derivative w.r.t. logit `z` is simply `wt * (p - y)`!
 		// Putting class-balance + hard-negative weights directly into `SampleWt[t]` keeps `dL/dLogit = wt * (p - y)`
 		// convex, smooth, and exact!
-		bce := -y*math.Log(p) - (1.0-y)*math.Log(1.0-p)
+		lc64 := float64(c.logitC[t])
+		absLc := math.Abs(lc64)
+		maxLc := 0.0
+		if lc64 > 0 {
+			maxLc = lc64
+		}
+		bce := maxLc - lc64*y + math.Log1p(math.Exp(-absLc))
 		stepLoss := wt * bce
 
 		dLogitC := float32(wt*(p-y)) * invT

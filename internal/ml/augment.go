@@ -198,6 +198,7 @@ func AugmentTrace(src LabeledTrace, rng *rand.Rand) LabeledTrace {
 		newPos[i] = CrossingLabel{
 			TimestampUs: scaleTs(p.TimestampUs),
 			Manual:      p.Manual,
+			Boost:       p.Boost,
 		}
 	}
 	newNegs := make([]NegativeMark, len(src.HardNegs))
@@ -209,21 +210,29 @@ func AugmentTrace(src LabeledTrace, rng *rand.Rand) LabeledTrace {
 	}
 
 	pts := make([]RawPoint, len(src.Points))
+	posCursor := 0
 	for i, p := range src.Points {
 		ts := scaleTs(p.TimestampUs)
 		fl := p.NoiseFloorDbm + floorShift
 		excess := p.RSSIDbm - p.NoiseFloorDbm
 		var r float32
 		if excess <= 3.0 {
-			r = fl + excess + float32(rng.NormFloat64()*0.45)
+			r = fl + excess + float32(rng.Float64()-0.5)*0.9
 		} else {
 			// Scale excess smoothly so peaks shift without detaching ambient floor
-			r = fl + excess + gainShift*clamp32(excess/22.0, 0.0, 1.0) + float32(rng.NormFloat64()*0.65)
+			r = fl + excess + gainShift*clamp32(excess/22.0, 0.0, 1.0) + float32(rng.Float64()-0.5)*1.3
 		}
 
-		if injectDipole || injectShelf {
-			for _, pos := range newPos {
-				dtSec := float64(int64(ts)-int64(pos.TimestampUs)) / 1e6
+		if (injectDipole || injectShelf) && len(newPos) > 0 {
+			for posCursor+1 < len(newPos) && int64(ts)-int64(newPos[posCursor].TimestampUs) > 2_000_000 {
+				posCursor++
+			}
+			for k := posCursor; k < len(newPos); k++ {
+				dtUs := int64(ts) - int64(newPos[k].TimestampUs)
+				if dtUs < -100_000 {
+					break
+				}
+				dtSec := float64(dtUs) / 1e6
 				if injectDipole && math.Abs(dtSec) < 0.045 {
 					r -= float32(3.5 * math.Exp(-(dtSec*dtSec)/(2*0.02*0.02)))
 				}

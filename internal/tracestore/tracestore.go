@@ -242,7 +242,8 @@ func DecodeSamples(raw []byte) ([]Sample, error) {
 	seqEpoch = make(map[uint8]uint32)
 
 	out := make([]Sample, 0, len(raw)/10)
-	var hdr [16]byte
+	rssiArena := make([]float32, 0, len(raw)/8+16)
+	var hdr [32]byte
 
 	for {
 		recType, err := r.ReadByte()
@@ -287,26 +288,26 @@ func DecodeSamples(raw []byte) ([]Sample, error) {
 			seqLo := buf[1]
 			tsUs := binary.LittleEndian.Uint64(buf[2:10])
 			nf := dequantizeRssiQ20(int16(binary.LittleEndian.Uint16(buf[10:12])))
-			rssis := make([]float32, len(curSlots))
+			aStart := len(rssiArena)
 			off := 12
-			for i := range curSlots {
-				rssis[i] = dequantizeRssiQ20(int16(binary.LittleEndian.Uint16(buf[off : off+2])))
+			for range curSlots {
+				rssiArena = append(rssiArena, dequantizeRssiQ20(int16(binary.LittleEndian.Uint16(buf[off:off+2]))))
 				off += 2
 			}
+			rssis := rssiArena[aStart:len(rssiArena):len(rssiArena)]
 			prevTsUs = tsUs
 			if seenGate[gateID] && seqLo < prevSeqLo[gateID] {
 				seqEpoch[gateID] += 256
 			}
 			seenGate[gateID] = true
 			prevSeqLo[gateID] = seqLo
-			slotsCopy := make([]uint8, len(curSlots))
-			copy(slotsCopy, curSlots)
+			slotsView := curSlots[:len(curSlots):len(curSlots)]
 			out = append(out, Sample{
 				GateID:        gateID,
 				SeqNum:        seqEpoch[gateID] + uint32(seqLo),
 				TimestampUs:   tsUs,
 				NoiseFloorDbm: nf,
-				SlotIndices:   slotsCopy,
+				SlotIndices:   slotsView,
 				RSSIDbm:       rssis,
 			})
 
@@ -328,12 +329,13 @@ func DecodeSamples(raw []byte) ([]Sample, error) {
 			seqLo := buf[1]
 			dt100 := binary.LittleEndian.Uint16(buf[2:4])
 			nf := float32(int8(buf[4]))
-			rssis := make([]float32, len(curSlots))
+			aStart := len(rssiArena)
 			off := 5
-			for i := range curSlots {
-				rssis[i] = dequantizeRssiQ20(int16(binary.LittleEndian.Uint16(buf[off : off+2])))
+			for range curSlots {
+				rssiArena = append(rssiArena, dequantizeRssiQ20(int16(binary.LittleEndian.Uint16(buf[off:off+2]))))
 				off += 2
 			}
+			rssis := rssiArena[aStart:len(rssiArena):len(rssiArena)]
 			tsUs := prevTsUs + uint64(dt100)*100
 			prevTsUs = tsUs
 			if seenGate[gateID] && seqLo < prevSeqLo[gateID] {
@@ -341,14 +343,13 @@ func DecodeSamples(raw []byte) ([]Sample, error) {
 			}
 			seenGate[gateID] = true
 			prevSeqLo[gateID] = seqLo
-			slotsCopy := make([]uint8, len(curSlots))
-			copy(slotsCopy, curSlots)
+			slotsView := curSlots[:len(curSlots):len(curSlots)]
 			out = append(out, Sample{
 				GateID:        gateID,
 				SeqNum:        seqEpoch[gateID] + uint32(seqLo),
 				TimestampUs:   tsUs,
 				NoiseFloorDbm: nf,
-				SlotIndices:   slotsCopy,
+				SlotIndices:   slotsView,
 				RSSIDbm:       rssis,
 			})
 

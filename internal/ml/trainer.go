@@ -106,17 +106,189 @@ func BuildSequenceTargets(seq GridSequence, positives []CrossingLabel, hardNegs 
 	return tgt, inSeqPos
 }
 
+const (
+	trainChunkLen    = 256 // 5.12 s @ 50 Hz — uniform chunk length eliminates big.LITTLE core stragglers
+	trainChunkStride = 224 // 32-step (640 ms) overlap > 2 * LookaheadSteps (280 ms)
+)
+
+// trimIdleBenchStretches removes multi-minute bench/idle dead-air from continuous Practice `.rfbin`
+// recordings while preserving 100% of +-4.0s neighborhoods around every positive crossing, hard
+// negative, and RF excursion (>= 6.5 dB above floor), plus up to 4 representative quiet-air slices.
+func trimIdleBenchStretches(tr LabeledTrace) LabeledTrace {
+	pts := tr.Points
+	if len(pts) <= 3000 {
+		return tr
+	}
+	const keepMarginUs = uint64(4_000_000)
+
+	type span struct {
+		lo, hi uint64
+	}
+	var active []span
+	addSpan := func(ts uint64) {
+		lo := uint64(0)
+		if ts > keepMarginUs {
+			lo = ts - keepMarginUs
+		}
+		active = append(active, span{lo: lo, hi: ts + keepMarginUs})
+	}
+	for _, p := range tr.Positives {
+		addSpan(p.TimestampUs)
+	}
+	for _, n := range tr.HardNegs {
+		addSpan(n.TimestampUs)
+	}
+	// Sub-sample every 4th point (~40-80 ms) to catch any unlabeled >= 6.5 dB RF excursion
+	for i := 0; i < len(pts); i += 4 {
+		fl := pts[i].NoiseFloorDbm
+		if fl < -115 || fl > -65 {
+			fl = -91.0
+		}
+		if pts[i].RSSIDbm-fl >= 6.5 {
+			addSpan(pts[i].TimestampUs)
+		}
+	}
+	// Also keep up to 4 evenly-spaced 5-second quiet ambient reference slices across the recording
+	for q := 1; q <= 4; q++ {
+		idx := (len(pts) * q) / 5
+		if idx >= 0 && idx < len(pts) {
+			ts := pts[idx].TimestampUs
+			lo := uint64(0)
+			if ts > 2_500_000 {
+				lo = ts - 2_500_000
+			}
+			active = append(active, span{lo: lo, hi: ts + 2_500_000})
+		}
+	}
+	if len(active) == 0 {
+		return tr
+	}
+
+	sort.Slice(active, func(i, j int) bool { return active[i].lo < active[j].lo })
+	merged := active[:1]
+	for _, s := range active[1:] {
+		last := &merged[len(merged)-1]
+		if s.lo <= last.hi+1_600_000 {
+			if s.hi > last.hi {
+				last.hi = s.hi
+			}
+		} else {
+			merged = append(merged, s)
+		}
+	}
+
+	var kept []RawPoint
+	mIdx := 0
+	for _, pt := range pts {
+		for mIdx < len(merged) && pt.TimestampUs > merged[mIdx].hi {
+			mIdx++
+		}
+		if mIdx >= len(merged) {
+			break
+		}
+		if pt.TimestampUs >= merged[mIdx].lo {
+			kept = append(kept, pt)
+		}
+	}
+	if len(kept) < 32 {
+		return tr
+	}
+	out := tr
+	out.Points = kept
+	return out
+}
+
+func splitPreparedSequenceChunks(ps preparedSequence) []preparedSequence {
+	T := len(ps.seq.Features)
+	if T <= trainChunkLen {
+		return []preparedSequence{ps}
+	}
+	var activeChunks []preparedSequence
+	var quietChunks []preparedSequence
+
+	for start := 0; start < T; start += trainChunkStride {
+		end := start + trainChunkLen
+		if end > T {
+			end = T
+			if end-trainChunkLen >= 0 && start > 0 {
+				start = end - trainChunkLen
+			}
+		}
+		if end-start < 24 {
+			break
+		}
+
+		subStartTs := ps.seq.StartTsUs + uint64(start)*StepUs
+		subEndTs := ps.seq.StartTsUs + uint64(end-1)*StepUs
+		hasSignalOrLabel := false
+		for t := start; t < end; t++ {
+			if ps.targets.YCross[t] > 0.01 || ps.targets.SampleWt[t] > 1.05 || ps.seq.Features[t][0] > 0.20 {
+				hasSignalOrLabel = true
+				break
+			}
+		}
+		var subPos []uint64
+		for _, pTs := range ps.positives {
+			if pTs >= subStartTs && pTs <= subEndTs {
+				subPos = append(subPos, pTs)
+			}
+		}
+
+		chunk := preparedSequence{
+			seq: GridSequence{
+				StartTsUs: subStartTs,
+				Features:  ps.seq.Features[start:end],
+				MedRSSI:   ps.seq.MedRSSI[start:end],
+				FloorDbm:  ps.seq.FloorDbm[start:end],
+			},
+			targets: SequenceTargets{
+				YCross:      ps.targets.YCross[start:end],
+				SampleWt:    ps.targets.SampleWt[start:end],
+				OffsetMask:  ps.targets.OffsetMask[start:end],
+				TargetOffMs: ps.targets.TargetOffMs[start:end],
+			},
+			positives: subPos,
+		}
+		if hasSignalOrLabel {
+			activeChunks = append(activeChunks, chunk)
+		} else {
+			quietChunks = append(quietChunks, chunk)
+		}
+		if end == T {
+			break
+		}
+	}
+
+	maxQuiet := len(activeChunks) / 3
+	if maxQuiet < 2 {
+		maxQuiet = 2
+	}
+	if len(quietChunks) <= maxQuiet {
+		return append(activeChunks, quietChunks...)
+	}
+	step := float64(len(quietChunks)) / float64(maxQuiet)
+	for i := 0; i < maxQuiet; i++ {
+		idx := int(float64(i) * step)
+		if idx < len(quietChunks) {
+			activeChunks = append(activeChunks, quietChunks[idx])
+		}
+	}
+	return activeChunks
+}
+
 func prepareTraces(traces []LabeledTrace) []preparedSequence {
 	var out []preparedSequence
-	for _, tr := range traces {
+	for _, rawTr := range traces {
+		tr := trimIdleBenchStretches(rawTr)
 		segs := ResampleSegments(tr.Points)
 		for _, seg := range segs {
 			tgt, pos := BuildSequenceTargets(seg, tr.Positives, tr.HardNegs)
-			out = append(out, preparedSequence{
+			full := preparedSequence{
 				seq:       seg,
 				targets:   tgt,
 				positives: pos,
-			})
+			}
+			out = append(out, splitPreparedSequenceChunks(full)...)
 		}
 	}
 	return out
@@ -326,10 +498,68 @@ func TrainModel(baseTraces []LabeledTrace, initModel *TCN, opts TrainOptions) (*
 		m = NewInitializedTCN(opts.Seed)
 	}
 
-	basePrepared := prepareTraces(baseTraces)
+	trimmedTraces := make([]LabeledTrace, len(baseTraces))
+	for i, tr := range baseTraces {
+		trimmedTraces[i] = trimIdleBenchStretches(tr)
+	}
+
+	basePrepared := prepareTraces(trimmedTraces)
 	if len(basePrepared) == 0 {
 		return m, 0
 	}
+
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+
+	// Precompute physics-augmented sequence pool ONCE in parallel across CPU cores before Epoch 1
+	// (instead of re-running raw 100 Hz resampling single-threaded on every epoch!).
+	augCount := opts.AugPerTrace
+	if augCount < 0 {
+		augCount = 0
+	}
+	totalAugJobs := augCount * len(trimmedTraces)
+	augResults := make([][]preparedSequence, totalAugJobs)
+	if totalAugJobs > 0 {
+		var augWG sync.WaitGroup
+		jobCh := make(chan int, totalAugJobs)
+		for j := 0; j < totalAugJobs; j++ {
+			jobCh <- j
+		}
+		close(jobCh)
+		augWorkers := workers
+		if augWorkers > totalAugJobs {
+			augWorkers = totalAugJobs
+		}
+		for w := 0; w < augWorkers; w++ {
+			augWG.Add(1)
+			go func() {
+				defer augWG.Done()
+				for jobIdx := range jobCh {
+					trIdx := jobIdx % len(trimmedTraces)
+					localRng := rand.New(rand.NewSource(opts.Seed + 104729*int64(jobIdx+1)))
+					aug := AugmentTrace(trimmedTraces[trIdx], localRng)
+					augResults[jobIdx] = prepareTraces([]LabeledTrace{aug})
+				}
+			}()
+		}
+		augWG.Wait()
+	}
+
+	allPool := make([]preparedSequence, 0, len(basePrepared)*(1+augCount))
+	allPool = append(allPool, basePrepared...)
+	for _, res := range augResults {
+		allPool = append(allPool, res...)
+	}
+
+	const batchSize = 16
+	workerCaches := make([]*forwardCache, batchSize)
+	for i := range workerCaches {
+		workerCaches[i] = newForwardCache(trainChunkLen)
+	}
+	seqGrads := make([][TotalParams]float32, batchSize)
+	seqLosses := make([]float64, batchSize)
 
 	var m1 [TotalParams]float32
 	var m2 [TotalParams]float32
@@ -338,67 +568,67 @@ func TrainModel(baseTraces []LabeledTrace, initModel *TCN, opts TrainOptions) (*
 	const adamEps = float32(1e-8)
 
 	rng := rand.New(rand.NewSource(opts.Seed + 7919))
+	order := make([]int, len(allPool))
+	for i := range order {
+		order[i] = i
+	}
+	epochLen := len(allPool)
+	if twoBase := 2 * len(basePrepared); twoBase < epochLen && twoBase >= 16 {
+		epochLen = twoBase
+	}
 	stepNum := 0
 	var finalLoss float64
 
 	for epoch := 1; epoch <= opts.Epochs; epoch++ {
-		// Build epoch mini-dataset = real sequences + freshly augmented sequences
-		epochSeqs := make([]preparedSequence, 0, len(basePrepared)*(1+opts.AugPerTrace))
-		epochSeqs = append(epochSeqs, basePrepared...)
-		for a := 0; a < opts.AugPerTrace; a++ {
-			for _, tr := range baseTraces {
-				aug := AugmentTrace(tr, rng)
-				epochSeqs = append(epochSeqs, prepareTraces([]LabeledTrace{aug})...)
-			}
-		}
-
-		// Shuffle sequence order
-		rng.Shuffle(len(epochSeqs), func(i, j int) {
-			epochSeqs[i], epochSeqs[j] = epochSeqs[j], epochSeqs[i]
+		// Shuffle precomputed chunk indices (zero allocations!) and train on `epochLen` chunks (1x real + 1x aug equivalent)
+		rng.Shuffle(len(order), func(i, j int) {
+			order[i], order[j] = order[j], order[i]
 		})
+		epochOrder := order[:epochLen]
 
 		// Cosine LR schedule down to 15% of peak LR
 		progress := float64(epoch-1) / math.Max(1.0, float64(opts.Epochs-1))
 		lr := opts.LearningRate * float32(0.15+0.85*0.5*(1.0+math.Cos(math.Pi*progress)))
 
-		const batchSize = 8
-		workers := runtime.GOMAXPROCS(0)
-		if workers < 1 {
-			workers = 1
-		}
 		var epochLossSum float64
-		for start := 0; start < len(epochSeqs); start += batchSize {
+		for start := 0; start < len(epochOrder); start += batchSize {
 			end := start + batchSize
-			if end > len(epochSeqs) {
-				end = len(epochSeqs)
+			if end > len(epochOrder) {
+				end = len(epochOrder)
 			}
 			nBatch := end - start
 			var grad [TotalParams]float32
 			batchScale := float32(1.0 / float64(nBatch))
 
 			if workers == 1 || nBatch == 1 {
-				for idx := start; idx < end; idx++ {
-					ps := &epochSeqs[idx]
-					cache := newForwardCache(len(ps.seq.Features))
-					var seqGrad [TotalParams]float32
-					loss := m.LossAndGrad(ps.seq.Features, ps.targets, cache, &seqGrad)
+				for bi := 0; bi < nBatch; bi++ {
+					ps := &allPool[epochOrder[start+bi]]
+					seqGrads[0] = [TotalParams]float32{}
+					loss := m.LossAndGrad(ps.seq.Features, ps.targets, workerCaches[0], &seqGrads[0])
 					epochLossSum += loss
 					for p := 0; p < TotalParams; p++ {
-						grad[p] += seqGrad[p] * batchScale
+						grad[p] += seqGrads[0][p] * batchScale
 					}
 				}
 			} else {
-				seqGrads := make([][TotalParams]float32, nBatch)
-				seqLosses := make([]float64, nBatch)
+				nW := workers
+				if nW > nBatch {
+					nW = nBatch
+				}
 				var wg sync.WaitGroup
 				for bi := 0; bi < nBatch; bi++ {
+					seqGrads[bi] = [TotalParams]float32{}
+				}
+				for wi := 0; wi < nW; wi++ {
 					wg.Add(1)
-					go func(localIdx int) {
+					go func(workerID int) {
 						defer wg.Done()
-						ps := &epochSeqs[start+localIdx]
-						cache := newForwardCache(len(ps.seq.Features))
-						seqLosses[localIdx] = m.LossAndGrad(ps.seq.Features, ps.targets, cache, &seqGrads[localIdx])
-					}(bi)
+						cache := workerCaches[workerID]
+						for localIdx := workerID; localIdx < nBatch; localIdx += nW {
+							ps := &allPool[epochOrder[start+localIdx]]
+							seqLosses[localIdx] = m.LossAndGrad(ps.seq.Features, ps.targets, cache, &seqGrads[localIdx])
+						}
+					}(wi)
 				}
 				wg.Wait()
 				for bi := 0; bi < nBatch; bi++ {
@@ -437,7 +667,7 @@ func TrainModel(baseTraces []LabeledTrace, initModel *TCN, opts TrainOptions) (*
 			}
 		}
 
-		finalLoss = epochLossSum / float64(len(epochSeqs))
+		finalLoss = epochLossSum / float64(len(epochOrder))
 		if opts.OnEpoch != nil {
 			opts.OnEpoch(epoch, opts.Epochs, finalLoss)
 		}
@@ -579,7 +809,8 @@ func BenchmarkTraces(model *TCN, traces []LabeledTrace, minLockoutUs uint64) (ai
 	var clTP, clFN, clFP int
 	var clJitter float64
 
-	for _, tr := range traces {
+	for _, rawTr := range traces {
+		tr := trimIdleBenchStretches(rawTr)
 		truth := make([]uint64, len(tr.Positives))
 		for i, p := range tr.Positives {
 			truth[i] = p.TimestampUs

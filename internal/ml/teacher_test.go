@@ -299,3 +299,63 @@ func TestCandidateExtractionDipoleMergeAndCoincidence(t *testing.T) {
 		t.Fatalf("unexpected decisions: %+v", decs)
 	}
 }
+
+func TestLong58MinuteMultiPackTrainingSpeed(t *testing.T) {
+	// Reproduce the exact Pixel 7 Pro 2-pack workload: ~960,000 raw 100 Hz samples (~58 minutes with
+	// bench idle stretches) across 8 gate traces and ~144 crossings, trained for 28 epochs (AugPerTrace=3).
+	const nTraces = 8
+	const ptsPerTrace = 120_000 // 20 min @ 100 Hz per trace -> 960,000 raw points total
+	traces := make([]LabeledTrace, nTraces)
+	for ti := 0; ti < nTraces; ti++ {
+		pts := make([]RawPoint, ptsPerTrace)
+		for i := range pts {
+			pts[i] = RawPoint{
+				TimestampUs:   uint64(1_000_000 + i*10_000),
+				RSSIDbm:       -91.0,
+				NoiseFloorDbm: -91.0,
+			}
+		}
+		var pos []CrossingLabel
+		// 18 passes clustered during a 3-minute active flight window inside the 20-minute recording
+		for p := 0; p < 18; p++ {
+			centerIdx := 20_000 + p*950
+			pos = append(pos, CrossingLabel{TimestampUs: pts[centerIdx].TimestampUs})
+			for k := -35; k <= 35; k++ {
+				idx := centerIdx + k
+				if idx >= 0 && idx < ptsPerTrace {
+					u := float32(k) / 14.0
+					pts[idx].RSSIDbm = -91.0 + 38.0/(1.0+u*u)
+				}
+			}
+		}
+		traces[ti] = LabeledTrace{
+			SessionID: fmt.Sprintf("pack-%d", ti/4+1),
+			GateID:    uint8(ti%4 + 1),
+			SlotIndex: 1,
+			EnterDbm:  -68,
+			ExitDbm:   -76,
+			Points:    pts,
+			Positives: pos,
+		}
+	}
+
+	t0 := time.Now()
+	m, loss := TrainModel(traces, nil, TrainOptions{
+		Epochs:       28,
+		LearningRate: 0.004,
+		WeightDecay:  1e-4,
+		AugPerTrace:  3,
+		Seed:         77,
+	})
+	trainDur := time.Since(t0)
+	aiM, _ := BenchmarkTraces(m, traces[:2], 1_500_000)
+	totalDur := time.Since(t0)
+
+	t.Logf("960k-sample 28-epoch TrainModel=%v, total+benchmark=%v (loss=%.4f, F1=%.3f)", trainDur, totalDur, loss, aiM.F1)
+	if totalDur > 5*time.Second {
+		t.Fatalf("expected 960k-sample 28-epoch training to finish in <5s, took %v", totalDur)
+	}
+	if aiM.F1 < 0.90 {
+		t.Fatalf("expected trained model F1 >= 0.90, got %.3f (%+v)", aiM.F1, aiM)
+	}
+}
