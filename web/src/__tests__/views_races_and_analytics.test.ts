@@ -2743,10 +2743,23 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
         host.querySelector('[data-ai-act="delete-model"][data-model-id="ai-base-v1"]')
       ).not.toBeNull();
 
+      const boxBefore = host.querySelector<HTMLElement>(".ai-scorecard-box")!.getBoundingClientRect();
+      const headBefore = host.querySelector<HTMLElement>(".ai-scorecard-box .ai-scorecard-head")!.getBoundingClientRect();
+      const col2Before = host.querySelector<HTMLElement>(".ai-scorecard-table th:nth-child(2)")!.getBoundingClientRect();
+
       host
         .querySelector<HTMLButtonElement>('[data-ai-act="focus-model"][data-model-id="ai-base-v0"]')!
         .click();
       await flushMicrotasks();
+
+      const boxAfter = host.querySelector<HTMLElement>(".ai-scorecard-box")!.getBoundingClientRect();
+      const headAfter = host.querySelector<HTMLElement>(".ai-scorecard-box .ai-scorecard-head")!.getBoundingClientRect();
+      const col2After = host.querySelector<HTMLElement>(".ai-scorecard-table th:nth-child(2)")!.getBoundingClientRect();
+      expect(Math.round(headAfter.height)).toBe(Math.round(headBefore.height));
+      expect(Math.round(boxAfter.height)).toBe(Math.round(boxBefore.height));
+      expect(Math.round(col2After.left)).toBe(Math.round(col2Before.left));
+      expect(Math.round(col2After.width)).toBe(Math.round(col2Before.width));
+
       expect(host.querySelector('[data-ai-act="edit-model-name"]')).toBeNull();
       expect(host.querySelector("[data-ai-readonly-field]")?.textContent ?? "").toContain("1P");
       host.querySelector<HTMLButtonElement>('[data-ai-act="train-more"]')!.click();

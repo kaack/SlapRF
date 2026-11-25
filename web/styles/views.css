@@ -28131,7 +28131,11 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
 .ai-1p-badge {
   display: inline-flex;
   align-items: center;
-  padding: 1px 6px;
+  justify-content: center;
+  height: 18px;
+  line-height: 1;
+  padding: 0 6px;
+  box-sizing: border-box;
   border-radius: 4px;
   font-size: 10px;
   font-weight: 700;
@@ -28146,13 +28150,18 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
 .scope-ai-chip {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
+  justify-content: center;
+  height: 24px;
+  line-height: 1;
+  padding: 0 9px;
+  box-sizing: border-box;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 600;
   color: var(--accent, #38bdf8);
   background: color-mix(in srgb, var(--accent, #38bdf8) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent, #38bdf8) 32%, transparent);
+  flex-shrink: 0;
   white-space: nowrap;
 }
 
@@ -28329,16 +28338,49 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  height: 24px;
+  min-height: 24px;
+  max-height: 24px;
   flex-wrap: nowrap;
   min-width: 0;
 }
 
 .ai-scorecard-title-wrap {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  align-items: center;
+  gap: 7px;
+  height: 24px;
   min-width: 0;
   overflow: hidden;
+}
+
+.ai-scorecard-table {
+  width: 100%;
+  table-layout: fixed;
+  font-variant-numeric: tabular-nums;
+}
+
+.ai-scorecard-table th,
+.ai-scorecard-table td {
+  height: 30px;
+  padding: 5px 10px !important;
+  line-height: 1.2;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+
+.ai-scorecard-table th:first-child,
+.ai-scorecard-table td:first-child {
+  width: 48%;
+  text-align: left;
+}
+
+.ai-scorecard-table th:nth-child(2),
+.ai-scorecard-table td:nth-child(2),
+.ai-scorecard-table th:nth-child(3),
+.ai-scorecard-table td:nth-child(3) {
+  width: 26%;
+  text-align: right;
 }
 
 .ai-model-list {
@@ -28352,21 +28394,20 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-height: 36px;
-  padding: 5px 8px 5px 10px;
+  height: 38px;
+  min-height: 38px;
+  max-height: 38px;
+  padding: 0 8px 0 10px;
+  box-sizing: border-box;
   border-radius: 7px;
   border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  background: transparent;
   flex-wrap: nowrap;
 }
 
 .ai-model-row.is-selected {
   border-color: var(--border-strong);
   background: var(--surface-2);
-}
-
-.ai-model-row.is-active {
-  border-color: color-mix(in srgb, var(--accent, #38bdf8) 55%, transparent);
-  background: color-mix(in srgb, var(--accent, #38bdf8) 8%, transparent);
 }
 
 .ai-model-main {
