@@ -1474,11 +1474,11 @@ func (e *Engine) applyTeacherDecisionsLocked(
 			continue
 		}
 		if hasWindow && c.InvalidReason == "" && !c.IsStartFinish && c.GateID != sfGateID {
-			if firstSf, ok := firstSfBySlot[c.SlotIndex]; ok && firstSf > 50_000 && c.TimestampUs < firstSf-50_000 {
+			if firstSf, ok := firstSfBySlot[c.SlotIndex]; ok && firstSf > 50_000 && c.TimestampUs < firstSf-50_000 && c.TimestampUs <= startUs+320_000 {
 				keptCrossings = append(keptCrossings, c)
 				continue
 			}
-			if lastSf, ok := lastSfBySlot[c.SlotIndex]; ok && c.TimestampUs > lastSf+50_000 {
+			if lastSf, ok := lastSfBySlot[c.SlotIndex]; ok && c.TimestampUs > lastSf+50_000 && endUs > 320_000 && c.TimestampUs >= endUs-320_000 {
 				keptCrossings = append(keptCrossings, c)
 				continue
 			}

@@ -1,9 +1,10 @@
 package tracker
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
-	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -337,130 +338,301 @@ func TestAutoLabelTrackOrderBlankSlateRegression(t *testing.T) {
 	}
 }
 
-// TestAutoLabelRealSessionBenchmark evaluates lap-by-lap and full-session Auto-Label accuracy against
-// a copy of any real `PersistedEngineState` JSON/Bolt snapshot when `SLAPRF_AUTOLABEL_TRACES` and
-// `SLAPRF_AUTOLABEL_STATE_JSON` are provided (used for local hardware trace benchmarking).
-func TestAutoLabelRealSessionBenchmark(t *testing.T) {
-	stateJSONPath := os.Getenv("SLAPRF_AUTOLABEL_STATE_JSON")
-	tracesDir := os.Getenv("SLAPRF_AUTOLABEL_TRACES")
-	sessionID := os.Getenv("SLAPRF_AUTOLABEL_SESSION")
-	if stateJSONPath == "" || tracesDir == "" {
-		t.Skip("set SLAPRF_AUTOLABEL_STATE_JSON and SLAPRF_AUTOLABEL_TRACES to benchmark against a recorded hardware session")
-	}
-	if sessionID == "" {
-		sessionID = "session-173025-9"
-	}
-	rawJSON, err := os.ReadFile(filepath.Clean(stateJSONPath))
+func readGzipTestdata(t *testing.T, relPath string) []byte {
+	t.Helper()
+	f, err := os.Open(filepath.Join("testdata", relPath))
 	if err != nil {
-		t.Fatalf("ReadFile state JSON: %v", err)
+		t.Fatalf("open testdata/%s: %v", relPath, err)
 	}
-	var persisted PersistedEngineState
-	if err := json.Unmarshal(rawJSON, &persisted); err != nil {
-		t.Fatalf("Unmarshal state JSON: %v", err)
-	}
-	ts, err := tracestore.NewFileStore(tracesDir)
+	defer f.Close()
+	gr, err := gzip.NewReader(f)
 	if err != nil {
-		t.Fatalf("NewFileStore: %v", err)
+		t.Fatalf("gzip reader %s: %v", relPath, err)
 	}
-	defer ts.Close()
+	defer gr.Close()
+	raw, err := io.ReadAll(gr)
+	if err != nil {
+		t.Fatalf("read gzip %s: %v", relPath, err)
+	}
+	return raw
+}
+
+// cachedSampleStore serves pre-decoded `.rfbin` samples from memory so 20+ lap-by-lap engine runs
+// in unit tests never re-decode multi-megabyte binary streams.
+type cachedSampleStore struct {
+	tracestore.Store
+	samples map[string][]tracestore.Sample
+}
+
+func (c *cachedSampleStore) ReadSession(sessionID string) ([]tracestore.Sample, error) {
+	if s, ok := c.samples[sessionID]; ok {
+		return s, nil
+	}
+	return c.Store.ReadSession(sessionID)
+}
+
+// TestAutoLabelRecordedSessionsRegression runs both Full-Session Blank-Slate Auto-Label and
+// Polluted Lap-by-Lap Auto-Label against the real hardware `.rfbin` waveforms of Session 2
+// (`23` laps across 3 battery packs with BLE packet gaps on L20/L22/L23) and Session 3
+// (`21` hand-labeled laps across 3 stints) using the untuned `ai-base-v0` base model.
+func TestAutoLabelRecordedSessionsRegression(t *testing.T) {
+	cases := []struct {
+		name         string
+		prefix       string
+		minLapMatch  float64
+		minFullRec   float64
+		minFullF1    float64
+		matchTolMs   float64
+	}{
+		{
+			name:        "Session 2 (23 laps, BLE gaps on L20/L22/L23)",
+			prefix:      "autolabel_session2",
+			minLapMatch: 98.0,
+			minFullRec:  94.0,
+			minFullF1:   91.0,
+			matchTolMs:  450.0,
+		},
+		{
+			name:        "Session 3 (21 hand-labeled laps)",
+			prefix:      "autolabel_session3",
+			minLapMatch: 99.0,
+			minFullRec:  95.0,
+			minFullF1:   92.5,
+			matchTolMs:  400.0,
+		},
+	}
+
 	tm := ml.NewTeacherManager(t.TempDir(), nil)
 
-	newEng := func() *Engine {
-		m := NewRealEngine()
-		m.RestoreState(persisted, false)
-		cp := m.ExportState()
-		e := NewRealEngine()
-		e.RestoreState(cp, false)
-		e.SetTraceStore(ts)
-		e.SetTeacherManager(tm)
-		aiMode := "ai"
-		baseID := "ai-base-v0"
-		_, _ = e.UpdateMLConfig(MLConfigPayload{DetectorMode: &aiMode, ActiveModelID: &baseID})
-		return e
-	}
-
-	gtEng := newEng()
-	var gt *domain.PracticeSession
-	for _, s := range gtEng.PracticeSnapshot().Sessions {
-		if s.SessionID == sessionID {
-			cp := s
-			gt = &cp
-			break
-		}
-	}
-	if gt == nil {
-		t.Fatalf("session %q not found", sessionID)
-	}
-	var gtValid []domain.GateCrossingEvent
-	for _, c := range gt.Crossings {
-		if c.SlotIndex == 1 && c.InvalidReason == "" {
-			gtValid = append(gtValid, c)
-		}
-	}
-	sort.Slice(gtValid, func(i, j int) bool { return gtValid[i].TimestampUs < gtValid[j].TimestampUs })
-	var gtLaps []domain.LapRecord
-	for _, l := range gt.Laps {
-		if l.SlotIndex == 1 && !l.Invalidated {
-			gtLaps = append(gtLaps, l)
-		}
-	}
-	sort.Slice(gtLaps, func(i, j int) bool { return gtLaps[i].CompletedAtUs < gtLaps[j].CompletedAtUs })
-
-	totalExp, totalMatch := 0, 0
-	for _, lap := range gtLaps {
-		lapStartUs := uint64(math.Round(float64(lap.CompletedAtUs) - lap.LapTimeSec*1e6))
-		lapEndUs := lap.CompletedAtUs
-		winStartUs := lapStartUs - 350_000
-		winEndUs := lapEndUs + 350_000
-		var exp []domain.GateCrossingEvent
-		for _, c := range gtValid {
-			if c.TimestampUs+30_000 >= lapStartUs && c.TimestampUs <= lapEndUs+30_000 {
-				exp = append(exp, c)
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			sessBytes := readGzipTestdata(t, tc.prefix+".json.gz")
+			var gt domain.PracticeSession
+			if err := json.Unmarshal(sessBytes, &gt); err != nil {
+				t.Fatalf("unmarshal %s: %v", tc.prefix, err)
 			}
-		}
-		eLap := newEng()
-		for _, s := range eLap.PracticeSnapshot().Sessions {
-			if s.SessionID == sessionID {
-				for _, c := range s.Crossings {
-					if c.SlotIndex == 1 && c.TimestampUs > lapStartUs+50_000 && c.TimestampUs+50_000 < lapEndUs {
-						_, _ = eLap.DeletePracticeSessionCrossing(sessionID, c.EventID)
+
+			rfBytes := readGzipTestdata(t, tc.prefix+".rfbin.gz")
+			mem := tracestore.NewMemoryStore()
+			if _, err := mem.WriteRawBytes(gt.SessionID, rfBytes); err != nil {
+				t.Fatalf("WriteRawBytes %s: %v", tc.prefix, err)
+			}
+			decoded, err := mem.ReadSession(gt.SessionID)
+			if err != nil || len(decoded) == 0 {
+				t.Fatalf("ReadSession %s: %v (n=%d)", tc.prefix, err, len(decoded))
+			}
+			ts := &cachedSampleStore{
+				Store:   mem,
+				samples: map[string][]tracestore.Sample{gt.SessionID: decoded},
+			}
+
+			var gtValid []domain.GateCrossingEvent
+			for _, c := range gt.Crossings {
+				if c.SlotIndex == 1 && c.InvalidReason == "" {
+					gtValid = append(gtValid, c)
+				}
+			}
+			sort.Slice(gtValid, func(i, j int) bool { return gtValid[i].TimestampUs < gtValid[j].TimestampUs })
+
+			var gtLaps []domain.LapRecord
+			for _, l := range gt.Laps {
+				if l.SlotIndex == 1 && !l.Invalidated {
+					gtLaps = append(gtLaps, l)
+				}
+			}
+			sort.Slice(gtLaps, func(i, j int) bool { return gtLaps[i].CompletedAtUs < gtLaps[j].CompletedAtUs })
+
+			newTestEngine := func() *Engine {
+				rawCopy, _ := json.Marshal(gt)
+				var sessCopy domain.PracticeSession
+				_ = json.Unmarshal(rawCopy, &sessCopy)
+
+				var pil []domain.PilotSlot
+				for _, sp := range sessCopy.Pilots {
+					pil = append(pil, domain.PilotSlot{
+						SlotIndex:    sp.SlotIndex,
+						Callsign:     sp.Callsign,
+						Band:         sp.Band,
+						Channel:      sp.Channel,
+						FrequencyMHz: sp.FrequencyMHz,
+					})
+				}
+				rules := domain.DefaultTimingRules()
+				if sessCopy.Rules != nil {
+					rules = sessCopy.Rules.Normalized()
+				}
+				e := NewRealEngine()
+				e.RestoreState(PersistedEngineState{
+					TimingHardwareMode: domain.HardwareModeSlapRFBLE,
+					Rules:              rules,
+					Pilots:             pil,
+					Gates:              append([]domain.TrackGate(nil), sessCopy.TrackSnapshot...),
+					PracticeState: &domain.PracticeManagerState{
+						SelectedSessionID: sessCopy.SessionID,
+						Sessions:          []domain.PracticeSession{sessCopy},
+					},
+				}, false)
+				e.SetTraceStore(ts)
+				e.SetTeacherManager(tm)
+				aiMode := "ai"
+				baseID := "ai-base-v0"
+				_, _ = e.UpdateMLConfig(MLConfigPayload{DetectorMode: &aiMode, ActiveModelID: &baseID})
+				return e
+			}
+
+			// A. Polluted Lap-by-Lap Blank-Slate Auto-Label across all laps
+			totalExp, totalMatch, complete5Laps := 0, 0, 0
+			for _, lap := range gtLaps {
+				lapStartUs := uint64(math.Round(float64(lap.CompletedAtUs) - lap.LapTimeSec*1e6))
+				lapEndUs := lap.CompletedAtUs
+				winLo := lapStartUs - 350_000
+				winHi := lapEndUs + 350_000
+
+				var exp []domain.GateCrossingEvent
+				for _, c := range gtValid {
+					if c.TimestampUs+30_000 >= lapStartUs && c.TimestampUs <= lapEndUs+30_000 {
+						exp = append(exp, c)
+					}
+				}
+
+				eLap := newTestEngine()
+				for _, s := range eLap.PracticeSnapshot().Sessions {
+					if s.SessionID == gt.SessionID {
+						for _, c := range s.Crossings {
+							if c.SlotIndex == 1 && c.TimestampUs > lapStartUs+50_000 && c.TimestampUs+50_000 < lapEndUs {
+								_, _ = eLap.DeletePracticeSessionCrossing(gt.SessionID, c.EventID)
+							}
+						}
+					}
+				}
+				bogus := float32(-64.0)
+				_, _, _ = eLap.AddPracticeSessionCrossing(gt.SessionID, 4, 1, lapStartUs+450_000, &bogus)
+
+				res, err := eLap.LabelPracticeSession(context.Background(), gt.SessionID, MLSessionLabelRequest{
+					DryRun:    false,
+					SlotIndex: 1,
+					StartUs:   winLo,
+					EndUs:     winHi,
+				})
+				if err != nil {
+					t.Fatalf("L%d LabelPracticeSession: %v", lap.LapNumber, err)
+				}
+
+				var got []domain.GateCrossingEvent
+				for _, s := range res.Practice.Sessions {
+					if s.SessionID == gt.SessionID {
+						for _, c := range s.Crossings {
+							if c.SlotIndex == 1 && c.TimestampUs >= winLo && c.TimestampUs <= winHi {
+								if c.InvalidReason != "" {
+									t.Fatalf("L%d unexpected invalid crossing after Auto-Label: %+v", lap.LapNumber, c)
+								}
+								got = append(got, c)
+							}
+						}
+					}
+				}
+				if len(got) == 5 {
+					complete5Laps++
+				}
+				used := make([]bool, len(got))
+				for _, ex := range exp {
+					for gi, g := range got {
+						if !used[gi] && g.GateID == ex.GateID && absMs(g.TimestampUs, ex.TimestampUs) <= tc.matchTolMs {
+							used[gi] = true
+							totalMatch++
+							break
+						}
+					}
+				}
+				totalExp += len(exp)
+			}
+
+			lapPct := 100.0 * float64(totalMatch) / float64(totalExp)
+			t.Logf("[%s] Lap-by-lap polluted blank-slate: %d/%d crossings matched (%.1f%%), 5-crossing laps=%d/%d",
+				tc.prefix, totalMatch, totalExp, lapPct, complete5Laps, len(gtLaps))
+			if complete5Laps != len(gtLaps) {
+				t.Fatalf("[%s] expected all %d laps to recover 5 complete crossings, got %d/%d",
+					tc.prefix, len(gtLaps), complete5Laps, len(gtLaps))
+			}
+			if lapPct < tc.minLapMatch {
+				t.Fatalf("[%s] lap-by-lap match %.1f%% below minimum %.1f%%", tc.prefix, lapPct, tc.minLapMatch)
+			}
+
+			// B. Full-Session Blank-Slate Auto-Label (all crossings & laps wiped)
+			eFull := newTestEngine()
+			if _, err := eFull.PracticeAction(PracticeActionPayload{
+				Action:    "clear_pilot_laps",
+				SessionID: gt.SessionID,
+				SlotIndex: 1,
+			}); err != nil {
+				t.Fatalf("clear_pilot_laps: %v", err)
+			}
+			fullRes, err := eFull.LabelPracticeSession(context.Background(), gt.SessionID, MLSessionLabelRequest{
+				DryRun:    false,
+				SlotIndex: 1,
+			})
+			if err != nil {
+				t.Fatalf("full-session LabelPracticeSession: %v", err)
+			}
+
+			var fullGot []domain.GateCrossingEvent
+			var fullLaps int
+			for _, s := range fullRes.Practice.Sessions {
+				if s.SessionID == gt.SessionID {
+					fullLaps = len(s.Laps)
+					for _, c := range s.Crossings {
+						if c.SlotIndex == 1 {
+							if c.InvalidReason != "" {
+								t.Fatalf("[%s] unexpected invalid crossing in full-session Auto-Label: %+v", tc.prefix, c)
+							}
+							fullGot = append(fullGot, c)
+						}
 					}
 				}
 			}
-		}
-		bogus := float32(-64.0)
-		_, _, _ = eLap.AddPracticeSessionCrossing(sessionID, 4, 1, lapStartUs+450_000, &bogus)
-		if _, err := eLap.LabelPracticeSession(context.Background(), sessionID, MLSessionLabelRequest{
-			DryRun: false, SlotIndex: 1, StartUs: winStartUs, EndUs: winEndUs,
-		}); err != nil {
-			t.Fatalf("lap %d LabelPracticeSession: %v", lap.LapNumber, err)
-		}
-		var got []domain.GateCrossingEvent
-		for _, s := range eLap.PracticeSnapshot().Sessions {
-			if s.SessionID == sessionID {
-				for _, c := range s.Crossings {
-					if c.SlotIndex == 1 && c.InvalidReason == "" && c.TimestampUs >= winStartUs && c.TimestampUs <= winEndUs {
-						got = append(got, c)
+
+			usedF := make([]bool, len(fullGot))
+			matchedF := 0
+			for _, ex := range gtValid {
+				bestI := -1
+				bestD := 1e9
+				for gi, g := range fullGot {
+					if usedF[gi] || g.GateID != ex.GateID {
+						continue
+					}
+					d := absMs(g.TimestampUs, ex.TimestampUs)
+					if d <= tc.matchTolMs && d < bestD {
+						bestD = d
+						bestI = gi
 					}
 				}
-			}
-		}
-		used := make([]bool, len(got))
-		for _, ex := range exp {
-			for gi, g := range got {
-				if !used[gi] && g.GateID == ex.GateID && absMs(g.TimestampUs, ex.TimestampUs) <= 350.0 {
-					used[gi] = true
-					totalMatch++
-					break
+				if bestI >= 0 {
+					usedF[bestI] = true
+					matchedF++
 				}
 			}
-		}
-		totalExp += len(exp)
+			rec := 100.0 * float64(matchedF) / float64(len(gtValid))
+			prec := 0.0
+			if len(fullGot) > 0 {
+				prec = 100.0 * float64(matchedF) / float64(len(fullGot))
+			}
+			f1 := 0.0
+			if prec+rec > 0 {
+				f1 = 2.0 * prec * rec / (prec + rec)
+			}
+			t.Logf("[%s] Full-session blank-slate: matched=%d/%d (got=%d, recall=%.1f%%, precision=%.1f%%, F1=%.1f%%), laps=%d/%d",
+				tc.prefix, matchedF, len(gtValid), len(fullGot), rec, prec, f1, fullLaps, len(gtLaps))
+			if matchedF == 0 && len(fullGot) > 0 {
+				t.Logf("  sample fullGot[0]=%+v vs gtValid[0]=%+v", fullGot[0], gtValid[0])
+			}
+
+			if rec < tc.minFullRec {
+				t.Fatalf("[%s] full-session recall %.1f%% below minimum %.1f%%", tc.prefix, rec, tc.minFullRec)
+			}
+			if f1 < tc.minFullF1 {
+				t.Fatalf("[%s] full-session F1 %.1f%% below minimum %.1f%%", tc.prefix, f1, tc.minFullF1)
+			}
+		})
 	}
-	pct := 100.0 * float64(totalMatch) / float64(totalExp)
-	t.Logf("Real session %s polluted lap-by-lap match: %d/%d (%.1f%%)", sessionID, totalMatch, totalExp, pct)
-	if pct < 95.0 {
-		t.Fatalf("expected >= 95.0%% match on %s, got %.1f%% (%d/%d)", sessionID, pct, totalMatch, totalExp)
-	}
-	_ = fmt.Sprint(pct)
 }
