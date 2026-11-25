@@ -1,10 +1,14 @@
 package ml
 
 import (
+	"context"
 	"math"
 	"math/rand"
 	"testing"
 	"time"
+
+	"slaprf/internal/domain"
+	"slaprf/internal/tracestore"
 )
 
 func TestAnalyticalGradientsMatchFiniteDifferences(t *testing.T) {
@@ -168,5 +172,85 @@ func TestPretrainedBaseModelAndLive2LapAdapter(t *testing.T) {
 	}
 	if tune.PosExamples != 1 || tune.NegExamples != 1 {
 		t.Fatalf("unexpected live tune counts: %+v", tune)
+	}
+}
+
+func TestBuildTracesFromSessionSlicesActiveFlightStintsAndCancel(t *testing.T) {
+	// Simulate 10 minutes of 50 Hz bench dead-air (with +8 dB random Wi-Fi blips every 3s!)
+	// plus two 12s flight stints separated by a 3-minute landing/pack-swap break.
+	var samples []tracestore.Sample
+	for step := 0; step < 600*50; step++ {
+		ts := uint64(step) * 20_000
+		rssi := float32(-91.0)
+		if step%150 == 0 {
+			rssi = -82.0 // +9 dB bench Wi-Fi blip that previously prevented idle trimming!
+		}
+		// Inject true gate passes at t=100s, t=112s (Stint 1) and t=300s, t=312s (Stint 2)
+		for _, pSec := range []float64{100.0, 112.0, 300.0, 312.0} {
+			dt := float64(ts)/1e6 - pSec
+			env := float32(34.0 / (1.0 + (dt/0.18)*(dt/0.18)))
+			if -91.0+env > rssi {
+				rssi = -91.0 + env
+			}
+		}
+		samples = append(samples, tracestore.Sample{
+			GateID:        1,
+			NoiseFloorDbm: -91.0,
+			TimestampUs:   ts,
+			SlotIndices:   []uint8{1},
+			RSSIDbm:       []float32{rssi},
+		})
+	}
+
+	defaultPilots := []domain.PilotSlot{
+		{SlotIndex: 1, Callsign: "Pilot 1", EnterThreshold: -68, ExitThreshold: -76},
+	}
+	sess := domain.PracticeSession{
+		SessionID: "sess-stints",
+		Pilots:    []domain.PracticeSessionPilot{{SlotIndex: 1, Callsign: "Pilot 1"}},
+		Laps: []domain.LapRecord{
+			{LapID: 1, SlotIndex: 1, LapNumber: 1, LapTimeSec: 12.0, CompletedAtUs: 112_000_000},
+			{LapID: 2, SlotIndex: 1, LapNumber: 2, LapTimeSec: 12.0, CompletedAtUs: 312_000_000},
+		},
+		Crossings: []domain.GateCrossingEvent{
+			// Stray bench walk-by at t=10s before flying (not part of any lap, not manual):
+			{GateID: 1, SlotIndex: 1, TimestampUs: 10_000_000},
+			// Stint 1 crossings:
+			{GateID: 1, SlotIndex: 1, TimestampUs: 100_000_000},
+			{GateID: 1, SlotIndex: 1, TimestampUs: 112_000_000},
+			// Stint 2 crossings:
+			{GateID: 1, SlotIndex: 1, TimestampUs: 300_000_000},
+			{GateID: 1, SlotIndex: 1, TimestampUs: 312_000_000},
+		},
+	}
+
+	traces := BuildTracesFromSession(sess, samples, defaultPilots)
+	if len(traces) != 1 {
+		t.Fatalf("expected 1 LabeledTrace, got %d", len(traces))
+	}
+	// Two 12s laps + +-2.2s pad = 2 * 16.4s = ~32.8s (~1,640 samples), NOT 30,000 samples!
+	if len(traces[0].Points) > 2200 {
+		t.Fatalf("expected bench dead-air to be chopped out (<= 2200 points), got %d points", len(traces[0].Points))
+	}
+	if len(traces[0].Positives) != 4 {
+		t.Fatalf("expected only the 4 in-stint crossings (excluding t=10s stray bench crossing), got %d", len(traces[0].Positives))
+	}
+
+	// Verify Ctx cancellation aborts TrainModel immediately.
+	ctx, cancel := context.WithCancel(context.Background())
+	epochsRun := 0
+	_, _ = TrainModel(traces, nil, TrainOptions{
+		Ctx:         ctx,
+		Epochs:      28,
+		AugPerTrace: 2,
+		OnEpoch: func(ep, total int, loss float64) {
+			epochsRun = ep
+			if ep >= 2 {
+				cancel()
+			}
+		},
+	})
+	if epochsRun != 2 {
+		t.Fatalf("expected training to stop right at epoch 2 after cancel(), ran %d epochs", epochsRun)
 	}
 }

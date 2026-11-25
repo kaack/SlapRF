@@ -1246,6 +1246,12 @@ export class ApiClient {
     return st;
   }
 
+  public async cancelMLTraining(): Promise<MLStatus> {
+    const st = await this.transport.request<MLStatus>("POST", "/v1/ml:cancel", {});
+    this.store.ingestMLStatus(st);
+    return st;
+  }
+
   public async downloadMLTeacherPack(packId?: string): Promise<MLStatus> {
     const st = await this.transport.request<MLStatus>(
       "POST",

@@ -120,6 +120,7 @@ type Engine struct {
 	mlActiveTCN            *ml.TCN
 	mlActiveModelID        string
 	mlTraining             domain.MLTrainingProgress
+	mlTrainCancel          func()
 	mlTeacher              *ml.TeacherManager
 	subscribers            []EventSubscriber
 }

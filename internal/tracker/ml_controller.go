@@ -1409,6 +1409,8 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 		}
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	e.mlTrainCancel = cancel
 	e.mlTraining = domain.MLTrainingProgress{
 		Running:     true,
 		Epoch:       0,
@@ -1424,6 +1426,7 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 	e.notifyMLUpdated(st, subs)
 
 	go e.runMLTrainingWorker(
+		ctx,
 		sessionsCopy,
 		pilotsCopy,
 		ts,
@@ -1445,7 +1448,28 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 	return st, nil
 }
 
+// CancelMLTraining aborts an in-flight on-device training/distillation run immediately.
+func (e *Engine) CancelMLTraining() domain.MLStatus {
+	e.mu.Lock()
+	cancel := e.mlTrainCancel
+	e.mlTrainCancel = nil
+	if e.mlTraining.Running {
+		e.mlTraining.Running = false
+		e.mlTraining.Message = "Training canceled"
+	}
+	st := e.buildMLStatusLocked()
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	e.notifyMLUpdated(st, subs)
+	return st
+}
+
 func (e *Engine) runMLTrainingWorker(
+	ctx context.Context,
 	sessions []domain.PracticeSession,
 	pilots []domain.PilotSlot,
 	ts tracestore.Store,
@@ -1515,7 +1539,10 @@ func (e *Engine) runMLTrainingWorker(
 				if len(cands) == 0 {
 					continue
 				}
-				decs, dErr := labeler.LabelCandidates(context.Background(), s, cands, nil)
+				decs, dErr := labeler.LabelCandidates(ctx, s, cands, nil)
+				if ctx.Err() != nil {
+					return
+				}
 				if dErr != nil || len(decs) == 0 {
 					continue
 				}
@@ -1637,14 +1664,26 @@ func (e *Engine) runMLTrainingWorker(
 		valTraces = append(valTraces, ml.GenerateSyntheticTraces(2, 88888+int64(nextVer))...)
 	}
 
+	if ctx.Err() != nil {
+		return
+	}
+
 	trained, finalLoss := ml.TrainModel(trainTraces, initTCN, ml.TrainOptions{
+		Ctx:          ctx,
 		Epochs:       epochs,
 		LearningRate: lr,
 		WeightDecay:  1e-4,
 		AugPerTrace:  3,
 		Seed:         time.Now().UnixNano(),
 		OnEpoch: func(ep, total int, loss float64) {
+			if ctx.Err() != nil {
+				return
+			}
 			e.mu.Lock()
+			if !e.mlTraining.Running {
+				e.mu.Unlock()
+				return
+			}
 			e.mlTraining.Epoch = ep
 			e.mlTraining.TotalEpochs = total
 			e.mlTraining.Loss = math.Round(loss*10000) / 10000
@@ -1655,6 +1694,9 @@ func (e *Engine) runMLTrainingWorker(
 			e.notifyMLUpdated(st, subs)
 		},
 	})
+	if ctx.Err() != nil {
+		return
+	}
 
 	aiM, clM := ml.BenchmarkTraces(trained, valTraces, 1_500_000)
 	durMs := time.Since(t0).Milliseconds()

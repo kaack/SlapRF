@@ -1215,6 +1215,14 @@ export function makeMockApiClient(store: AppStore): MockApiClientRecord {
       calls.push({ method: "startMLTraining", args });
       return Promise.resolve(store.mlStatus);
     },
+    cancelMLTraining: (...args: unknown[]) => {
+      calls.push({ method: "cancelMLTraining", args });
+      const next = structuredClone(store.mlStatus);
+      next.training.running = false;
+      next.training.message = "Training canceled";
+      store.ingestMLStatus(next);
+      return Promise.resolve(next);
+    },
     createMLModel: (...args: unknown[]) => {
       calls.push({ method: "createMLModel", args });
       const [name] = args as [string];

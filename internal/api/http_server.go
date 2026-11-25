@@ -329,6 +329,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/ml", s.handleGetMLStatus)
 	mux.HandleFunc("PATCH /v1/ml", wrap(s.handlePatchMLConfig))
 	mux.HandleFunc("POST /v1/ml:train", wrap(s.handleStartMLTraining))
+	mux.HandleFunc("POST /v1/ml:cancel", wrap(s.handleCancelMLTraining))
 	mux.HandleFunc("GET /v1/ml/teacher", s.handleGetMLTeacher)
 	mux.HandleFunc("POST /v1/ml/teacher:download", wrap(s.handleDownloadMLTeacher))
 	mux.HandleFunc("POST /v1/ml/teacher:cancel", wrap(s.handleCancelMLTeacher))

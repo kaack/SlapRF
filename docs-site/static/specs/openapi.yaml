@@ -6427,6 +6427,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /v1/ml:cancel:
+    post:
+      tags: [AI Detector & Traces]
+      summary: Cancel an in-progress on-device model training run
+      operationId: cancelMLTraining
+      responses:
+        "200":
+          description: Updated ML status with training stopped
+
   /v1/ml/teacher:
     get:
       tags: [AI Detector & Traces]

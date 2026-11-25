@@ -470,21 +470,25 @@ export class PracticeAITrainingTab extends Component {
                  </div>`
           }
           ${
-            selectedTrained
+            isBusy
               ? `<button
                    type="button"
                    class="btn btn-sm"
-                   data-ai-act="train-more"
-                   data-model-id="${esc(selectedModel.modelId)}"
-                   ${isBusy ? "disabled" : ""}
-                 >${isBusy ? "Training…" : "Fine-Tune"}</button>`
-              : `<button
-                   type="button"
-                   class="btn btn-sm"
-                   data-ai-act="train-fresh"
-                   data-model-id="${esc(selectedModel.modelId)}"
-                   ${isBusy ? "disabled" : ""}
-                 >${isBusy ? "Training…" : "Train"}</button>`
+                   data-ai-act="cancel-training"
+                 >Cancel</button>`
+              : selectedTrained
+                ? `<button
+                     type="button"
+                     class="btn btn-sm"
+                     data-ai-act="train-more"
+                     data-model-id="${esc(selectedModel.modelId)}"
+                   >Fine-Tune</button>`
+                : `<button
+                     type="button"
+                     class="btn btn-sm"
+                     data-ai-act="train-fresh"
+                     data-model-id="${esc(selectedModel.modelId)}"
+                   >Train</button>`
           }
         </div>
 
@@ -795,6 +799,15 @@ export class PracticeAITrainingTab extends Component {
           "qwen3-1.7b-q4_k_m";
         void this.api
           .deleteMLTeacherPack(packId)
+          .catch((err: unknown) => this.setErr(err));
+        break;
+      }
+
+      case "cancel-training": {
+        this.startingTraining = false;
+        this.render(true);
+        void this.api
+          .cancelMLTraining()
           .catch((err: unknown) => this.setErr(err));
         break;
       }

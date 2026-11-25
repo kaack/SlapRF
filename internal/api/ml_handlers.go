@@ -155,6 +155,16 @@ func (s *Server) handleStartMLTraining(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, st)
 }
 
+func (s *Server) handleCancelMLTraining(w http.ResponseWriter, r *http.Request) {
+	if err := decodeOptionalJSONBody(r, &struct{}{}); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	st := s.activeEngine().CancelMLTraining()
+	s.logUserAction("ML", "Canceled on-device model training")
+	writeJSON(w, http.StatusOK, st)
+}
+
 func (s *Server) handleGetMLTeacher(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.activeEngine().MLStatus().Teacher)
 }

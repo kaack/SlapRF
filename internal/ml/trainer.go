@@ -1,6 +1,7 @@
 package ml
 
 import (
+	"context"
 	"math"
 	"math/rand"
 	"runtime"
@@ -112,52 +113,38 @@ const (
 )
 
 // trimIdleBenchStretches removes multi-minute bench/idle dead-air from continuous Practice `.rfbin`
-// recordings while preserving 100% of +-4.0s neighborhoods around every positive crossing, hard
-// negative, and RF excursion (>= 6.5 dB above floor), plus up to 4 representative quiet-air slices.
+// recordings while preserving 100% of +-2.6s neighborhoods around every positive crossing and hard
+// negative, plus up to 8 representative 5.2s ambient/Wi-Fi background slices across the session.
 func trimIdleBenchStretches(tr LabeledTrace) LabeledTrace {
 	pts := tr.Points
-	if len(pts) <= 3000 {
+	if len(pts) <= 2000 {
 		return tr
 	}
-	const keepMarginUs = uint64(4_000_000)
+	const keepMarginUs = uint64(2_600_000)
 
 	type span struct {
 		lo, hi uint64
 	}
 	var active []span
-	addSpan := func(ts uint64) {
+	addSpan := func(ts, halfUs uint64) {
 		lo := uint64(0)
-		if ts > keepMarginUs {
-			lo = ts - keepMarginUs
+		if ts > halfUs {
+			lo = ts - halfUs
 		}
-		active = append(active, span{lo: lo, hi: ts + keepMarginUs})
+		active = append(active, span{lo: lo, hi: ts + halfUs})
 	}
 	for _, p := range tr.Positives {
-		addSpan(p.TimestampUs)
+		addSpan(p.TimestampUs, keepMarginUs)
 	}
 	for _, n := range tr.HardNegs {
-		addSpan(n.TimestampUs)
+		addSpan(n.TimestampUs, keepMarginUs)
 	}
-	// Sub-sample every 4th point (~40-80 ms) to catch any unlabeled >= 6.5 dB RF excursion
-	for i := 0; i < len(pts); i += 4 {
-		fl := pts[i].NoiseFloorDbm
-		if fl < -115 || fl > -65 {
-			fl = -91.0
-		}
-		if pts[i].RSSIDbm-fl >= 6.5 {
-			addSpan(pts[i].TimestampUs)
-		}
-	}
-	// Also keep up to 4 evenly-spaced 5-second quiet ambient reference slices across the recording
-	for q := 1; q <= 4; q++ {
-		idx := (len(pts) * q) / 5
+	// Keep 8 evenly-spaced 5.2-second ambient background slices across the recording so the model
+	// learns ambient noise & stray RF floor glitches without training on 50 minutes of bench dead-air.
+	for q := 1; q <= 8; q++ {
+		idx := (len(pts) * q) / 9
 		if idx >= 0 && idx < len(pts) {
-			ts := pts[idx].TimestampUs
-			lo := uint64(0)
-			if ts > 2_500_000 {
-				lo = ts - 2_500_000
-			}
-			active = append(active, span{lo: lo, hi: ts + 2_500_000})
+			addSpan(pts[idx].TimestampUs, 2_600_000)
 		}
 	}
 	if len(active) == 0 {
@@ -295,11 +282,80 @@ func prepareTraces(traces []LabeledTrace) []preparedSequence {
 }
 
 // BuildTracesFromSession extracts per-(gate, pilot) `LabeledTrace`s from a PracticeSession and its
-// `.rfbin` samples, automatically marking cross-gate bleed timestamps and `ManualDeletedCrossings`
+// `.rfbin` samples, chopping out pre-flight, landing/pack-swap, and post-flight bench dead-air so
+// ONLY active flight stints (`[lapStart - 2.0s .. lapEnd + 2.0s]`, plus any manual edit windows)
+// are fed into training, while automatically marking cross-gate bleed and `ManualDeletedCrossings`
 // as hard negatives.
 func BuildTracesFromSession(sess domain.PracticeSession, samples []tracestore.Sample, defaultPilots []domain.PilotSlot) []LabeledTrace {
 	if len(samples) < 16 {
 		return nil
+	}
+
+	type timeSpan struct {
+		lo, hi uint64
+	}
+	// Build active flight stint spans per pilot slot from recorded laps + manual crossing edits!
+	stintsBySlot := make(map[int][]timeSpan)
+	addPilotSpan := func(slot int, lo, hi uint64) {
+		if slot <= 0 || hi <= lo {
+			return
+		}
+		stintsBySlot[slot] = append(stintsBySlot[slot], timeSpan{lo: lo, hi: hi})
+	}
+	const stintPadUs = uint64(2_200_000)
+	for _, l := range sess.Laps {
+		if l.Invalidated || l.CompletedAtUs == 0 || l.LapTimeSec <= 0 {
+			continue
+		}
+		durUs := uint64(math.Round(l.LapTimeSec * 1e6))
+		startUs := uint64(0)
+		if l.CompletedAtUs > durUs+stintPadUs {
+			startUs = l.CompletedAtUs - durUs - stintPadUs
+		}
+		addPilotSpan(l.SlotIndex, startUs, l.CompletedAtUs+stintPadUs)
+	}
+	for _, c := range sess.Crossings {
+		if c.Manual && c.TimestampUs > 0 {
+			lo := uint64(0)
+			if c.TimestampUs > stintPadUs {
+				lo = c.TimestampUs - stintPadUs
+			}
+			addPilotSpan(c.SlotIndex, lo, c.TimestampUs+stintPadUs)
+		}
+	}
+	for _, del := range sess.ManualDeletedCrossings {
+		if del.TimestampUs > 0 {
+			lo := uint64(0)
+			if del.TimestampUs > stintPadUs {
+				lo = del.TimestampUs - stintPadUs
+			}
+			addPilotSpan(del.SlotIndex, lo, del.TimestampUs+stintPadUs)
+		}
+	}
+	for slot, list := range stintsBySlot {
+		sort.Slice(list, func(i, j int) bool { return list[i].lo < list[j].lo })
+		merged := list[:1]
+		for _, s := range list[1:] {
+			last := &merged[len(merged)-1]
+			// Merge back-to-back laps (gap <= 5.0 s); keep landings / breaks (> 5.0 s) separated!
+			if s.lo <= last.hi+5_000_000 {
+				if s.hi > last.hi {
+					last.hi = s.hi
+				}
+			} else {
+				merged = append(merged, s)
+			}
+		}
+		stintsBySlot[slot] = merged
+	}
+	inPilotStint := func(slot int, ts uint64) bool {
+		stints := stintsBySlot[slot]
+		if len(stints) == 0 {
+			return true // Fallback when session has crossings/traces before a completed lap
+		}
+		// Binary search merged stints
+		i := sort.Search(len(stints), func(k int) bool { return stints[k].hi >= ts })
+		return i < len(stints) && ts >= stints[i].lo
 	}
 
 	type gpKey struct {
@@ -321,6 +377,9 @@ func BuildTracesFromSession(sess domain.PracticeSession, samples []tracestore.Sa
 				continue
 			}
 			if k >= len(s.RSSIDbm) || s.RSSIDbm[k] <= -120.0 {
+				continue
+			}
+			if !inPilotStint(slotIdx, s.TimestampUs) {
 				continue
 			}
 			key := gpKey{gateID: s.GateID, slotIndex: slotIdx}
@@ -371,6 +430,9 @@ func BuildTracesFromSession(sess domain.PracticeSession, samples []tracestore.Sa
 		if c.InvalidReason != "" && !c.Manual {
 			continue
 		}
+		if !inPilotStint(c.SlotIndex, c.TimestampUs) {
+			continue
+		}
 		key := gpKey{gateID: c.GateID, slotIndex: c.SlotIndex}
 		validByKey[key] = append(validByKey[key], CrossingLabel{
 			TimestampUs: c.TimestampUs,
@@ -382,6 +444,9 @@ func BuildTracesFromSession(sess domain.PracticeSession, samples []tracestore.Sa
 
 	negsByKey := make(map[gpKey][]NegativeMark)
 	for _, del := range sess.ManualDeletedCrossings {
+		if !inPilotStint(del.SlotIndex, del.TimestampUs) {
+			continue
+		}
 		key := gpKey{gateID: del.GateID, slotIndex: del.SlotIndex}
 		negsByKey[key] = append(negsByKey[key], NegativeMark{
 			TimestampUs: del.TimestampUs,
@@ -389,6 +454,9 @@ func BuildTracesFromSession(sess domain.PracticeSession, samples []tracestore.Sa
 		})
 	}
 	for _, tn := range sess.TeacherHardNegs {
+		if !inPilotStint(tn.SlotIndex, tn.TimestampUs) {
+			continue
+		}
 		key := gpKey{gateID: tn.GateID, slotIndex: tn.SlotIndex}
 		conf := tn.Confidence
 		if conf <= 0 {
@@ -405,6 +473,9 @@ func BuildTracesFromSession(sess domain.PracticeSession, samples []tracestore.Sa
 	}
 	// Filtered detections (`SPIKE`, `OUT_OF_ORDER`) are also informative hard negatives unless overridden by a positive!
 	for _, f := range sess.Filtered {
+		if !inPilotStint(f.SlotIndex, f.TimestampUs) {
+			continue
+		}
 		key := gpKey{gateID: f.GateID, slotIndex: f.SlotIndex}
 		negsByKey[key] = append(negsByKey[key], NegativeMark{
 			TimestampUs: f.TimestampUs,
@@ -460,6 +531,7 @@ func BuildTracesFromSession(sess domain.PracticeSession, samples []tracestore.Sa
 
 // TrainOptions configures on-device AdamW training.
 type TrainOptions struct {
+	Ctx          context.Context
 	Epochs       int
 	LearningRate float32
 	WeightDecay  float32
@@ -592,6 +664,9 @@ func TrainModel(baseTraces []LabeledTrace, initModel *TCN, opts TrainOptions) (*
 
 		var epochLossSum float64
 		for start := 0; start < len(epochOrder); start += batchSize {
+			if opts.Ctx != nil && opts.Ctx.Err() != nil {
+				return m, finalLoss
+			}
 			end := start + batchSize
 			if end > len(epochOrder) {
 				end = len(epochOrder)

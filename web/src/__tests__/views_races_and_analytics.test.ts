@@ -2764,16 +2764,14 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
         "Indoor Track Model"
       );
 
-      // Clicking Fine-Tune immediately shows progress & disables button synchronously!
+      // Clicking Fine-Tune immediately shows progress & switches button to Cancel synchronously!
       const trainMoreBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="train-more"]')!;
       expect(trainMoreBtn).not.toBeNull();
       expect(trainMoreBtn.classList.contains("btn-primary")).toBe(false);
       expect(trainMoreBtn.textContent?.trim()).toBe("Fine-Tune");
       trainMoreBtn.click();
       expect(host.querySelector("[data-ai-progress]")).not.toBeNull();
-      expect(
-        host.querySelector<HTMLButtonElement>('[data-ai-act="train-more"]')!.disabled
-      ).toBe(true);
+      expect(host.querySelector('[data-ai-act="cancel-training"]')).not.toBeNull();
       await flushMicrotasks();
       expect(
         mock.calls.some(

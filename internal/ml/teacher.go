@@ -341,13 +341,16 @@ type TeacherManager struct {
 }
 
 // NewTeacherManager creates an on-device teacher model manager rooted at `dir`.
+// Large `.gguf` downloads (378 MB - 1.03 GB) always use `Timeout: 0` so short API client timeouts
+// (such as Portable's 15s MultiGP client) never abort mid-download with `context deadline exceeded`.
 func NewTeacherManager(dir string, httpClient *http.Client) *TeacherManager {
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 0}
+	dlClient := &http.Client{Timeout: 0}
+	if httpClient != nil && httpClient.Transport != nil {
+		dlClient.Transport = httpClient.Transport
 	}
 	return &TeacherManager{
 		dir:        dir,
-		httpClient: httpClient,
+		httpClient: dlClient,
 		catalog:    TeacherCatalog(),
 	}
 }
@@ -637,59 +640,9 @@ func (m *TeacherManager) runDownload(ctx context.Context, spec TeacherPackSpec) 
 		}
 	}
 
-	var existing int64
-	if st, err := os.Stat(partPath); err == nil && !st.IsDir() {
-		existing = st.Size()
-		if spec.SizeBytes > 0 && existing > spec.SizeBytes {
-			_ = os.Remove(partPath)
-			existing = 0
-		}
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, spec.DownloadURL, nil)
-	if err != nil {
-		finishErr(err.Error())
-		return
-	}
-	if existing > 0 {
-		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", existing))
-	}
-
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		if errors.Is(ctx.Err(), context.Canceled) {
-			finishErr("")
-			return
-		}
-		finishErr(fmt.Sprintf("download failed: %v", err))
-		return
-	}
-	defer resp.Body.Close()
-
-	flags := os.O_CREATE | os.O_WRONLY
-	if resp.StatusCode == http.StatusPartialContent && existing > 0 {
-		flags |= os.O_APPEND
-	} else if resp.StatusCode == http.StatusOK {
-		flags |= os.O_TRUNC
-		existing = 0
-	} else {
-		finishErr(fmt.Sprintf("download HTTP %d", resp.StatusCode))
-		return
-	}
-
-	outFile, err := os.OpenFile(partPath, flags, 0o644)
-	if err != nil {
-		finishErr(fmt.Sprintf("open part file: %v", err))
-		return
-	}
-
 	total := spec.SizeBytes
-	if total <= 0 && resp.ContentLength > 0 {
-		total = existing + resp.ContentLength
-	}
-
 	buf := make([]byte, 256*1024)
-	downloaded := existing
+	var downloaded int64
 	lastNotify := time.Now()
 
 	publishProgress := func(force bool) {
@@ -712,40 +665,112 @@ func (m *TeacherManager) runDownload(ctx context.Context, spec TeacherPackSpec) 
 			hook()
 		}
 	}
-	publishProgress(true)
 
-	for {
-		n, rErr := resp.Body.Read(buf)
-		if n > 0 {
-			if _, wErr := outFile.Write(buf[:n]); wErr != nil {
-				_ = outFile.Close()
-				finishErr(fmt.Sprintf("write error: %v", wErr))
-				return
+	const maxAttempts = 4
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		var existing int64
+		if st, err := os.Stat(partPath); err == nil && !st.IsDir() {
+			existing = st.Size()
+			if spec.SizeBytes > 0 && existing > spec.SizeBytes {
+				_ = os.Remove(partPath)
+				existing = 0
 			}
-			downloaded += int64(n)
-			publishProgress(false)
-		}
-		if rErr != nil {
-			if errors.Is(rErr, io.EOF) {
+			if spec.SizeBytes > 0 && existing == spec.SizeBytes {
+				downloaded = existing
 				break
 			}
-			_ = outFile.Close()
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, spec.DownloadURL, nil)
+		if err != nil {
+			finishErr(err.Error())
+			return
+		}
+		if existing > 0 {
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", existing))
+		}
+
+		resp, err := m.httpClient.Do(req)
+		if err != nil {
 			if errors.Is(ctx.Err(), context.Canceled) {
 				finishErr("")
 				return
 			}
-			finishErr(fmt.Sprintf("network read error: %v", rErr))
+			if attempt < maxAttempts {
+				time.Sleep(time.Duration(attempt) * 800 * time.Millisecond)
+				continue
+			}
+			finishErr(fmt.Sprintf("download failed: %v", err))
 			return
 		}
-	}
-	if err := outFile.Close(); err != nil {
-		finishErr(fmt.Sprintf("close part file: %v", err))
-		return
-	}
 
-	if spec.SizeBytes > 0 && downloaded != spec.SizeBytes {
-		finishErr(fmt.Sprintf("incomplete download (%d / %d bytes)", downloaded, spec.SizeBytes))
-		return
+		flags := os.O_CREATE | os.O_WRONLY
+		if resp.StatusCode == http.StatusPartialContent && existing > 0 {
+			flags |= os.O_APPEND
+		} else if resp.StatusCode == http.StatusOK {
+			flags |= os.O_TRUNC
+			existing = 0
+		} else {
+			_ = resp.Body.Close()
+			finishErr(fmt.Sprintf("download HTTP %d", resp.StatusCode))
+			return
+		}
+		if total <= 0 && resp.ContentLength > 0 {
+			total = existing + resp.ContentLength
+		}
+
+		outFile, err := os.OpenFile(partPath, flags, 0o644)
+		if err != nil {
+			_ = resp.Body.Close()
+			finishErr(fmt.Sprintf("open part file: %v", err))
+			return
+		}
+
+		downloaded = existing
+		publishProgress(true)
+
+		var streamErr error
+		for {
+			n, rErr := resp.Body.Read(buf)
+			if n > 0 {
+				if _, wErr := outFile.Write(buf[:n]); wErr != nil {
+					_ = outFile.Close()
+					_ = resp.Body.Close()
+					finishErr(fmt.Sprintf("write error: %v", wErr))
+					return
+				}
+				downloaded += int64(n)
+				publishProgress(false)
+			}
+			if rErr != nil {
+				if !errors.Is(rErr, io.EOF) {
+					streamErr = rErr
+				}
+				break
+			}
+		}
+		_ = resp.Body.Close()
+		cErr := outFile.Close()
+		if cErr != nil {
+			finishErr(fmt.Sprintf("close part file: %v", cErr))
+			return
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			finishErr("")
+			return
+		}
+		if streamErr == nil && (spec.SizeBytes <= 0 || downloaded == spec.SizeBytes) {
+			break
+		}
+		if attempt == maxAttempts {
+			if streamErr != nil {
+				finishErr(fmt.Sprintf("network read error: %v", streamErr))
+			} else {
+				finishErr(fmt.Sprintf("incomplete download (%d / %d bytes)", downloaded, spec.SizeBytes))
+			}
+			return
+		}
+		time.Sleep(time.Duration(attempt) * 800 * time.Millisecond)
 	}
 
 	if spec.SHA256 != "" {
