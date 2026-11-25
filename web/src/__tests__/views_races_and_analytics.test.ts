@@ -2594,11 +2594,13 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
     try {
       await flushMicrotasks();
 
-      // 1. Crossing Detector sits in its own top-level [data-slot="detector"] card outside [data-slot="rules"]
+      // 1. Crossing Detector sits in its own compact single-row [data-slot="detector"] card outside [data-slot="rules"]
+      trackWsHost.style.width = "380px";
       const detectorSlot = trackWsHost.querySelector<HTMLElement>('[data-slot="detector"]')!;
       const rulesSlot = trackWsHost.querySelector<HTMLElement>('[data-slot="rules"]')!;
       expect(detectorSlot).not.toBeNull();
       expect(rulesSlot.querySelector("[data-ml-detector-mode]")).toBeNull();
+      expect(Math.round(detectorSlot.getBoundingClientRect().height)).toBeLessThanOrEqual(48);
 
       const rulesAiBtnBefore = detectorSlot.querySelector<HTMLButtonElement>(
         '[data-ml-detector-mode="ai"]'
@@ -2646,6 +2648,7 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       expect(store.mlStatus.config.detectorMode).toBe("ai");
       expect(store.mlStatus.config.activeModelId).toBe("ai-base-v1");
       expect(detectorSlot.querySelector("[data-ml-model-select]")).not.toBeNull();
+      expect(Math.round(detectorSlot.getBoundingClientRect().height)).toBeLessThanOrEqual(48);
     } finally {
       trackWorkspace.destroy();
       view.destroy();

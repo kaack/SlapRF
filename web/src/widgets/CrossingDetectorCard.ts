@@ -1,4 +1,5 @@
 import { Component } from "../core/component";
+import { scanCustomSelects } from "../core/custom_select";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
@@ -10,8 +11,8 @@ export interface CrossingDetectorCardOptions {
 }
 
 /**
- * High-level Track setting card mounted directly inside `ScopedTrackWorkspace`
- * (`Race -> Track` and `Practice -> Track`) outside `TimingRulesEditor`'s per-timer `All timers` scope.
+ * Compact single-row Track setting card mounted inside `ScopedTrackWorkspace`
+ * (`Race -> Track` and `Practice -> Track`) outside `TimingRulesEditor`.
  */
 export class CrossingDetectorCard extends Component {
   private readonly store: AppStore;
@@ -32,9 +33,17 @@ export class CrossingDetectorCard extends Component {
 
     this.listen(el, "click", (e: MouseEvent) => {
       const target = e.target;
-      if (!(target instanceof Element)) return;
+      if (!(target instanceof Element) || this.isReadOnlyFn()) return;
+
+      const tuneBtn = target.closest<HTMLButtonElement>("[data-ml-live-tune-btn]");
+      if (tuneBtn && !tuneBtn.disabled) {
+        const cur = this.store.mlStatus?.config?.liveTuneEnabled ?? true;
+        void this.api.updateMLConfig({ liveTuneEnabled: !cur });
+        return;
+      }
+
       const modeBtn = target.closest<HTMLButtonElement>("[data-ml-detector-mode]");
-      if (!modeBtn || modeBtn.disabled || this.isReadOnlyFn()) return;
+      if (!modeBtn || modeBtn.disabled) return;
 
       const nextMode = modeBtn.dataset.mlDetectorMode === "ai" ? "ai" : "classic";
       if (nextMode === "ai") {
@@ -58,10 +67,6 @@ export class CrossingDetectorCard extends Component {
         if (modelId) {
           void this.api.updateMLConfig({ detectorMode: "ai", activeModelId: modelId });
         }
-        return;
-      }
-      if (target instanceof HTMLInputElement && target.hasAttribute("data-ml-live-tune")) {
-        void this.api.updateMLConfig({ liveTuneEnabled: target.checked });
       }
     });
 
@@ -108,25 +113,37 @@ export class CrossingDetectorCard extends Component {
     const optionsHtml = ready
       .map((m) => {
         const sel = m.modelId === selectedId ? "selected" : "";
-        const f1Pct = m.aiMetrics ? ` · F1 ${(m.aiMetrics.f1 * 100).toFixed(1)}%` : "";
-        return `<option value="${esc(m.modelId)}" ${sel}>${esc(`${m.name}${f1Pct}`)}</option>`;
+        return `<option value="${esc(m.modelId)}" ${sel}>${esc(m.name)}</option>`;
       })
       .join("");
 
-    const helpText = hasReady
-      ? "Switch between Classic Schmitt DSP and your Ready trained models."
-      : "Train a model in any Practice → AI Training tab and mark it Ready to select it here.";
+    const aiTitle = hasReady
+      ? "Use a Ready trained crossing model"
+      : "Train a model in Practice → AI Training and mark it Ready first";
 
     const nextHtml = `
-      <div class="track-detector-bar">
-        <div class="track-detector-main">
-          <div class="track-detector-copy">
-            <div class="track-detector-title">
-              ${icons.ai(15)}
-              <span>Crossing Detector</span>
-            </div>
-            <p class="note">${esc(helpText)}</p>
-          </div>
+      <div class="track-detector-bar ${isAi ? "is-ai-active" : ""}">
+        <div class="track-detector-title" title="${esc(aiTitle)}">
+          ${icons.ai(15)}
+          <span class="track-detector-label-full">Crossing detector</span>
+          <span class="track-detector-label-short">${isAi ? "Detector" : "Crossing detector"}</span>
+        </div>
+        <div class="track-detector-controls">
+          ${
+            isAi
+              ? `<select class="input rule-detector-select" data-ml-model-select aria-label="Trained AI model" ${disAttr}>
+                   ${optionsHtml}
+                 </select>
+                 <button
+                   type="button"
+                   class="scope-tune-seg-btn track-detector-tune-btn ${liveTuneOn ? "is-active" : ""}"
+                   data-ml-live-tune-btn
+                   aria-pressed="${liveTuneOn ? "true" : "false"}"
+                   title="Live 2-lap per-timer fine-tuning (${liveTuneOn ? "On" : "Off"})"
+                   ${disAttr}
+                 >2L Tune</button>`
+              : ""
+          }
           <div class="scope-tune-seg detector-mode-seg" role="radiogroup" aria-label="Crossing detector">
             <button
               type="button"
@@ -135,36 +152,24 @@ export class CrossingDetectorCard extends Component {
               class="scope-tune-seg-btn ${!isAi ? "is-active" : ""}"
               data-ml-detector-mode="classic"
               ${disAttr}
-            >Classic DSP</button>
+            >Classic</button>
             <button
               type="button"
               role="radio"
               aria-checked="${isAi}"
               class="scope-tune-seg-btn ${isAi ? "is-active" : ""}"
               data-ml-detector-mode="ai"
-              title="${hasReady ? "Use a Ready trained crossing model" : "Train and mark a model Ready in Practice → AI Training first"}"
+              title="${esc(aiTitle)}"
               ${aiBtnDis}
-            >AI Model</button>
+            >AI</button>
           </div>
         </div>
-        ${
-          isAi
-            ? `<div class="track-detector-subrow">
-                 <select class="input rule-detector-select" data-ml-model-select aria-label="Trained AI model" ${disAttr}>
-                   ${optionsHtml}
-                 </select>
-                 <label class="ai-check-label rule-detector-live-tune">
-                   <input type="checkbox" data-ml-live-tune ${liveTuneOn ? "checked" : ""} ${disAttr} />
-                   <span>Live 2-lap tune</span>
-                 </label>
-               </div>`
-            : ""
-        }
       </div>`;
 
     if (nextHtml !== this.lastHtml) {
       this.lastHtml = nextHtml;
       this.el.innerHTML = nextHtml;
+      scanCustomSelects(this.el);
     }
   }
 }

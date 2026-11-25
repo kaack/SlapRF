@@ -3268,47 +3268,69 @@ html[data-theme="light"] .bar-time {
 
 .track-detector-bar {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 14px 20px;
-}
-
-.track-detector-main {
-  display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.track-detector-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.track-detector-copy > .note {
-  margin: 0;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 16px;
+  flex-wrap: nowrap;
 }
 
 .track-detector-title {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 14px;
-  font-weight: 650;
+  font-size: 13.5px;
+  font-weight: 600;
   color: var(--text);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
-.track-detector-subrow {
+.track-detector-label-short {
+  display: none;
+}
+
+.track-detector-controls {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.track-detector-controls .rule-detector-select,
+.track-detector-controls .custom-select-wrap {
+  height: 28px;
+  min-width: 90px;
+  max-width: 200px;
+  font-size: 12px;
+  flex: 0 1 180px;
+}
+
+.track-detector-controls .custom-select-trigger {
+  height: 28px !important;
+  min-height: 28px !important;
+  padding: 0 8px !important;
+  font-size: 12px !important;
+}
+
+.track-detector-tune-btn {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 11.5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.track-detector-tune-btn.is-active {
+  border-color: color-mix(in srgb, var(--accent, #38bdf8) 55%, var(--border-strong));
+  color: var(--text);
 }
 
 /* Timing rules: global vs per-gate scope */
@@ -3367,23 +3389,24 @@ html[data-theme="light"] .bar-time {
     flex: 0 0 auto;
   }
   .track-detector-bar {
-    padding: 10px 14px;
+    min-height: 42px;
+    padding: 6px 12px;
     gap: 8px;
   }
-  .track-detector-main {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
+  .track-detector-label-full {
+    display: none;
   }
-  .track-detector-main .detector-mode-seg {
-    width: 100%;
+  .track-detector-label-short {
+    display: inline;
   }
-  .track-detector-main .detector-mode-seg > .scope-tune-seg-btn {
-    flex: 1 1 50%;
+  .track-detector-bar.is-ai-active .track-detector-label-short {
+    display: none;
   }
-  .track-detector-subrow {
-    justify-content: space-between;
-    width: 100%;
+  .track-detector-controls .rule-detector-select,
+  .track-detector-controls .custom-select-wrap {
+    flex: 1 1 80px;
+    min-width: 0;
+    max-width: none;
   }
   .scoped-track-workspace > [data-slot="rules"] {
     flex: 0 1 auto;
