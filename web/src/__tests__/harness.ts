@@ -1215,6 +1215,49 @@ export function makeMockApiClient(store: AppStore): MockApiClientRecord {
       calls.push({ method: "startMLTraining", args });
       return Promise.resolve(store.mlStatus);
     },
+    createMLModel: (...args: unknown[]) => {
+      calls.push({ method: "createMLModel", args });
+      const [name] = args as [string];
+      const next = structuredClone(store.mlStatus);
+      const nextVer = next.models.reduce((mx, m) => Math.max(mx, m.version), 0) + 1;
+      const created = {
+        modelId: `mdl-mock-${nextVer}`,
+        name: String(name ?? "").trim(),
+        version: nextVer,
+        createdAt: "2026-11-24T00:00:00Z",
+        builtIn: false,
+        ready: false,
+        epochsTrained: 0,
+        trainPacks: 0,
+        valPacks: 0,
+        trainPasses: 0,
+        trainDurationMs: 0,
+        finalLoss: 0,
+        aiMetrics: {
+          totalPasses: 0,
+          detectedPasses: 0,
+          missedPasses: 0,
+          falseTriggers: 0,
+          precision: 0,
+          recall: 0,
+          f1: 0,
+          meanJitterMs: 0,
+        },
+        classicMetrics: {
+          totalPasses: 0,
+          detectedPasses: 0,
+          missedPasses: 0,
+          falseTriggers: 0,
+          precision: 0,
+          recall: 0,
+          f1: 0,
+          meanJitterMs: 0,
+        },
+      };
+      next.models = [created, ...next.models];
+      store.ingestMLStatus(next);
+      return Promise.resolve(next);
+    },
     updateMLModel: (...args: unknown[]) => {
       calls.push({ method: "updateMLModel", args });
       const [modelId, patch] = args as [string, { name?: string; ready?: boolean }?];

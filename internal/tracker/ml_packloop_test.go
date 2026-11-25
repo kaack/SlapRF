@@ -140,7 +140,16 @@ func TestHandsFreePackLoopTraceReplayAndOnDeviceMLTraining(t *testing.T) {
 		t.Fatalf("set_training_verified: %v", err)
 	}
 
-	if _, err := eng.StartMLTraining(MLTrainRequest{Epochs: 8}); err != nil {
+	createdSt, err := eng.CreateMLModel("Backyard 2-Gate")
+	if err != nil {
+		t.Fatalf("CreateMLModel: %v", err)
+	}
+	untrainedID := createdSt.Models[0].ModelID
+	if createdSt.Models[0].EpochsTrained != 0 || createdSt.Models[0].Ready {
+		t.Fatalf("expected newly created model to start untrained, got %+v", createdSt.Models[0])
+	}
+
+	if _, err := eng.StartMLTraining(MLTrainRequest{Epochs: 8, ContinueModelID: untrainedID}); err != nil {
 		t.Fatalf("StartMLTraining: %v", err)
 	}
 	deadline := time.Now().Add(15 * time.Second)
@@ -153,8 +162,8 @@ func TestHandsFreePackLoopTraceReplayAndOnDeviceMLTraining(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if trainedID == "" {
-		t.Fatalf("timed out waiting for background ML training: %+v", eng.MLStatus().Training)
+	if trainedID != untrainedID {
+		t.Fatalf("expected untrained model %q to train in-place, got completed=%q (training=%+v)", untrainedID, trainedID, eng.MLStatus().Training)
 	}
 
 	// Continue fine-tuning the draft model (+4 epochs) and mark it Ready!

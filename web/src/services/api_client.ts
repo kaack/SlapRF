@@ -1243,6 +1243,13 @@ export class ApiClient {
     return st;
   }
 
+  public async createMLModel(name: string): Promise<MLStatus> {
+    const st = await this.transport.request<MLStatus>("POST", "/v1/ml/models", { name });
+    this.store.ingestMLStatus(st);
+    await this.persistBrowserEnginesIfDemo();
+    return st;
+  }
+
   public async updateMLModel(
     modelId: string,
     payload: { name?: string; ready?: boolean }

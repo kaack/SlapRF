@@ -13,13 +13,16 @@ function countValidLaps(s: PracticeSession): number {
   return (s.laps ?? []).filter((l) => !l.invalidated).length;
 }
 
-type AITrainMode = "new" | "finetune";
+function isTrainedModel(m: MLModelSummary): boolean {
+  return Boolean(m.builtIn || (m.epochsTrained ?? 0) > 0);
+}
 
 /**
- * Clean, explicit `AI` training tab inside each Practice session (`#/practice/<session>/ai`):
- * - **New Model**: Train a brand-new model from scratch using this practice's data (plus other practices if checked).
- * - **Fine-Tune**: Pick an existing model and fine-tune it with this practice's new data.
- * - Mark Ready -> available in Race & Practice `Track`.
+ * `AI Training` tab inside each Practice session (`#/practice/<session>/ai`):
+ * 1. Top card (matching `Pilots`): Search / `+ Add` bar + top-5 scrollable `Models` list (`1P` + custom trained/untrained).
+ * 2. Bottom card: Context-aware training box whose action & content adapt to the selected model:
+ *    - **Untrained model** -> `Train` (trains from scratch into that model's immutable ID).
+ *    - **Trained model** -> `Fine-Tune` + compact `DSP` vs `AI` metrics table.
  */
 export class PracticeAITrainingTab extends Component {
   private readonly store: AppStore;
@@ -27,14 +30,13 @@ export class PracticeAITrainingTab extends Component {
   private readonly onOpenTab: (tab: "review" | "signals" | "track") => void;
 
   private lastSessionId = "";
-  private trainMode: AITrainMode | null = null;
-  private newModelNameDraft = "";
-  private includeOthersForNew = true;
-  private includeOthersForFineTune = false;
+  private searchQuery = "";
   private selectedModelId = "";
   private editingModelName = false;
   private renameDraft = "";
   private pendingFocusRename = false;
+  private includeOthersForNew = true;
+  private includeOthersForFineTune = false;
   private lastCompletedId = "";
   private startingTraining = false;
   private startingEpochs = 28;
@@ -65,8 +67,12 @@ export class PracticeAITrainingTab extends Component {
         if (
           active instanceof HTMLInputElement &&
           this.el.contains(active) &&
-          (active.hasAttribute("data-ai-model-name") || active.hasAttribute("data-ai-rename-input"))
+          (active.hasAttribute("data-ai-search-input") ||
+            active.hasAttribute("data-ai-rename-input"))
         ) {
+          if (active.hasAttribute("data-ai-search-input")) {
+            this.syncSearchResultsInPlace();
+          }
           return;
         }
         this.render();
@@ -93,17 +99,23 @@ export class PracticeAITrainingTab extends Component {
     return this.store.mlStatus.models ?? [];
   }
 
-  private defaultNewModelName(sess: PracticeSession | undefined): string {
-    const base = sess?.name?.trim() || "Practice";
-    const models = this.allModels();
-    if (!models.some((m) => m.name.toLowerCase() === base.toLowerCase())) {
-      return base;
-    }
-    let idx = 2;
-    while (models.some((m) => m.name.toLowerCase() === `${base} v${idx}`.toLowerCase())) {
-      idx++;
-    }
-    return `${base} v${idx}`;
+  private filteredModels(): MLModelSummary[] {
+    const q = this.searchQuery.trim().toLowerCase();
+    const all = this.allModels();
+    if (!q) return all;
+    return all.filter(
+      (m) =>
+        m.name.toLowerCase().includes(q) ||
+        (m.builtIn && "1p".includes(q)) ||
+        (!isTrainedModel(m) && "untrained".includes(q))
+    );
+  }
+
+  private canCreateFromSearch(): boolean {
+    const q = this.searchQuery.trim();
+    if (!q) return false;
+    const lower = q.toLowerCase();
+    return !this.allModels().some((m) => m.name.trim().toLowerCase() === lower);
   }
 
   private resolveSelectedModel(sess: PracticeSession | undefined): MLModelSummary | null {
@@ -130,28 +142,10 @@ export class PracticeAITrainingTab extends Component {
     return models[0] ?? null;
   }
 
-  private resolveTrainMode(sess: PracticeSession | undefined): AITrainMode {
-    const models = this.allModels();
-    if (models.length === 0) return "new";
-    if (this.trainMode) return this.trainMode;
-    if (
-      sess &&
-      models.some(
-        (x) =>
-          (x.sourceSessionIds ?? []).includes(sess.sessionId) ||
-          x.modelId === this.store.mlStatus.training.completedModelId
-      )
-    ) {
-      return "finetune";
-    }
-    return "finetune";
-  }
-
   private computeSig(): string {
     const sess = this.store.selectedPracticeSession;
     const ml = this.store.mlStatus;
     const others = this.otherRecordedSessions(sess?.sessionId ?? "");
-    const mode = this.resolveTrainMode(sess);
     const modelsSig = this.allModels()
       .map(
         (m) =>
@@ -165,7 +159,7 @@ export class PracticeAITrainingTab extends Component {
       sess?.crossings.length ?? 0,
       others.length,
       others.reduce((sum, s) => sum + countValidPasses(s), 0),
-      mode,
+      this.searchQuery,
       this.includeOthersForNew ? 1 : 0,
       this.includeOthersForFineTune ? 1 : 0,
       this.selectedModelId,
@@ -186,6 +180,68 @@ export class PracticeAITrainingTab extends Component {
     ].join("::");
   }
 
+  private renderModelsListItemsHtml(selectedId: string): string {
+    const ml = this.store.mlStatus;
+    const filtered = this.filteredModels();
+    if (filtered.length === 0) {
+      return `<div class="ai-model-empty note">No matching models. Tap <strong>+ Add</strong> above to create "${esc(this.searchQuery.trim())}".</div>`;
+    }
+    return filtered
+      .map((m) => {
+        const isActive = ml.config.detectorMode === "ai" && ml.config.activeModelId === m.modelId;
+        const isSelected = selectedId === m.modelId;
+        const trained = isTrainedModel(m);
+        return `
+          <div class="ai-model-row ${isSelected ? "is-selected" : ""}">
+            <button
+              type="button"
+              class="ai-model-main"
+              data-ai-act="focus-model"
+              data-model-id="${esc(m.modelId)}"
+            >
+              <span class="ai-model-name">${esc(m.name)}</span>
+              ${m.builtIn ? `<span class="ai-1p-badge" title="Shipped 1P model">1P</span>` : ""}
+              ${
+                trained
+                  ? `<span class="ai-model-stats mono">${(m.aiMetrics.f1 * 100).toFixed(0)}% · ${m.epochsTrained || 18}ep</span>`
+                  : `<span class="ai-model-stats is-untrained">Untrained</span>`
+              }
+            </button>
+            <div class="ai-model-row-actions">
+              ${isActive ? `<span class="scope-ai-chip">Active</span>` : ""}
+              ${
+                m.builtIn
+                  ? ""
+                  : `<button
+                       type="button"
+                       class="btn btn-ghost btn-xs ai-model-del-btn"
+                       data-ai-act="delete-model"
+                       data-model-id="${esc(m.modelId)}"
+                       title="Delete ${esc(m.name)}"
+                       aria-label="Delete ${esc(m.name)}"
+                     >${icons.trash(13)}</button>`
+              }
+            </div>
+          </div>`;
+      })
+      .join("");
+  }
+
+  private syncSearchResultsInPlace(): void {
+    const sess = this.store.selectedPracticeSession;
+    const selectedModel = this.resolveSelectedModel(sess);
+    const listHost = this.el.querySelector<HTMLElement>("[data-ai-models-list-host]");
+    if (listHost) {
+      listHost.innerHTML = this.renderModelsListItemsHtml(selectedModel?.modelId ?? "");
+    }
+    const addBtn = this.el.querySelector<HTMLButtonElement>('[data-ai-act="create-model"]');
+    const isBusy = this.startingTraining || this.store.mlStatus.training.running;
+    if (addBtn) {
+      addBtn.disabled = isBusy || !this.canCreateFromSearch();
+    }
+    this.lastRenderSig = this.computeSig();
+  }
+
   public render(force = false): void {
     const sess = this.store.selectedPracticeSession;
     if (this.store.mlStatus.training.running && this.startingTraining) {
@@ -196,19 +252,15 @@ export class PracticeAITrainingTab extends Component {
       this.lastCompletedId = completedId;
       if (this.allModels().some((m) => m.modelId === completedId)) {
         this.selectedModelId = completedId;
-        this.trainMode = "finetune";
       }
     }
 
     if (sess && sess.sessionId !== this.lastSessionId) {
       this.lastSessionId = sess.sessionId;
-      this.trainMode = null;
       this.selectedModelId = "";
+      this.searchQuery = "";
       this.editingModelName = false;
       this.renameDraft = "";
-      this.newModelNameDraft = this.defaultNewModelName(sess);
-    } else if (!this.newModelNameDraft && sess) {
-      this.newModelNameDraft = this.defaultNewModelName(sess);
     }
 
     const sig = this.computeSig();
@@ -223,19 +275,18 @@ export class PracticeAITrainingTab extends Component {
     }
 
     const ml = this.store.mlStatus;
-    const models = this.allModels();
-    const mode = this.resolveTrainMode(sess);
     const curLaps = countValidLaps(sess);
     const curPasses = countValidPasses(sess);
     const others = this.otherRecordedSessions(sess.sessionId);
     const otherPasses = others.reduce((sum, s) => sum + countValidPasses(s), 0);
-    const includeOthers = mode === "new" ? this.includeOthersForNew : this.includeOthersForFineTune;
-    const totalPasses = curPasses + (includeOthers ? otherPasses : 0);
 
     const selectedModel = this.resolveSelectedModel(sess);
     if (selectedModel && !this.selectedModelId) {
       this.selectedModelId = selectedModel.modelId;
     }
+    const selectedTrained = selectedModel ? isTrainedModel(selectedModel) : false;
+    const includeOthers = selectedTrained ? this.includeOthersForFineTune : this.includeOthersForNew;
+    const totalPasses = curPasses + (includeOthers ? otherPasses : 0);
 
     const isBusy = this.startingTraining || ml.training.running;
     const effTotalEpochs =
@@ -253,218 +304,168 @@ export class PracticeAITrainingTab extends Component {
       ${this.errorMsg ? `<div class="ai-train-banner is-error" role="alert">${esc(this.errorMsg)}</div>` : ""}
       ${this.statusMsg ? `<div class="ai-train-banner is-ok" role="status">${esc(this.statusMsg)}</div>` : ""}`;
 
-    const modeTabsHtml =
-      models.length > 0
-        ? `<div class="segmented ai-mode-seg" role="tablist" aria-label="Training mode">
-             <button
-               type="button"
-               role="tab"
-               aria-selected="${mode === "new" ? "true" : "false"}"
-               class="${mode === "new" ? "is-active" : ""}"
-               data-ai-train-mode="new"
-               ${isBusy ? "disabled" : ""}
-             >New Model</button>
-             <button
-               type="button"
-               role="tab"
-               aria-selected="${mode === "finetune" ? "true" : "false"}"
-               class="${mode === "finetune" ? "is-active" : ""}"
-               data-ai-train-mode="finetune"
-               ${isBusy ? "disabled" : ""}
-             >Fine-Tune</button>
-           </div>`
-        : "";
+    const canCreate = this.canCreateFromSearch();
+    const modelsCardHtml = `
+      <div class="card card-flush ai-models-card">
+        <div class="rc-pilots-search-bar practice-pop-search-bar ai-models-search-bar">
+          <div class="rc-pilots-search-row">
+            ${icons.search(13)}
+            <input
+              type="search"
+              class="input input-sm rc-pilots-search-input"
+              data-ai-search-input
+              value="${esc(this.searchQuery)}"
+              placeholder="Search or add model..."
+              maxlength="64"
+              autocomplete="off"
+              aria-label="Search or add model"
+            />
+          </div>
+          <button
+            type="button"
+            class="btn btn-ghost btn-xs bkt-pilots-add-btn"
+            data-ai-act="create-model"
+            ${canCreate && !isBusy ? "" : "disabled"}
+            title="Add new untrained model"
+          >
+            ${icons.plus(12)}<span>Add</span>
+          </button>
+        </div>
+        <div class="ai-model-list is-top-scrollable" data-ai-models-list-host>
+          ${this.renderModelsListItemsHtml(selectedModel?.modelId ?? "")}
+        </div>
+      </div>`;
 
-    const targetFineTuneModel = selectedModel ?? models[0] ?? null;
-    const controlsRowHtml =
-      mode === "finetune" && targetFineTuneModel
-        ? `<div class="ai-train-controls-row">
-             ${
-               this.editingModelName && !targetFineTuneModel.builtIn
-                 ? `<input
-                      type="text"
-                      class="input ai-name-input"
-                      data-ai-rename-input
-                      data-model-id="${esc(targetFineTuneModel.modelId)}"
-                      aria-label="Edit model name"
-                      value="${esc(this.renameDraft)}"
-                      maxlength="64"
-                    />`
-                 : `<div class="ai-name-readonly-field" data-ai-readonly-field>
-                      <span class="ai-name-readonly-text">${esc(targetFineTuneModel.name)}</span>
-                      ${
-                        targetFineTuneModel.builtIn
-                          ? `<span class="ai-1p-badge" title="Shipped 1P model">1P</span>`
-                          : `<button
-                               type="button"
-                               class="ai-name-pencil-btn"
-                               data-ai-act="edit-model-name"
-                               data-model-id="${esc(targetFineTuneModel.modelId)}"
-                               title="Rename model"
-                               aria-label="Rename model"
-                               ${isBusy ? "disabled" : ""}
-                             >${icons.pencil(13)}</button>`
-                      }
-                    </div>`
-             }
-             <button
-               type="button"
-               class="btn btn-sm"
-               data-ai-act="train-more"
-               data-model-id="${esc(targetFineTuneModel.modelId)}"
-               ${isBusy ? "disabled" : ""}
-             >${isBusy ? "Training…" : "Fine-Tune"}</button>
-           </div>`
-        : `<div class="ai-train-controls-row">
-             <input
-               type="text"
-               class="input ai-name-input"
-               data-ai-model-name
-               aria-label="New model name"
-               value="${esc(this.newModelNameDraft)}"
-               placeholder="New model name"
-               ${isBusy ? "disabled" : ""}
-             />
-             <button
-               type="button"
-               class="btn btn-sm"
-               data-ai-act="train-fresh"
-               ${isBusy ? "disabled" : ""}
-             >${isBusy ? "Training…" : "Train"}</button>
-           </div>`;
-
-    const shownScorecardModel = mode === "finetune" ? selectedModel : null;
-    const scorecardHtml = shownScorecardModel
+    const trainingBoxHtml = selectedModel
       ? `
-        <div class="ai-scorecard-box">
-          <div class="table-scroll">
-            <table class="table rc-compact-table ai-scorecard-table">
-              <thead>
-                <tr>
-                  <th>Metric</th>
-                  <th>DSP</th>
-                  <th>AI</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>Passes found</td>
-                  <td class="mono">${shownScorecardModel.classicMetrics.detectedPasses} / ${shownScorecardModel.classicMetrics.totalPasses}</td>
-                  <td class="mono"><strong>${shownScorecardModel.aiMetrics.detectedPasses} / ${shownScorecardModel.aiMetrics.totalPasses}</strong></td>
-                </tr>
-                <tr>
-                  <td>False triggers</td>
-                  <td class="mono">${shownScorecardModel.classicMetrics.falseTriggers}</td>
-                  <td class="mono"><strong>${shownScorecardModel.aiMetrics.falseTriggers}</strong></td>
-                </tr>
-                <tr>
-                  <td>Accuracy</td>
-                  <td class="mono">${(shownScorecardModel.classicMetrics.f1 * 100).toFixed(1)}%</td>
-                  <td class="mono"><strong>${(shownScorecardModel.aiMetrics.f1 * 100).toFixed(1)}%</strong></td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>`
-      : "";
+      <div class="card ai-train-card" data-ai-training-box data-model-state="${selectedTrained ? "trained" : "untrained"}">
+        <div class="ai-scorecard-head">
+          <span class="badge mono">${curLaps} laps · ${curPasses} passes</span>
+          <button type="button" class="btn btn-ghost btn-xs" data-ai-act="open-review">
+            ${icons.reviewCheck(14)}<span>Review Laps</span>
+          </button>
+        </div>
 
-    const savedModelsHtml =
-      models.length > 0
-        ? `
-        <div class="card ai-train-card">
-          <div class="ai-scorecard-head">
-            <h3 class="ai-card-title">Models</h3>
-            <div class="ai-model-row-actions">
-              <button type="button" class="btn btn-ghost btn-xs ai-model-use-btn" data-ai-act="export-dataset">Export</button>
-              <label class="btn btn-ghost btn-xs ai-model-use-btn ai-import-label">
-                <span>Import</span>
-                <input type="file" accept=".gz,.tgz,application/gzip" data-ai-import-file hidden />
-              </label>
-            </div>
-          </div>
-          <div class="ai-model-list">
-            ${models
-              .map((m) => {
-                const isActive =
-                  ml.config.detectorMode === "ai" && ml.config.activeModelId === m.modelId;
-                const isSelected = mode === "finetune" && targetFineTuneModel?.modelId === m.modelId;
-                return `
-                  <div class="ai-model-row ${isSelected ? "is-selected" : ""}">
-                    <button
-                      type="button"
-                      class="ai-model-main"
-                      data-ai-act="focus-model"
-                      data-model-id="${esc(m.modelId)}"
-                    >
-                      <span class="ai-model-name">${esc(m.name)}</span>
-                      ${m.builtIn ? `<span class="ai-1p-badge" title="Shipped 1P model">1P</span>` : ""}
-                      <span class="ai-model-stats mono">${(m.aiMetrics.f1 * 100).toFixed(0)}% · ${m.epochsTrained || 18}ep</span>
-                    </button>
-                    <div class="ai-model-row-actions">
-                      ${isActive ? `<span class="scope-ai-chip">Active</span>` : ""}
-                      ${
-                        m.builtIn
-                          ? ""
-                          : `<button
-                               type="button"
-                               class="btn btn-ghost btn-xs ai-model-del-btn"
-                               data-ai-act="delete-model"
-                               data-model-id="${esc(m.modelId)}"
-                               title="Delete ${esc(m.name)}"
-                               aria-label="Delete ${esc(m.name)}"
-                             >${icons.trash(13)}</button>`
-                      }
-                    </div>
-                  </div>`;
-              })
-              .join("")}
-          </div>
-        </div>`
-        : "";
+        ${
+          others.length > 0
+            ? `<label class="ai-check-label">
+                 <input type="checkbox" data-ai-include-others ${includeOthers ? "checked" : ""} ${isBusy ? "disabled" : ""} />
+                 <span>Include ${others.length} other practice${others.length === 1 ? "" : "s"} (${totalPasses} passes total)</span>
+               </label>`
+            : ""
+        }
+
+        <div class="ai-train-controls-row">
+          ${
+            this.editingModelName && !selectedModel.builtIn
+              ? `<input
+                   type="text"
+                   class="input ai-name-input"
+                   data-ai-rename-input
+                   data-model-id="${esc(selectedModel.modelId)}"
+                   aria-label="Edit model name"
+                   value="${esc(this.renameDraft)}"
+                   maxlength="64"
+                 />`
+              : `<div class="ai-name-readonly-field" data-ai-readonly-field>
+                   <span class="ai-name-readonly-text">${esc(selectedModel.name)}</span>
+                   ${
+                     selectedModel.builtIn
+                       ? `<span class="ai-1p-badge" title="Shipped 1P model">1P</span>`
+                       : `<button
+                            type="button"
+                            class="ai-name-pencil-btn"
+                            data-ai-act="edit-model-name"
+                            data-model-id="${esc(selectedModel.modelId)}"
+                            title="Rename model"
+                            aria-label="Rename model"
+                            ${isBusy ? "disabled" : ""}
+                          >${icons.pencil(13)}</button>`
+                   }
+                 </div>`
+          }
+          ${
+            selectedTrained
+              ? `<button
+                   type="button"
+                   class="btn btn-sm"
+                   data-ai-act="train-more"
+                   data-model-id="${esc(selectedModel.modelId)}"
+                   ${isBusy ? "disabled" : ""}
+                 >${isBusy ? "Training…" : "Fine-Tune"}</button>`
+              : `<button
+                   type="button"
+                   class="btn btn-sm"
+                   data-ai-act="train-fresh"
+                   data-model-id="${esc(selectedModel.modelId)}"
+                   ${isBusy ? "disabled" : ""}
+                 >${isBusy ? "Training…" : "Train"}</button>`
+          }
+        </div>
+
+        ${
+          isBusy
+            ? `<div class="ai-train-progress-wrap" data-ai-progress>
+                 <div class="ai-train-progress-text">
+                   <span>${effEpoch > 0 ? `Epoch ${effEpoch} / ${effTotalEpochs}` : "Preparing training data…"}</span>
+                   <span class="mono">${effEpoch > 0 ? `loss ${ml.training.loss.toFixed(4)}` : `0 / ${effTotalEpochs}`}</span>
+                 </div>
+                 <div class="ai-progress-track">
+                   <div class="ai-progress-fill" style="width:${trainPct}%"></div>
+                 </div>
+               </div>`
+            : ""
+        }
+
+        ${
+          selectedTrained
+            ? `<div class="ai-scorecard-box">
+                 <div class="table-scroll">
+                   <table class="table rc-compact-table ai-scorecard-table">
+                     <thead>
+                       <tr>
+                         <th>Metric</th>
+                         <th>DSP</th>
+                         <th>AI</th>
+                       </tr>
+                     </thead>
+                     <tbody>
+                       <tr>
+                         <td>Passes found</td>
+                         <td class="mono">${selectedModel.classicMetrics.detectedPasses} / ${selectedModel.classicMetrics.totalPasses}</td>
+                         <td class="mono"><strong>${selectedModel.aiMetrics.detectedPasses} / ${selectedModel.aiMetrics.totalPasses}</strong></td>
+                       </tr>
+                       <tr>
+                         <td>False triggers</td>
+                         <td class="mono">${selectedModel.classicMetrics.falseTriggers}</td>
+                         <td class="mono"><strong>${selectedModel.aiMetrics.falseTriggers}</strong></td>
+                       </tr>
+                       <tr>
+                         <td>Accuracy</td>
+                         <td class="mono">${(selectedModel.classicMetrics.f1 * 100).toFixed(1)}%</td>
+                         <td class="mono"><strong>${(selectedModel.aiMetrics.f1 * 100).toFixed(1)}%</strong></td>
+                       </tr>
+                     </tbody>
+                   </table>
+                 </div>
+               </div>`
+            : `<div class="ai-untrained-note note">Untrained model — tap <strong>Train</strong> to build it from this practice.</div>`
+        }
+      </div>`
+      : "";
 
     this.el.innerHTML = `
       <div class="ai-train-stack">
         ${alertsHtml}
-
-        <div class="card ai-train-card">
-          <div class="ai-scorecard-head">
-            <span class="badge mono">${curLaps} laps · ${curPasses} passes</span>
-            <button type="button" class="btn btn-ghost btn-xs" data-ai-act="open-review">
-              ${icons.reviewCheck(14)}<span>Review Laps</span>
-            </button>
-          </div>
-
-          ${modeTabsHtml}
-
-          ${
-            others.length > 0
-              ? `<label class="ai-check-label">
-                   <input type="checkbox" data-ai-include-others ${includeOthers ? "checked" : ""} ${isBusy ? "disabled" : ""} />
-                   <span>Include ${others.length} other practice${others.length === 1 ? "" : "s"} (${totalPasses} passes total)</span>
-                 </label>`
-              : ""
-          }
-
-          ${controlsRowHtml}
-
-          ${
-            isBusy
-              ? `<div class="ai-train-progress-wrap" data-ai-progress>
-                   <div class="ai-train-progress-text">
-                     <span>${effEpoch > 0 ? `Epoch ${effEpoch} / ${effTotalEpochs}` : "Preparing training data…"}</span>
-                     <span class="mono">${effEpoch > 0 ? `loss ${ml.training.loss.toFixed(4)}` : `0 / ${effTotalEpochs}`}</span>
-                   </div>
-                   <div class="ai-progress-track">
-                     <div class="ai-progress-fill" style="width:${trainPct}%"></div>
-                   </div>
-                 </div>`
-              : ""
-          }
-
-          ${scorecardHtml}
+        ${modelsCardHtml}
+        ${trainingBoxHtml}
+        <div class="ai-bundle-footer">
+          <button type="button" class="btn btn-ghost btn-xs ai-model-use-btn" data-ai-act="export-dataset">Export Bundle</button>
+          <label class="btn btn-ghost btn-xs ai-model-use-btn ai-import-label">
+            <span>Import Bundle</span>
+            <input type="file" accept=".gz,.tgz,application/gzip" data-ai-import-file hidden />
+          </label>
         </div>
-
-        ${savedModelsHtml}
       </div>`;
 
     if (this.pendingFocusRename) {
@@ -477,10 +478,10 @@ export class PracticeAITrainingTab extends Component {
     }
   }
 
-  private selectedSessionIds(mode: AITrainMode): string[] {
+  private selectedSessionIds(forTrainedModel: boolean): string[] {
     const sess = this.store.selectedPracticeSession;
     if (!sess) return [];
-    const includeOthers = mode === "new" ? this.includeOthersForNew : this.includeOthersForFineTune;
+    const includeOthers = forTrainedModel ? this.includeOthersForFineTune : this.includeOthersForNew;
     if (!includeOthers) {
       return [sess.sessionId];
     }
@@ -488,10 +489,33 @@ export class PracticeAITrainingTab extends Component {
     return [sess.sessionId, ...others];
   }
 
+  private createModelFromQuery(): void {
+    if (this.startingTraining || this.store.mlStatus.training.running) return;
+    const cleanName = this.searchQuery.trim();
+    if (!cleanName || !this.canCreateFromSearch()) return;
+    this.errorMsg = "";
+    this.statusMsg = "";
+    void this.api
+      .createMLModel(cleanName)
+      .then((st) => {
+        const created = (st?.models ?? []).find(
+          (m) => m.name.trim().toLowerCase() === cleanName.toLowerCase()
+        );
+        this.searchQuery = "";
+        this.editingModelName = false;
+        if (created) {
+          this.selectedModelId = created.modelId;
+        }
+        this.render(true);
+      })
+      .catch((err: unknown) => this.setErr(err));
+  }
+
   private readonly handleInput = (e: Event): void => {
     const target = e.target;
-    if (target instanceof HTMLInputElement && target.hasAttribute("data-ai-model-name")) {
-      this.newModelNameDraft = target.value;
+    if (target instanceof HTMLInputElement && target.hasAttribute("data-ai-search-input")) {
+      this.searchQuery = target.value;
+      this.syncSearchResultsInPlace();
     } else if (target instanceof HTMLInputElement && target.hasAttribute("data-ai-rename-input")) {
       this.renameDraft = target.value;
     }
@@ -499,17 +523,35 @@ export class PracticeAITrainingTab extends Component {
 
   private readonly handleKeyDown = (e: KeyboardEvent): void => {
     const target = e.target;
-    if (!(target instanceof HTMLInputElement) || !target.hasAttribute("data-ai-rename-input")) {
+    if (!(target instanceof HTMLInputElement)) return;
+
+    if (target.hasAttribute("data-ai-search-input")) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (this.canCreateFromSearch()) {
+          this.createModelFromQuery();
+        } else {
+          const first = this.filteredModels()[0];
+          if (first) {
+            this.selectedModelId = first.modelId;
+            this.searchQuery = "";
+            this.render(true);
+          }
+        }
+      }
       return;
     }
-    if (e.key === "Enter") {
-      e.preventDefault();
-      target.blur();
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      this.editingModelName = false;
-      this.renameDraft = "";
-      this.render(true);
+
+    if (target.hasAttribute("data-ai-rename-input")) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        target.blur();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        this.editingModelName = false;
+        this.renameDraft = "";
+        this.render(true);
+      }
     }
   };
 
@@ -544,11 +586,11 @@ export class PracticeAITrainingTab extends Component {
     if (!(target instanceof Element)) return;
 
     if (target instanceof HTMLInputElement && target.hasAttribute("data-ai-include-others")) {
-      const mode = this.resolveTrainMode(this.store.selectedPracticeSession);
-      if (mode === "new") {
-        this.includeOthersForNew = target.checked;
-      } else {
+      const sel = this.resolveSelectedModel(this.store.selectedPracticeSession);
+      if (sel && isTrainedModel(sel)) {
         this.includeOthersForFineTune = target.checked;
+      } else {
+        this.includeOthersForNew = target.checked;
       }
       this.render(true);
       return;
@@ -586,18 +628,6 @@ export class PracticeAITrainingTab extends Component {
     const target = e.target;
     if (!(target instanceof Element)) return;
 
-    const modeBtn = target.closest<HTMLButtonElement>("[data-ai-train-mode]");
-    if (modeBtn) {
-      const next = modeBtn.dataset.aiTrainMode === "finetune" ? "finetune" : "new";
-      this.trainMode = next;
-      this.editingModelName = false;
-      if (next === "new" && !this.newModelNameDraft.trim()) {
-        this.newModelNameDraft = this.defaultNewModelName(this.store.selectedPracticeSession);
-      }
-      this.render(true);
-      return;
-    }
-
     const btn = target.closest<HTMLElement>("[data-ai-act]");
     if (!btn || (btn instanceof HTMLButtonElement && btn.disabled)) return;
 
@@ -605,6 +635,10 @@ export class PracticeAITrainingTab extends Component {
     this.errorMsg = "";
 
     switch (act) {
+      case "create-model":
+        this.createModelFromQuery();
+        break;
+
       case "open-review":
         this.onOpenTab("review");
         break;
@@ -630,7 +664,6 @@ export class PracticeAITrainingTab extends Component {
         const mod = this.allModels().find((m) => m.modelId === id);
         if (mod) {
           this.selectedModelId = mod.modelId;
-          this.trainMode = "finetune";
           this.editingModelName = false;
           this.render(true);
         }
@@ -639,9 +672,13 @@ export class PracticeAITrainingTab extends Component {
 
       case "train-fresh": {
         if (this.startingTraining || this.store.mlStatus.training.running) return;
+        const modelId =
+          btn.dataset.modelId ||
+          this.resolveSelectedModel(this.store.selectedPracticeSession)?.modelId ||
+          "";
+        if (!modelId) return;
         this.statusMsg = "";
-        const sess = this.store.selectedPracticeSession;
-        const cleanName = this.newModelNameDraft.trim() || this.defaultNewModelName(sess);
+        this.selectedModelId = modelId;
         this.startingTraining = true;
         this.startingEpochs = 28;
         this.render(true);
@@ -649,11 +686,10 @@ export class PracticeAITrainingTab extends Component {
           .startMLTraining({
             epochs: 28,
             includeUnverified: true,
-            sessionIds: this.selectedSessionIds("new"),
-            modelName: cleanName,
+            sessionIds: this.selectedSessionIds(false),
+            continueModelId: modelId,
           })
           .then((st) => {
-            this.newModelNameDraft = "";
             if (!st?.training?.running) {
               this.startingTraining = false;
               this.render(true);
@@ -682,7 +718,7 @@ export class PracticeAITrainingTab extends Component {
           .startMLTraining({
             epochs: 20,
             includeUnverified: true,
-            sessionIds: this.selectedSessionIds("finetune"),
+            sessionIds: this.selectedSessionIds(true),
             continueModelId: modelId,
           })
           .then((st) => {

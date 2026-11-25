@@ -266,6 +266,11 @@ func (e *Engine) UpdateMLConfig(req MLConfigPayload) (domain.MLStatus, error) {
 		found := id == "ai-base-v0"
 		for _, m := range e.mlState.Models {
 			if m.ModelID == id {
+				if len(m.Weights) != ml.TotalParams {
+					st := e.buildMLStatusLocked()
+					e.mu.Unlock()
+					return st, fmt.Errorf("model %q has not been trained yet", m.Name)
+				}
 				found = true
 				break
 			}
@@ -738,6 +743,57 @@ func (e *Engine) sealAndAdvancePackLocked() string {
 	return newID
 }
 
+// CreateMLModel registers a new untrained custom model (`epochsTrained=0`, `ready=false`) with a
+// globally unique immutable `mdl-*` identifier so the user can add named models and train them on-demand.
+func (e *Engine) CreateMLModel(name string) (domain.MLStatus, error) {
+	trimmed := strings.TrimSpace(name)
+	e.mu.Lock()
+	e.ensureMLInitializedLocked()
+	if trimmed == "" {
+		st := e.buildMLStatusLocked()
+		e.mu.Unlock()
+		return st, errors.New("model name is required")
+	}
+	baseSum := ml.PretrainedBaseSummary()
+	if strings.EqualFold(trimmed, baseSum.Name) {
+		st := e.buildMLStatusLocked()
+		e.mu.Unlock()
+		return st, fmt.Errorf("a model named %q already exists", trimmed)
+	}
+	for _, m := range e.mlState.Models {
+		if strings.EqualFold(strings.TrimSpace(m.Name), trimmed) {
+			st := e.buildMLStatusLocked()
+			e.mu.Unlock()
+			return st, fmt.Errorf("a model named %q already exists", trimmed)
+		}
+	}
+
+	nextVer := 1
+	for _, m := range e.mlState.Models {
+		if m.Version >= nextVer {
+			nextVer = m.Version + 1
+		}
+	}
+	snap := domain.MLModelSnapshot{
+		MLModelSummary: domain.MLModelSummary{
+			ModelID:       newModelID(),
+			Name:          trimmed,
+			Version:       nextVer,
+			CreatedAt:     nowISO(),
+			BuiltIn:       false,
+			Ready:         false,
+			EpochsTrained: 0,
+		},
+	}
+	e.mlState.Models = append(e.mlState.Models, snap)
+	st := e.buildMLStatusLocked()
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	e.notifyMLUpdated(st, subs)
+	return st, nil
+}
+
 // MLModelUpdatePayload updates a saved custom model's display name or Ready state.
 type MLModelUpdatePayload struct {
 	Name  *string `json:"name,omitempty"`
@@ -914,16 +970,30 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 	if cid := strings.TrimSpace(req.ContinueModelID); cid != "" {
 		foundExisting := false
 		for _, m := range e.mlState.Models {
-			if m.ModelID == cid && len(m.Weights) == ml.TotalParams {
-				cloned := &ml.TCN{}
-				if cloned.ImportWeights(m.Weights) {
-					initTCN = cloned
-					lr = 0.0018
+			if m.ModelID == cid {
+				if len(m.Weights) == ml.TotalParams {
+					cloned := &ml.TCN{}
+					if cloned.ImportWeights(m.Weights) {
+						initTCN = cloned
+						lr = 0.0018
+						updateInPlaceID = m.ModelID
+						preserveBuiltIn = m.BuiltIn
+						prevEpochs = m.EpochsTrained
+						prevDurMs = m.TrainDurationMs
+						if m.BuiltIn || baseName == "" {
+							baseName = m.Name
+						}
+						foundExisting = true
+					}
+				} else {
+					// Untrained model created via `+ Add`: train from scratch into this immutable ModelID!
+					initTCN = basePretrained
+					lr = 0.0035
 					updateInPlaceID = m.ModelID
-					preserveBuiltIn = m.BuiltIn
-					prevEpochs = m.EpochsTrained
-					prevDurMs = m.TrainDurationMs
-					if m.BuiltIn || baseName == "" {
+					preserveBuiltIn = false
+					prevEpochs = 0
+					prevDurMs = 0
+					if baseName == "" {
 						baseName = m.Name
 					}
 					foundExisting = true
@@ -1172,6 +1242,7 @@ func (e *Engine) runMLTrainingWorker(
 					}
 				}
 				e.mlState.Models[i].Name = modelName
+				e.mlState.Models[i].Ready = true
 				e.mlState.Models[i].EpochsTrained = totalEpochsTrained
 				e.mlState.Models[i].SourceSessionIDs = mergedIDs
 				e.mlState.Models[i].TrainPacks = len(mergedIDs)

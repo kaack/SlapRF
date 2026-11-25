@@ -2728,12 +2728,46 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
         )
       ).toBe(true);
 
-      // Switching to "New Model" mode shows the new model name input + Train button (no continueModelId)
-      host.querySelector<HTMLButtonElement>('[data-ai-train-mode="new"]')!.click();
+      // 4. Add a new untrained model via the top Search / + Add bar -> Training Box switches to Untrained (`Train` only!)
+      const searchInput = host.querySelector<HTMLInputElement>("[data-ai-search-input]")!;
+      const addModelBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="create-model"]')!;
+      expect(searchInput).not.toBeNull();
+      expect(addModelBtn.disabled).toBe(true);
+      searchInput.value = "Outdoor Gate";
+      searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(addModelBtn.disabled).toBe(false);
+      addModelBtn.click();
       await flushMicrotasks();
-      expect(host.querySelector("[data-ai-model-name]")).not.toBeNull();
-      host.querySelector<HTMLButtonElement>('[data-ai-train-mode="finetune"]')!.click();
+
+      const untrainedModel = store.mlStatus.models.find((m) => m.name === "Outdoor Gate")!;
+      expect(untrainedModel).toBeDefined();
+      expect(untrainedModel.epochsTrained).toBe(0);
+      expect(
+        host.querySelector<HTMLElement>("[data-ai-training-box]")?.dataset.modelState
+      ).toBe("untrained");
+      expect(host.querySelector('[data-ai-act="train-more"]')).toBeNull();
+      expect(host.querySelector(".ai-scorecard-box")).toBeNull();
+      const trainFreshBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="train-fresh"]')!;
+      expect(trainFreshBtn.textContent?.trim()).toBe("Train");
+      trainFreshBtn.click();
       await flushMicrotasks();
+      expect(
+        mock.calls.some(
+          (c) =>
+            c.method === "startMLTraining" &&
+            (c.args[0] as { continueModelId?: string })?.continueModelId === untrainedModel.modelId
+        )
+      ).toBe(true);
+
+      // Select trained `ai-base-v1` -> Training Box switches to Trained (`Fine-Tune` + DSP/AI metrics table)
+      host
+        .querySelector<HTMLButtonElement>('[data-ai-act="focus-model"][data-model-id="ai-base-v1"]')!
+        .click();
+      await flushMicrotasks();
+      expect(
+        host.querySelector<HTMLElement>("[data-ai-training-box]")?.dataset.modelState
+      ).toBe("trained");
+      expect(host.querySelector('[data-ai-act="train-fresh"]')).toBeNull();
 
       // 5. Shipped 1P model (`ai-base-v0` / "SlapRF Base") cannot be deleted or renamed, but CAN be fine-tuned!
       expect(

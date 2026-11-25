@@ -155,6 +155,23 @@ func (s *Server) handleStartMLTraining(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, st)
 }
 
+func (s *Server) handleCreateMLModel(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	st, err := s.activeEngine().CreateMLModel(body.Name)
+	if err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.logUserAction("ML", "Created untrained AI model %q", strings.TrimSpace(body.Name))
+	writeJSON(w, http.StatusCreated, st)
+}
+
 func (s *Server) handlePatchMLModel(w http.ResponseWriter, r *http.Request) {
 	modelID := strings.TrimSpace(r.PathValue("modelId"))
 	if !rejectColonInPathValue(w, modelID) {

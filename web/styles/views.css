@@ -28383,9 +28383,53 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
   text-align: right;
 }
 
+.ai-models-card {
+  overflow: hidden;
+}
+
+.ai-models-search-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .ai-model-list {
   display: flex;
   flex-direction: column;
+  gap: 6px;
+}
+
+.ai-model-list.is-top-scrollable {
+  padding: 10px 12px;
+  max-height: 234px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
+.ai-model-empty {
+  padding: 10px 4px;
+  text-align: center;
+  font-size: 12.5px;
+}
+
+.ai-model-stats.is-untrained {
+  color: var(--warn, #f59e0b);
+  font-weight: 550;
+}
+
+.ai-untrained-note {
+  font-size: 12.5px;
+  padding: 2px 0;
+}
+
+.ai-bundle-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
   gap: 6px;
 }
 

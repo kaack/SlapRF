@@ -83,7 +83,9 @@ export class CrossingDetectorCard extends Component {
   }
 
   private trainedModels(): MLModelSummary[] {
-    return this.store.mlStatus?.models ?? [];
+    return (this.store.mlStatus?.models ?? []).filter(
+      (m) => m.builtIn || (m.epochsTrained ?? 0) > 0
+    );
   }
 
   private render(): void {
