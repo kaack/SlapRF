@@ -2744,7 +2744,6 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       ).not.toBeNull();
 
       const boxBefore = host.querySelector<HTMLElement>(".ai-scorecard-box")!.getBoundingClientRect();
-      const headBefore = host.querySelector<HTMLElement>(".ai-scorecard-box .ai-scorecard-head")!.getBoundingClientRect();
       const col2Before = host.querySelector<HTMLElement>(".ai-scorecard-table th:nth-child(2)")!.getBoundingClientRect();
 
       host
@@ -2753,15 +2752,14 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       await flushMicrotasks();
 
       const boxAfter = host.querySelector<HTMLElement>(".ai-scorecard-box")!.getBoundingClientRect();
-      const headAfter = host.querySelector<HTMLElement>(".ai-scorecard-box .ai-scorecard-head")!.getBoundingClientRect();
       const col2After = host.querySelector<HTMLElement>(".ai-scorecard-table th:nth-child(2)")!.getBoundingClientRect();
-      expect(Math.round(headAfter.height)).toBe(Math.round(headBefore.height));
       expect(Math.round(boxAfter.height)).toBe(Math.round(boxBefore.height));
       expect(Math.round(col2After.left)).toBe(Math.round(col2Before.left));
       expect(Math.round(col2After.width)).toBe(Math.round(col2Before.width));
 
       expect(host.querySelector('[data-ai-act="edit-model-name"]')).toBeNull();
       expect(host.querySelector("[data-ai-readonly-field]")?.textContent ?? "").toContain("1P");
+      expect(host.querySelector('[data-ai-act="use-model"]')).toBeNull();
       host.querySelector<HTMLButtonElement>('[data-ai-act="train-more"]')!.click();
       await flushMicrotasks();
       expect(
@@ -2772,15 +2770,13 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
         )
       ).toBe(true);
 
-      // 6. Tap Use on custom model -> activates AI mode in Track!
-      const useBtn = host.querySelector<HTMLButtonElement>(
-        '.ai-model-list [data-ai-act="use-model"][data-model-id="ai-base-v1"]'
+      // 6. Switch to AI detector from the Track Crossing Detector card!
+      const rulesAiBtnAfter = detectorSlot.querySelector<HTMLButtonElement>(
+        '[data-ml-detector-mode="ai"]'
       )!;
-      expect(useBtn).not.toBeNull();
-      useBtn.click();
+      rulesAiBtnAfter.click();
       await flushMicrotasks();
       expect(store.mlStatus.config.detectorMode).toBe("ai");
-      expect(store.mlStatus.config.activeModelId).toBe("ai-base-v1");
       expect(detectorSlot.querySelector("[data-ml-model-select]")).not.toBeNull();
       expect(Math.round(detectorSlot.getBoundingClientRect().height)).toBeLessThanOrEqual(48);
     } finally {

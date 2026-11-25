@@ -28321,11 +28321,11 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
 .ai-scorecard-box {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px;
+  padding: 2px 0;
   border-radius: 8px;
   background: var(--surface-2, rgba(255, 255, 255, 0.03));
   border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  overflow: hidden;
 }
 
 .ai-scorecard-title {

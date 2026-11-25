@@ -334,31 +334,9 @@ export class PracticeAITrainingTab extends Component {
            </div>`;
 
     const shownScorecardModel = mode === "finetune" ? selectedModel : null;
-    const isScorecardActive = Boolean(
-      shownScorecardModel &&
-        ml.config.detectorMode === "ai" &&
-        ml.config.activeModelId === shownScorecardModel.modelId
-    );
     const scorecardHtml = shownScorecardModel
       ? `
         <div class="ai-scorecard-box">
-          <div class="ai-scorecard-head">
-            <div class="ai-scorecard-title-wrap">
-              <strong class="ai-model-name">${esc(shownScorecardModel.name)}</strong>
-              ${shownScorecardModel.builtIn ? `<span class="ai-1p-badge">1P</span>` : ""}
-              <span class="note mono">${shownScorecardModel.epochsTrained || 18}ep</span>
-            </div>
-            ${
-              isScorecardActive
-                ? `<span class="scope-ai-chip">Active</span>`
-                : `<button
-                     type="button"
-                     class="btn btn-ghost btn-xs ai-model-use-btn"
-                     data-ai-act="use-model"
-                     data-model-id="${esc(shownScorecardModel.modelId)}"
-                   >Use</button>`
-            }
-          </div>
           <div class="table-scroll">
             <table class="table rc-compact-table ai-scorecard-table">
               <thead>
@@ -411,7 +389,7 @@ export class PracticeAITrainingTab extends Component {
                   ml.config.detectorMode === "ai" && ml.config.activeModelId === m.modelId;
                 const isSelected = mode === "finetune" && targetFineTuneModel?.modelId === m.modelId;
                 return `
-                  <div class="ai-model-row ${isActive ? "is-active" : ""} ${isSelected ? "is-selected" : ""}">
+                  <div class="ai-model-row ${isSelected ? "is-selected" : ""}">
                     <button
                       type="button"
                       class="ai-model-main"
@@ -423,16 +401,7 @@ export class PracticeAITrainingTab extends Component {
                       <span class="ai-model-stats mono">${(m.aiMetrics.f1 * 100).toFixed(0)}% · ${m.epochsTrained || 18}ep</span>
                     </button>
                     <div class="ai-model-row-actions">
-                      ${
-                        isActive
-                          ? `<span class="scope-ai-chip">Active</span>`
-                          : `<button
-                               type="button"
-                               class="btn btn-ghost btn-xs ai-model-use-btn"
-                               data-ai-act="use-model"
-                               data-model-id="${esc(m.modelId)}"
-                             >Use</button>`
-                      }
+                      ${isActive ? `<span class="scope-ai-chip">Active</span>` : ""}
                       ${
                         m.builtIn
                           ? ""
@@ -726,21 +695,6 @@ export class PracticeAITrainingTab extends Component {
             this.startingTraining = false;
             this.setErr(err);
           });
-        break;
-      }
-
-      case "use-model": {
-        const modelId = btn.dataset.modelId || "";
-        const mod = this.allModels().find((m) => m.modelId === modelId);
-        if (!mod) return;
-        this.selectedModelId = mod.modelId;
-        void this.api
-          .updateMLConfig({ detectorMode: "ai", activeModelId: mod.modelId })
-          .then(() => {
-            this.statusMsg = "";
-            this.render(true);
-          })
-          .catch((err: unknown) => this.setErr(err));
         break;
       }
 
