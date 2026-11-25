@@ -2796,7 +2796,7 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       await flushMicrotasks();
       expect(mock.calls.some((c) => c.method === "addBreak")).toBe(true);
 
-      // Auto-Label triggers on-device teacher download on first tap, then labels strictly this single lap
+      // Auto-Label runs track-order sequence auto-labeling immediately without requiring a 1.1 GB GGUF download
       const autoLabelBtn = document.body.querySelector<HTMLButtonElement>(
         ".lap-editor-modal [data-lap-ed-auto-label]"
       )!;
@@ -2804,14 +2804,7 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       autoLabelBtn.click();
       await flushMicrotasks();
       await flushMicrotasks();
-      expect(mock.calls.some((c) => c.method === "downloadMLTeacherPack")).toBe(true);
-      expect(store.mlStatus.teacher?.ready).toBe(true);
-
-      document.body
-        .querySelector<HTMLButtonElement>(".lap-editor-modal [data-lap-ed-auto-label]")!
-        .click();
-      await flushMicrotasks();
-      await flushMicrotasks();
+      expect(mock.calls.some((c) => c.method === "downloadMLTeacherPack")).toBe(false);
       expect(
         mock.calls.some(
           (c) =>
@@ -2840,6 +2833,11 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       const aiPane = host.querySelector<HTMLElement>('[data-slot="mobile-ai"]')!;
       expect(aiPane.textContent ?? "").not.toContain("AI Training");
       expect(aiPane.textContent ?? "").toContain("Pack 1 Model");
+      expect(aiPane.querySelector("[data-ai-teacher-setup]")).not.toBeNull();
+      aiPane.querySelector<HTMLButtonElement>('[data-ai-act="download-teacher"]')!.click();
+      await flushMicrotasks();
+      await flushMicrotasks();
+      expect(mock.calls.some((c) => c.method === "downloadMLTeacherPack")).toBe(true);
       expect(aiPane.querySelector("[data-ai-teacher-ready]")).not.toBeNull();
       expect(aiPane.querySelector<HTMLInputElement>("[data-ai-auto-label]")?.checked).toBe(true);
 

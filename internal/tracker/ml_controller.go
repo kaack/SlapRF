@@ -1251,9 +1251,20 @@ func (e *Engine) LabelPracticeSession(ctx context.Context, sessionID string, req
 	}
 
 	sessSnap := clonePracticeSession(*target)
+	if len(sessSnap.TrackSnapshot) == 0 {
+		sessSnap.TrackSnapshot = e.orderedGatesForPracticeSessionLocked(target)
+	}
+	if sessSnap.Rules == nil {
+		r := e.rules.Normalized()
+		sessSnap.Rules = &r
+	}
 	ts := e.ensureTraceStoreLocked()
 	tm := e.mlTeacher
 	activeTCN := e.resolveActiveTCNLocked().Clone()
+	activeModelID := e.mlState.Config.ActiveModelID
+	if activeModelID == "" {
+		activeModelID = "ai-base-v0"
+	}
 	prefPack := strings.TrimSpace(req.PackID)
 	if prefPack == "" {
 		prefPack = e.mlState.Config.TeacherPackID
@@ -1275,20 +1286,12 @@ func (e *Engine) LabelPracticeSession(ctx context.Context, sessionID string, req
 
 	isSingleLapWindow := req.EndUs > 0 && req.EndUs >= req.StartUs
 	var labeler ml.TeacherLabeler
-	var resolvedPackID string
-	if tm != nil {
-		var rErr error
-		labeler, resolvedPackID, rErr = tm.ResolveLabeler(prefPack)
-		if rErr != nil {
-			if !isSingleLapWindow {
-				return MLSessionLabelResponse{MLStatus: e.MLStatus()}, rErr
-			}
-			resolvedPackID = e.MLStatus().Config.ActiveModelID
+	resolvedPackID := activeModelID
+	if tm != nil && !isSingleLapWindow {
+		if l, packID, rErr := tm.ResolveLabeler(prefPack); rErr == nil && l != nil {
+			labeler = l
+			resolvedPackID = packID
 		}
-	} else if isSingleLapWindow {
-		resolvedPackID = e.MLStatus().Config.ActiveModelID
-	} else {
-		return MLSessionLabelResponse{MLStatus: e.MLStatus()}, errors.New("on-device AI labeler is unavailable in browser-only WASM mode; connect a SlapRF Portable or Android host")
 	}
 
 	// When `[StartUs, EndUs]` is specified (single-lap Auto-Label in RSSI Editor), slice `.rfbin`
@@ -1337,8 +1340,29 @@ func (e *Engine) LabelPracticeSession(ctx context.Context, sessionID string, req
 
 	var decisions []ml.CandidateDecision
 	_, isGGUF := labeler.(*ml.Qwen3GGUFLabeler)
-	if isSingleLapWindow && (labeler == nil || isGGUF) {
-		decisions = ml.LabelLapCandidatesFast(sessSnap, samples, cands, activeTCN)
+	if isSingleLapWindow || labeler == nil {
+		var opts ml.TrackOrderLabelOptions
+		if isSingleLapWindow {
+			opts.WindowStartUs = req.StartUs
+			opts.WindowEndUs = req.EndUs
+		}
+		decisions = ml.LabelCandidatesTrackOrder(sessSnap, samples, cands, activeTCN, opts)
+	} else if isGGUF {
+		qwenDecs, err := labeler.LabelCandidates(lblCtx, sessSnap, cands, nil)
+		if err != nil {
+			return MLSessionLabelResponse{MLStatus: e.MLStatus()}, err
+		}
+		priors := make(map[string]float32, len(qwenDecs))
+		for _, d := range qwenDecs {
+			if d.Label == "crossing" {
+				priors[d.ID] = d.Confidence
+			} else {
+				priors[d.ID] = 1.0 - d.Confidence
+			}
+		}
+		decisions = ml.LabelCandidatesTrackOrder(sessSnap, samples, cands, activeTCN, ml.TrackOrderLabelOptions{
+			TeacherPriors: priors,
+		})
 	} else {
 		decisions, err = labeler.LabelCandidates(lblCtx, sessSnap, cands, nil)
 		if err != nil {
@@ -1397,9 +1421,11 @@ func (e *Engine) LabelPracticeSession(ctx context.Context, sessionID string, req
 	}, nil
 }
 
-// applyTeacherDecisionsLocked merges System 1 Teacher decisions into `target` while strictly
-// preserving all pilot manual crossings (`Manual == true`), manual deletions (`ManualDeletedCrossings`),
-// and (when `endUs > 0 && endUs >= startUs`) all crossings outside `[startUs, endUs]`.
+// applyTeacherDecisionsLocked applies Auto-Label decisions onto `target` by treating the target
+// scope (`[startUs, endUs]` when `hasWindow`, or full session otherwise) as a fresh blank slate:
+// stale crossings, invalid `OUT_OF_ORDER` / `MIN_LAP` leftovers, `Filtered` (`TOO_SHORT` / `SPIKE`)
+// hints, and prior `ManualDeletedCrossings` inside the re-labeled scope are cleared while strictly
+// preserving adjacent laps outside the re-labeled lap's Start/Finish boundaries.
 func (e *Engine) applyTeacherDecisionsLocked(
 	target *domain.PracticeSession,
 	packID string,
@@ -1410,6 +1436,7 @@ func (e *Engine) applyTeacherDecisionsLocked(
 ) {
 	hasWindow := endUs > 0 && endUs >= startUs
 	orderedGates := e.orderedGatesForPracticeSessionLocked(target)
+	sfGateID := startFinishGateIDFrom(orderedGates)
 	callsignBySlot := make(map[int]string, len(target.Pilots))
 	for _, sp := range target.Pilots {
 		if sp.SlotIndex > 0 && sp.Callsign != "" {
@@ -1417,8 +1444,24 @@ func (e *Engine) applyTeacherDecisionsLocked(
 		}
 	}
 
+	firstSfBySlot := make(map[int]uint64)
+	lastSfBySlot := make(map[int]uint64)
+	for _, dec := range decisions {
+		if dec.Label != "crossing" || dec.Confidence < 0.50 || dec.GateID != sfGateID {
+			continue
+		}
+		if slotFilter > 0 && dec.SlotIndex != slotFilter {
+			continue
+		}
+		if cur, ok := firstSfBySlot[dec.SlotIndex]; !ok || dec.FinalTsUs < cur {
+			firstSfBySlot[dec.SlotIndex] = dec.FinalTsUs
+		}
+		if dec.FinalTsUs > lastSfBySlot[dec.SlotIndex] {
+			lastSfBySlot[dec.SlotIndex] = dec.FinalTsUs
+		}
+	}
+
 	var keptCrossings []domain.GateCrossingEvent
-	var manualCrossings []domain.GateCrossingEvent
 	affectedSlots := make(map[int]bool)
 
 	for _, c := range target.Crossings {
@@ -1428,14 +1471,48 @@ func (e *Engine) applyTeacherDecisionsLocked(
 		}
 		if hasWindow && (c.TimestampUs < startUs || c.TimestampUs > endUs) {
 			keptCrossings = append(keptCrossings, c)
-			manualCrossings = append(manualCrossings, c)
 			continue
 		}
-		affectedSlots[c.SlotIndex] = true
-		if c.Manual {
-			keptCrossings = append(keptCrossings, c)
-			manualCrossings = append(manualCrossings, c)
+		if hasWindow && c.InvalidReason == "" && !c.IsStartFinish && c.GateID != sfGateID {
+			if firstSf, ok := firstSfBySlot[c.SlotIndex]; ok && firstSf > 50_000 && c.TimestampUs < firstSf-50_000 {
+				keptCrossings = append(keptCrossings, c)
+				continue
+			}
+			if lastSf, ok := lastSfBySlot[c.SlotIndex]; ok && c.TimestampUs > lastSf+50_000 {
+				keptCrossings = append(keptCrossings, c)
+				continue
+			}
 		}
+		affectedSlots[c.SlotIndex] = true
+	}
+
+	if len(target.ManualDeletedCrossings) > 0 {
+		keptDel := target.ManualDeletedCrossings[:0]
+		for _, del := range target.ManualDeletedCrossings {
+			if slotFilter > 0 && del.SlotIndex != slotFilter {
+				keptDel = append(keptDel, del)
+				continue
+			}
+			if hasWindow && (del.TimestampUs < startUs || del.TimestampUs > endUs) {
+				keptDel = append(keptDel, del)
+				continue
+			}
+		}
+		target.ManualDeletedCrossings = keptDel
+	}
+	if len(target.Filtered) > 0 {
+		keptFilt := target.Filtered[:0]
+		for _, f := range target.Filtered {
+			if slotFilter > 0 && f.SlotIndex != slotFilter {
+				keptFilt = append(keptFilt, f)
+				continue
+			}
+			if hasWindow && (f.TimestampUs < startUs || f.TimestampUs > endUs) {
+				keptFilt = append(keptFilt, f)
+				continue
+			}
+		}
+		target.Filtered = keptFilt
 	}
 
 	var keptHardNegs []domain.TeacherNegativeMark
@@ -1449,6 +1526,7 @@ func (e *Engine) applyTeacherDecisionsLocked(
 		}
 	}
 
+	newCrossingsBySlot := make(map[int][]domain.GateCrossingEvent)
 	for _, dec := range decisions {
 		if slotFilter > 0 && dec.SlotIndex != slotFilter {
 			continue
@@ -1458,23 +1536,14 @@ func (e *Engine) applyTeacherDecisionsLocked(
 			if dec.Confidence < 0.50 {
 				continue
 			}
-			// Respect explicit human `x` deletions and manual `+` pins!
-			blocked := false
-			for _, del := range target.ManualDeletedCrossings {
-				if del.GateID == dec.GateID && del.SlotIndex == dec.SlotIndex && absDiffUs(del.TimestampUs, dec.FinalTsUs) <= 180_000 {
-					blocked = true
+			dup := false
+			for _, kc := range keptCrossings {
+				if kc.GateID == dec.GateID && kc.SlotIndex == dec.SlotIndex && absDiffUs(kc.TimestampUs, dec.FinalTsUs) <= 150_000 {
+					dup = true
 					break
 				}
 			}
-			if !blocked {
-				for _, mc := range manualCrossings {
-					if mc.GateID == dec.GateID && mc.SlotIndex == dec.SlotIndex && absDiffUs(mc.TimestampUs, dec.FinalTsUs) <= 220_000 {
-						blocked = true
-						break
-					}
-				}
-			}
-			if blocked {
+			if dup {
 				continue
 			}
 			pk := dec.PeakDbm
@@ -1490,6 +1559,7 @@ func (e *Engine) applyTeacherDecisionsLocked(
 				}
 			}
 			keptCrossings = append(keptCrossings, ev)
+			newCrossingsBySlot[dec.SlotIndex] = append(newCrossingsBySlot[dec.SlotIndex], ev)
 		} else {
 			keptHardNegs = append(keptHardNegs, domain.TeacherNegativeMark{
 				GateID:      dec.GateID,
@@ -1513,6 +1583,49 @@ func (e *Engine) applyTeacherDecisionsLocked(
 	sessionRules := e.rules
 	if target.Rules != nil {
 		sessionRules = target.Rules.Normalized()
+	}
+
+	if !hasWindow {
+		maxLapUs := uint64(math.Round(sessionRules.MaxLapSec * 1e6))
+		for sl, list := range newCrossingsBySlot {
+			sort.Slice(list, func(i, j int) bool { return list[i].TimestampUs < list[j].TimestampUs })
+			for i := 1; i < len(list); i++ {
+				prevTs := list[i-1].TimestampUs
+				nextTs := list[i].TimestampUs
+				if nextTs <= prevTs {
+					continue
+				}
+				gapUs := nextTs - prevTs
+				if gapUs < 24_000_000 || gapUs > maxLapUs || list[i].GateID != sfGateID {
+					continue
+				}
+				hasBr := false
+				for _, br := range target.Breaks {
+					if br.SlotIndex == sl && br.TimestampUs > prevTs && br.TimestampUs < nextTs {
+						hasBr = true
+						break
+					}
+				}
+				if !hasBr {
+					e.nextEventID++
+					bid := e.nextEventID
+					for _, b := range target.Breaks {
+						if b.BreakID >= bid {
+							bid = b.BreakID + 1
+							e.nextEventID = bid
+						}
+					}
+					target.Breaks = append(target.Breaks, domain.PracticeBreakMark{
+						BreakID:     bid,
+						SlotIndex:   sl,
+						TimestampUs: (prevTs + nextTs) / 2,
+					})
+				}
+			}
+		}
+		sort.Slice(target.Breaks, func(a, b int) bool {
+			return target.Breaks[a].TimestampUs < target.Breaks[b].TimestampUs
+		})
 	}
 
 	slotsList := make([]int, 0, len(affectedSlots))
@@ -1766,85 +1879,138 @@ func (e *Engine) runMLTrainingWorker(
 		}
 	}
 
-	// Stage 0 (Optional On-Device System 1 Distillation): Auto-label unlabeled `.rfbin` packs before TCN training!
-	if wantAutoLabel && tm != nil {
-		if labeler, resolvedPackID, lErr := tm.ResolveLabeler(prefTeacherPack); lErr == nil && labeler != nil {
-			var toLabelIdx []int
-			for idx, s := range sessions {
-				if len(selectedSet) > 0 && !selectedSet[s.SessionID] {
-					continue
-				}
-				if s.TrainingVerified || s.TeacherLabeledAt != "" {
-					continue
-				}
-				if samples, rErr := ts.ReadSession(s.SessionID); rErr == nil && len(samples) >= 25 {
-					toLabelIdx = append(toLabelIdx, idx)
+	// Stage 0 (On-Device System 1 Auto-Label): Auto-label unlabeled `.rfbin` packs in track order before TCN training!
+	if wantAutoLabel {
+		var labeler ml.TeacherLabeler
+		resolvedPackID := "track-viterbi"
+		if tm != nil {
+			if l, pID, lErr := tm.ResolveLabeler(prefTeacherPack); lErr == nil && l != nil {
+				labeler = l
+				resolvedPackID = pID
+			}
+		}
+		_, isGGUF := labeler.(*ml.Qwen3GGUFLabeler)
+
+		var toLabelIdx []int
+		for idx, s := range sessions {
+			if len(selectedSet) > 0 && !selectedSet[s.SessionID] {
+				continue
+			}
+			if s.TrainingVerified || s.TeacherLabeledAt != "" || len(s.ManualDeletedCrossings) > 0 {
+				continue
+			}
+			hasManual := false
+			for _, c := range s.Crossings {
+				if c.Manual {
+					hasManual = true
+					break
 				}
 			}
+			if hasManual {
+				continue
+			}
+			if samples, rErr := ts.ReadSession(s.SessionID); rErr == nil && len(samples) >= 25 {
+				toLabelIdx = append(toLabelIdx, idx)
+			}
+		}
 
-			var anyUpdated bool
-			for stepIdx, idx := range toLabelIdx {
-				s := sessions[idx]
+		var anyUpdated bool
+		for stepIdx, idx := range toLabelIdx {
+			s := sessions[idx]
+			e.mu.Lock()
+			if len(s.TrackSnapshot) == 0 {
+				s.TrackSnapshot = e.orderedGatesForPracticeSessionLocked(&s)
+			}
+			if s.Rules == nil {
+				r := e.rules.Normalized()
+				s.Rules = &r
+			}
+			e.mlTraining.Message = fmt.Sprintf("Auto-labeling %s (%d / %d) on device...", s.Name, stepIdx+1, len(toLabelIdx))
+			progSt := e.buildMLStatusLocked()
+			progSubs := append([]EventSubscriber(nil), e.subscribers...)
+			e.mu.Unlock()
+			e.notifyMLUpdated(progSt, progSubs)
+
+			samples, rErr := ts.ReadSession(s.SessionID)
+			if rErr != nil || len(samples) < 25 {
+				continue
+			}
+			cands := ml.ExtractSessionCandidates(s, samples)
+			if len(cands) == 0 {
+				continue
+			}
+
+			var decs []ml.CandidateDecision
+			var dErr error
+			progCb := func(done, total int) {
+				if ctx.Err() != nil || total <= 0 {
+					return
+				}
+				pct := int(math.Round(float64(done) * 100.0 / float64(total)))
 				e.mu.Lock()
-				e.mlTraining.Message = fmt.Sprintf("Auto-labeling %s (%d / %d) on device...", s.Name, stepIdx+1, len(toLabelIdx))
-				progSt := e.buildMLStatusLocked()
-				progSubs := append([]EventSubscriber(nil), e.subscribers...)
+				if ctx.Err() != nil || !e.mlTraining.Running {
+					e.mu.Unlock()
+					return
+				}
+				e.mlTraining.Message = fmt.Sprintf("Auto-labeling %s (%d/%d) · %d/%d peaks (%d%%)...", s.Name, stepIdx+1, len(toLabelIdx), done, total, pct)
+				pSt := e.buildMLStatusLocked()
+				pSubs := append([]EventSubscriber(nil), e.subscribers...)
 				e.mu.Unlock()
-				e.notifyMLUpdated(progSt, progSubs)
+				e.notifyMLUpdated(pSt, pSubs)
+			}
 
-				samples, rErr := ts.ReadSession(s.SessionID)
-				if rErr != nil || len(samples) < 25 {
-					continue
-				}
-				cands := ml.ExtractSessionCandidates(s, samples)
-				if len(cands) == 0 {
-					continue
-				}
+			if labeler == nil {
+				decs = ml.LabelCandidatesTrackOrder(s, samples, cands, initTCN, ml.TrackOrderLabelOptions{})
+			} else if isGGUF {
 				var lastProgEmit time.Time
-				decs, dErr := labeler.LabelCandidates(ctx, s, cands, func(done, total int) {
-					if ctx.Err() != nil || total <= 0 {
-						return
-					}
+				qDecs, qErr := labeler.LabelCandidates(ctx, s, cands, func(done, total int) {
 					now := time.Now()
 					if done < total && !lastProgEmit.IsZero() && now.Sub(lastProgEmit) < 150*time.Millisecond {
 						return
 					}
 					lastProgEmit = now
-					pct := int(math.Round(float64(done) * 100.0 / float64(total)))
-					e.mu.Lock()
-					if ctx.Err() != nil || !e.mlTraining.Running {
-						e.mu.Unlock()
-						return
-					}
-					e.mlTraining.Message = fmt.Sprintf("Auto-labeling %s (%d/%d) · %d/%d peaks (%d%%)...", s.Name, stepIdx+1, len(toLabelIdx), done, total, pct)
-					pSt := e.buildMLStatusLocked()
-					pSubs := append([]EventSubscriber(nil), e.subscribers...)
-					e.mu.Unlock()
-					e.notifyMLUpdated(pSt, pSubs)
+					progCb(done, total)
 				})
-				if ctx.Err() != nil {
-					return
+				dErr = qErr
+				if dErr == nil {
+					priors := make(map[string]float32, len(qDecs))
+					for _, d := range qDecs {
+						if d.Label == "crossing" {
+							priors[d.ID] = d.Confidence
+						} else {
+							priors[d.ID] = 1.0 - d.Confidence
+						}
+					}
+					decs = ml.LabelCandidatesTrackOrder(s, samples, cands, initTCN, ml.TrackOrderLabelOptions{
+						TeacherPriors: priors,
+					})
 				}
-				if dErr != nil || len(decs) == 0 {
-					continue
-				}
-
-				e.mu.Lock()
-				if live := e.findPracticeSessionLocked(s.SessionID); live != nil {
-					e.applyTeacherDecisionsLocked(live, resolvedPackID, 0, 0, 0, decs)
-					sessions[idx] = clonePracticeSession(*live)
-					anyUpdated = true
-				}
-				e.mu.Unlock()
+			} else {
+				decs, dErr = labeler.LabelCandidates(ctx, s, cands, progCb)
 			}
 
-			if anyUpdated {
-				e.mu.Lock()
-				pSnap := clonePracticeManagerState(e.practiceState)
-				subs := append([]EventSubscriber(nil), e.subscribers...)
-				e.mu.Unlock()
-				e.notifyPracticeUpdated(pSnap, subs)
+			if ctx.Err() != nil {
+				return
 			}
+			if dErr != nil || len(decs) == 0 {
+				continue
+			}
+
+			e.mu.Lock()
+			if live := e.findPracticeSessionLocked(s.SessionID); live != nil {
+				e.applyTeacherDecisionsLocked(live, resolvedPackID, 0, 0, 0, decs)
+				sessions[idx] = clonePracticeSession(*live)
+				anyUpdated = true
+			}
+			e.mu.Unlock()
+		}
+
+		if anyUpdated {
+			e.mu.Lock()
+			pSnap := clonePracticeManagerState(e.practiceState)
+			subs := append([]EventSubscriber(nil), e.subscribers...)
+			e.mu.Unlock()
+			e.notifyPracticeUpdated(pSnap, subs)
 		}
 	}
 

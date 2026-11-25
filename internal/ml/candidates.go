@@ -31,6 +31,7 @@ type CandidatePeak struct {
 	PeakRSSIDbm     float32          `json:"peakRssiDbm"`
 	FloorDbm        float32          `json:"floorDbm"`
 	ProminenceDb    float32          `json:"prominenceDb"`
+	LocalRiseDb     float32          `json:"localRiseDb,omitempty"`
 	WidthHalfPromMs int              `json:"widthHalfPromMs"`
 	MDipDb          float32          `json:"mDipDb,omitempty"`
 	MDipOffsetMs    int              `json:"mDipOffsetMs,omitempty"`
@@ -52,16 +53,17 @@ type CandidateDecision struct {
 }
 
 type rawSeqPeak struct {
-	seqIdx  int
-	stepIdx int
-	tsUs    uint64
-	peakDbm float32
-	floor   float32
-	promDb  float32
-	widthMs int
-	mDipDb  float32
-	mOffMs  int
-	shape   [13]int
+	seqIdx    int
+	stepIdx   int
+	tsUs      uint64
+	peakDbm   float32
+	floor     float32
+	promDb    float32
+	localRise float32
+	widthMs   int
+	mDipDb    float32
+	mOffMs    int
+	shape     [13]int
 }
 
 // FlightStintSpan represents a contiguous active flight interval `[LoUs, HiUs]` for a pilot.
@@ -185,7 +187,6 @@ func ExtractSessionCandidates(sess domain.PracticeSession, samples []tracestore.
 	if len(samples) < 16 {
 		return nil
 	}
-	stintsBySlot := BuildPilotFlightStints(sess)
 	type gpKey struct {
 		gateID    uint8
 		slotIndex int
@@ -222,9 +223,6 @@ func ExtractSessionCandidates(sess domain.PracticeSession, samples []tracestore.
 				}
 			}
 			if k >= len(s.RSSIDbm) || s.RSSIDbm[k] <= -120.0 {
-				continue
-			}
-			if !InPilotFlightStint(stintsBySlot, slotIdx, s.TimestampUs) {
 				continue
 			}
 			key := gpKey{gateID: s.GateID, slotIndex: slotIdx}
@@ -269,6 +267,7 @@ func ExtractSessionCandidates(sess domain.PracticeSession, samples []tracestore.
 					PeakRSSIDbm:     float32(math.Round(float64(pk.peakDbm)*10) / 10),
 					FloorDbm:        float32(math.Round(float64(pk.floor)*10) / 10),
 					ProminenceDb:    float32(math.Round(float64(pk.promDb)*10) / 10),
+					LocalRiseDb:     float32(math.Round(float64(pk.localRise)*10) / 10),
 					WidthHalfPromMs: pk.widthMs,
 					MDipDb:          float32(math.Round(float64(pk.mDipDb)*10) / 10),
 					MDipOffsetMs:    pk.mOffMs,
@@ -405,13 +404,13 @@ func extractGridSequencePeaks(seqIdx int, seq GridSequence) []rawSeqPeak {
 		merged = append(merged, cur)
 	}
 
-	// Filter out flat-shelf quantization ripples (`< 6.0 dB` local rise above the surrounding +-1.2s
-	// local trough) so compact tracks where ambient VTX sits 10..15 dB above `-91 dBm` thermal noise
-	// emit ~150 real physical excursions instead of thousands of baseline wiggles!
+	// Filter out flat-shelf quantization ripples (`< 4.5 dB` local rise above the surrounding +-1.2s
+	// local trough) so bench dead-air shelves where an armed VTX sits steady on a table emit zero candidates,
+	// while wider medium-range sector passes remain visible to the track-order Viterbi decoder.
 	const localValleySteps = 60 // +-1.20 s at 50 Hz
 	var prominent []rawSeqPeak
 	for _, pk := range merged {
-		if pk.promDb < 11.0 {
+		if pk.promDb < 9.5 {
 			continue
 		}
 		loL := pk.stepIdx - localValleySteps
@@ -440,15 +439,16 @@ func extractGridSequencePeaks(seqIdx int, seq GridSequence) []rawSeqPeak {
 		if riseRight < localRise {
 			localRise = riseRight
 		}
-		if localRise < 6.0 {
+		if localRise < 4.5 {
 			continue
 		}
+		pk.localRise = localRise
 		prominent = append(prominent, pk)
 	}
 
-	// Non-maximum suppression within +-420 ms (`21` steps) so minor quantization shoulders on the flanks
-	// of a single gate bell curve collapse to the single true peak crest.
-	const nmsSteps = 21
+	// Non-maximum suppression within +-320 ms (`16` steps) so minor quantization shoulders on the flanks
+	// of a single gate bell curve collapse to the single true peak crest without swallowing nearby peaks.
+	const nmsSteps = 16
 	var kept []rawSeqPeak
 	for i, pk := range prominent {
 		suppressed := false

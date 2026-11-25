@@ -251,19 +251,10 @@ export function openPracticeLapEditorModal(
     const hasTeacherSupport = Boolean(
       teacher?.ready || (teacher?.packs && teacher.packs.length > 0)
     );
-    const dlRunning = Boolean(teacher?.download?.running);
     const autoLabelTitle = isAutoLabeling
-      ? "Labeling peaks in this lap…"
-      : dlRunning
-        ? `Downloading AI labeler (${Math.round((teacher?.download?.fraction ?? 0) * 100)}%)…`
-        : teacher?.ready
-          ? "Auto-label gate crossings on this lap"
-          : "Download on-device AI labeler";
-    const autoLabelText = isAutoLabeling
-      ? "Labeling…"
-      : dlRunning
-        ? `${Math.round((teacher?.download?.fraction ?? 0) * 100)}%`
-        : "Auto-Label";
+      ? "Labeling gate crossings in track order…"
+      : "Auto-label gate crossings on this lap in track order";
+    const autoLabelText = isAutoLabeling ? "Labeling…" : "Auto-Label";
 
     headEl.innerHTML = `
       <div class="lap-ed-head-left">
@@ -275,8 +266,8 @@ export function openPracticeLapEditorModal(
         </button>
         ${
           hasTeacherSupport
-            ? `<button type="button" class="btn btn-sm ${isAutoLabeling ? "btn-armed" : "btn-ghost"}" data-lap-ed-auto-label ${dlRunning ? "disabled" : ""} title="${esc(autoLabelTitle)}">
-                 ${isAutoLabeling || dlRunning ? icons.spinner(13) : icons.zap(13)}<span>${esc(autoLabelText)}</span>
+            ? `<button type="button" class="btn btn-sm ${isAutoLabeling ? "btn-armed" : "btn-ghost"}" data-lap-ed-auto-label ${isAutoLabeling ? "disabled" : ""} title="${esc(autoLabelTitle)}">
+                 ${isAutoLabeling ? icons.spinner(13) : icons.zap(13)}<span>${esc(autoLabelText)}</span>
                </button>`
             : ""
         }
@@ -367,19 +358,6 @@ export function openPracticeLapEditorModal(
   const runSingleLapAutoLabel = async (): Promise<void> => {
     const sess = getSession();
     if (!sess || isAutoLabeling) return;
-    const teacher = rootStore.mlStatus.teacher;
-    if (teacher && !teacher.ready) {
-      if (!teacher.download?.running) {
-        try {
-          await rootApi.downloadMLTeacherPack(rootStore.mlStatus.config.teacherPackId);
-          showToast("Downloading on-device AI labeler in background…", "info");
-        } catch (err) {
-          showToast(err instanceof Error ? err.message : String(err), "error");
-        }
-      }
-      renderHeader();
-      return;
-    }
 
     isAutoLabeling = true;
     renderHeader();
@@ -394,12 +372,21 @@ export function openPracticeLapEditorModal(
       if (!document.body.contains(backdrop)) return;
       const latestSess = getSession();
       if (latestSess) {
+        const curIdx = resolveCurrentLapIndex(latestSess);
+        const pLaps = getPilotLaps(latestSess);
+        if (curIdx >= 0 && pLaps[curIdx]) {
+          lockedLap = pLaps[curIdx];
+          lockedLapId = lockedLap.lapId;
+          lockedLapNumber = lockedLap.lapNumber;
+        }
         const nextBounds = computeLapBounds(latestSess);
         chart.setLapWindow({
           minUs: nextBounds.hardMinUs,
           maxUs: nextBounds.hardMaxUs,
           passMinUs: nextBounds.passMinUs,
           passMaxUs: nextBounds.passMaxUs,
+          canStepLap,
+          onStepLap: stepToAdjacentLap,
         });
       }
       const count = res.crossingsCount ?? (res.decisions ?? []).filter((d) => d.label === "crossing").length;
