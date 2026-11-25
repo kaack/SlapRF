@@ -22,18 +22,21 @@ type MLMetrics struct {
 
 // MLModelSummary is the lightweight metadata view of a saved model snapshot exposed over REST/WS.
 type MLModelSummary struct {
-	ModelID         string    `json:"modelId"`
-	Name            string    `json:"name"`
-	Version         int       `json:"version"`
-	CreatedAt       string    `json:"createdAt"`
-	BuiltIn         bool      `json:"builtIn,omitempty"`
-	TrainPacks      int       `json:"trainPacks"`
-	ValPacks        int       `json:"valPacks"`
-	TrainPasses     int       `json:"trainPasses"`
-	TrainDurationMs int64     `json:"trainDurationMs"`
-	FinalLoss       float64   `json:"finalLoss"`
-	AIMetrics       MLMetrics `json:"aiMetrics"`
-	ClassicMetrics  MLMetrics `json:"classicMetrics"`
+	ModelID          string    `json:"modelId"`
+	Name             string    `json:"name"`
+	Version          int       `json:"version"`
+	CreatedAt        string    `json:"createdAt"`
+	BuiltIn          bool      `json:"builtIn,omitempty"`
+	Ready            bool      `json:"ready"`
+	EpochsTrained    int       `json:"epochsTrained,omitempty"`
+	SourceSessionIDs []string  `json:"sourceSessionIds,omitempty"`
+	TrainPacks       int       `json:"trainPacks"`
+	ValPacks         int       `json:"valPacks"`
+	TrainPasses      int       `json:"trainPasses"`
+	TrainDurationMs  int64     `json:"trainDurationMs"`
+	FinalLoss        float64   `json:"finalLoss"`
+	AIMetrics        MLMetrics `json:"aiMetrics"`
+	ClassicMetrics   MLMetrics `json:"classicMetrics"`
 }
 
 // MLModelSnapshot persists a complete trained 1D TCN model (metadata + float32 weights).

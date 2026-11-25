@@ -1234,9 +1234,36 @@ export class ApiClient {
   public async startMLTraining(payload?: {
     epochs?: number;
     includeUnverified?: boolean;
+    sessionIds?: string[];
+    continueModelId?: string;
+    modelName?: string;
   }): Promise<MLStatus> {
     const st = await this.transport.request<MLStatus>("POST", "/v1/ml:train", payload ?? {});
     this.store.ingestMLStatus(st);
+    return st;
+  }
+
+  public async updateMLModel(
+    modelId: string,
+    payload: { name?: string; ready?: boolean }
+  ): Promise<MLStatus> {
+    const st = await this.transport.request<MLStatus>(
+      "PATCH",
+      `/v1/ml/models/${encodeURIComponent(modelId)}`,
+      payload
+    );
+    this.store.ingestMLStatus(st);
+    await this.persistBrowserEnginesIfDemo();
+    return st;
+  }
+
+  public async deleteMLModel(modelId: string): Promise<MLStatus> {
+    const st = await this.transport.request<MLStatus>(
+      "DELETE",
+      `/v1/ml/models/${encodeURIComponent(modelId)}`
+    );
+    this.store.ingestMLStatus(st);
+    await this.persistBrowserEnginesIfDemo();
     return st;
   }
 

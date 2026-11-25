@@ -1,7 +1,6 @@
 import { dispatchRacesTopBarCommand, replaceAppHash, Router, setAnalyticsScope } from "../core/router";
 import { TopBar } from "../layout/TopBar";
 import { Announcer } from "../services/announcer";
-import { AITrainingView } from "../views/AITrainingView";
 import { PracticeView } from "../views/PracticeView";
 import { TimingRulesEditor } from "../widgets/TimingRulesEditor";
 import { focusAnalyticsPilotForScope, PilotView } from "../views/PilotView";
@@ -2534,19 +2533,22 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       },
       mlStatus: {
         config: { detectorMode: "classic", activeModelId: "ai-base-v0", liveTuneEnabled: true },
-        training: { running: false, epoch: 0, totalEpochs: 0, loss: 0 },
+        training: { running: false, epoch: 28, totalEpochs: 28, loss: 0.018, completedModelId: "ai-base-v1" },
         models: [
           {
-            modelId: "ai-base-v0",
-            name: "AI Base v0",
-            version: 0,
+            modelId: "ai-base-v1",
+            name: "Pack 1 Model",
+            version: 1,
             createdAt: "2026-11-24T00:00:00Z",
-            builtIn: true,
-            trainPacks: 10,
-            valPacks: 4,
-            trainPasses: 48,
+            builtIn: false,
+            ready: false,
+            epochsTrained: 28,
+            sourceSessionIds: ["pack-1"],
+            trainPacks: 1,
+            valPacks: 1,
+            trainPasses: 24,
             trainDurationMs: 120,
-            finalLoss: 0.02,
+            finalLoss: 0.018,
             aiMetrics: {
               totalPasses: 16,
               detectedPasses: 16,
@@ -2582,50 +2584,62 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       { timerId: 2, seqNum: 1, timestampUs: 15_800_000, rssi: [-64.2, -127], batteryMv: 4100, noiseFloorDbm: -91 },
     ]);
 
-    replaceAppHash("#/ai");
-    const root = mountHtml(`<div id="ai-host"></div><div id="rules-host"></div>`);
-    const host = root.querySelector<HTMLElement>("#ai-host")!;
+    replaceAppHash("#/practice/pack-1");
+    const root = mountHtml(`<div id="prac-host"></div><div id="rules-host"></div>`);
+    const host = root.querySelector<HTMLElement>("#prac-host")!;
     const rulesHost = root.querySelector<HTMLElement>("#rules-host")!;
     const mock = makeMockApiClient(store);
-    const view = new AITrainingView(host, store, mock.api);
+    const view = new PracticeView(host, store, mock.api);
     const rulesEditor = new TimingRulesEditor(rulesHost, store, mock.api);
     try {
-      // 1. Collect tab renders Hands-Free Pack Loop & recorded packs
-      expect(host.textContent ?? "").toContain("Hands-Free Back-to-Back Pack Loop");
-      expect(host.textContent ?? "").toContain("OneEye");
-
-      // 2. Open Review tab via Review Unverified Pack CTA and verify T1-OOO borderline event shows up
-      const reviewBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="review-next-unverified"]');
-      expect(reviewBtn).not.toBeNull();
-      reviewBtn!.click();
       await flushMicrotasks();
 
-      expect(location.hash).toBe("#/ai/review/pack-1");
-      expect(host.textContent ?? "").toContain("T1-OOO");
-      const verifyBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="toggle-verify-pack"]');
-      expect(verifyBtn).not.toBeNull();
-      verifyBtn!.click();
-      await flushMicrotasks();
-
-      const verifyCalls = mock.calls.filter(
-        (c) =>
-          c.method === "practiceAction" &&
-          (c.args[0] as { action?: string })?.action === "set_training_verified"
-      );
-      expect(verifyCalls.length).toBe(1);
-
-      // Verifying the last unverified pack auto-advances to the Train tab!
-      expect(location.hash).toBe("#/ai/train");
-      expect(host.textContent ?? "").toContain("On-Device Base Model Trainer");
-
-      // 3. Switch detector mode to AI inside Race/Practice TimingRulesEditor and verify both sync
-      const rulesAiBtn = rulesHost.querySelector<HTMLButtonElement>(
+      // 1. While model is still a Draft (ready: false), Trained Model button in Track is disabled
+      const rulesAiBtnBefore = rulesHost.querySelector<HTMLButtonElement>(
         '[data-ml-detector-mode="ai"]'
-      );
-      expect(rulesAiBtn).not.toBeNull();
-      rulesAiBtn!.click();
+      )!;
+      expect(rulesAiBtnBefore).not.toBeNull();
+      expect(rulesAiBtnBefore.disabled).toBe(true);
+
+      // 2. Inside the Practice session, switch to the AI Training tab
+      const aiTabBtn = host.querySelector<HTMLButtonElement>(
+        '[data-practice-mobile-tab="ai"]'
+      )!;
+      expect(aiTabBtn).not.toBeNull();
+      aiTabBtn.click();
+      await flushMicrotasks();
+
+      expect(host.textContent ?? "").toContain("Train Crossing Model from Practice");
+      expect(host.textContent ?? "").toContain("Pack 1 Model");
+
+      // 3. Click Train More (+20 Epochs) -> calls startMLTraining with continueModelId
+      const trainMoreBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="train-more"]')!;
+      expect(trainMoreBtn).not.toBeNull();
+      trainMoreBtn.click();
+      await flushMicrotasks();
+      expect(
+        mock.calls.some(
+          (c) =>
+            c.method === "startMLTraining" &&
+            (c.args[0] as { continueModelId?: string })?.continueModelId === "ai-base-v1"
+        )
+      ).toBe(true);
+
+      // 4. Mark Model as Ready -> unlocks Trained Model selection in Race & Practice Track!
+      const readyBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="toggle-model-ready"]')!;
+      expect(readyBtn).not.toBeNull();
+      readyBtn.click();
+      await flushMicrotasks();
+      expect(store.mlStatus.models[0].ready).toBe(true);
+
+      const rulesAiBtnAfter = rulesHost.querySelector<HTMLButtonElement>(
+        '[data-ml-detector-mode="ai"]'
+      )!;
+      expect(rulesAiBtnAfter.disabled).toBe(false);
+      rulesAiBtnAfter.click();
       await flushMicrotasks();
       expect(store.mlStatus.config.detectorMode).toBe("ai");
+      expect(store.mlStatus.config.activeModelId).toBe("ai-base-v1");
       expect(rulesHost.querySelector("[data-ml-model-select]")).not.toBeNull();
     } finally {
       rulesEditor.destroy();

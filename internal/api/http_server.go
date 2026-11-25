@@ -325,10 +325,12 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/storage/sim", s.handleExportSimStorage)
 	mux.HandleFunc("PUT /v1/storage/sim", s.handleImportSimStorage)
 
-	// On-Device AI Crossing Detector & Training (`/v1/ml`, `/v1/ml:train`, `/v1/ml/dataset.tar.gz`, `/v1/ml/dataset:import`)
+	// On-Device AI Crossing Detector & Training (`/v1/ml`, `/v1/ml:train`, `/v1/ml/models/{modelId}`, `/v1/ml/dataset.tar.gz`, `/v1/ml/dataset:import`)
 	mux.HandleFunc("GET /v1/ml", s.handleGetMLStatus)
 	mux.HandleFunc("PATCH /v1/ml", wrap(s.handlePatchMLConfig))
 	mux.HandleFunc("POST /v1/ml:train", wrap(s.handleStartMLTraining))
+	mux.HandleFunc("PATCH /v1/ml/models/{modelId}", wrap(s.handlePatchMLModel))
+	mux.HandleFunc("DELETE /v1/ml/models/{modelId}", wrap(s.handleDeleteMLModel))
 	mux.HandleFunc("GET /v1/ml/dataset.tar.gz", s.handleExportMLDataset)
 	mux.HandleFunc("POST /v1/ml/dataset:import", wrap(s.handleImportMLDataset))
 

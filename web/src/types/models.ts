@@ -900,6 +900,9 @@ export interface MLModelSummary {
   version: number;
   createdAt: string;
   builtIn?: boolean;
+  ready?: boolean;
+  epochsTrained?: number;
+  sourceSessionIds?: string[];
   trainPacks: number;
   valPacks: number;
   trainPasses: number;

@@ -654,18 +654,7 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LapRFEmulatorView,
         );
         expect(router.route).toBe("network");
 
-        // Swiping left from Network (#/network) continues into More items in menu order (AI Training -> Flasher -> Debug -> Settings -> About when Simulator is off)
-
-        outletEl.dispatchEvent(
-          new PointerEvent("pointerdown", { bubbles: true, pointerId: 42, pointerType: "touch", clientX: 300, clientY: 200 })
-        );
-        window.dispatchEvent(
-          new PointerEvent("pointermove", { bubbles: true, pointerId: 42, pointerType: "touch", clientX: 180, clientY: 202 })
-        );
-        window.dispatchEvent(
-          new PointerEvent("pointerup", { bubbles: true, pointerId: 42, pointerType: "touch", clientX: 170, clientY: 202 })
-        );
-        expect(router.route).toBe("ai");
+        // Swiping left from Network (#/network) continues into More items in menu order (Flasher -> Debug -> Settings -> About when Simulator is off)
 
         outletEl.dispatchEvent(
           new PointerEvent("pointerdown", { bubbles: true, pointerId: 43, pointerType: "touch", clientX: 300, clientY: 200 })

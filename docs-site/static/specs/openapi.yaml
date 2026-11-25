@@ -6384,7 +6384,7 @@ paths:
   /v1/ml:train:
     post:
       tags: [AI Detector & Traces]
-      summary: Start background pure-Go 1D TCN base-model training on verified packs
+      summary: Start or continue background pure-Go 1D TCN model training on Practice traces
       operationId: startMLTraining
       requestBody:
         required: false
@@ -6395,9 +6395,17 @@ paths:
               properties:
                 epochs:
                   type: integer
-                  example: 32
+                  example: 28
                 includeUnverified:
                   type: boolean
+                sessionIds:
+                  type: array
+                  items:
+                    type: string
+                continueModelId:
+                  type: string
+                modelName:
+                  type: string
       responses:
         "202":
           description: Background training started
@@ -6407,11 +6415,50 @@ paths:
                 type: object
                 additionalProperties: true
         "409":
-          description: Training already running or active timing session in progress
+          description: Training already running or active race heat in progress
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/ml/models/{modelId}:
+    patch:
+      tags: [AI Detector & Traces]
+      summary: Rename a trained model or mark/unmark it Ready for Race & Practice selection
+      operationId: updateMLModel
+      parameters:
+        - name: modelId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                ready:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated ML status
+    delete:
+      tags: [AI Detector & Traces]
+      summary: Delete a custom trained model snapshot
+      operationId: deleteMLModel
+      parameters:
+        - name: modelId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated ML status
 
   /v1/ml/dataset.tar.gz:
     get:

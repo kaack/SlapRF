@@ -151,8 +151,41 @@ func (s *Server) handleStartMLTraining(w http.ResponseWriter, r *http.Request) {
 		writeErrorJSON(w, http.StatusConflict, err.Error())
 		return
 	}
-	s.logUserAction("ML", "Started on-device base model training (epochs=%d)", st.Training.TotalEpochs)
+	s.logUserAction("ML", "Started on-device model training (epochs=%d, continue=%s)", st.Training.TotalEpochs, body.ContinueModelID)
 	writeJSON(w, http.StatusAccepted, st)
+}
+
+func (s *Server) handlePatchMLModel(w http.ResponseWriter, r *http.Request) {
+	modelID := strings.TrimSpace(r.PathValue("modelId"))
+	if !rejectColonInPathValue(w, modelID) {
+		return
+	}
+	var body tracker.MLModelUpdatePayload
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	st, err := s.activeEngine().UpdateMLModel(modelID, body)
+	if err != nil {
+		writeErrorJSON(w, http.StatusNotFound, err.Error())
+		return
+	}
+	s.logUserAction("ML", "Updated trained model %s (ready=%v)", modelID, body.Ready != nil && *body.Ready)
+	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) handleDeleteMLModel(w http.ResponseWriter, r *http.Request) {
+	modelID := strings.TrimSpace(r.PathValue("modelId"))
+	if !rejectColonInPathValue(w, modelID) {
+		return
+	}
+	st, err := s.activeEngine().DeleteMLModel(modelID)
+	if err != nil {
+		writeErrorJSON(w, http.StatusNotFound, err.Error())
+		return
+	}
+	s.logUserAction("ML", "Deleted trained model %s", modelID)
+	writeJSON(w, http.StatusOK, st)
 }
 
 func (s *Server) handleExportMLDataset(w http.ResponseWriter, r *http.Request) {

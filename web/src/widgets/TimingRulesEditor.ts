@@ -265,7 +265,15 @@ export class TimingRulesEditor extends Component {
       if (mlModeBtn) {
         if (this.isReadOnlyFn() || mlModeBtn.disabled) return;
         const nextMode = mlModeBtn.dataset.mlDetectorMode === "ai" ? "ai" : "classic";
-        void this.api.updateMLConfig({ detectorMode: nextMode });
+        if (nextMode === "ai") {
+          const ready = this.readyTrainedModels();
+          if (ready.length === 0) return;
+          const curActive = this.store.mlStatus?.config?.activeModelId || "";
+          const chosenId = ready.some((m) => m.modelId === curActive) ? curActive : ready[0].modelId;
+          void this.api.updateMLConfig({ detectorMode: "ai", activeModelId: chosenId });
+        } else {
+          void this.api.updateMLConfig({ detectorMode: "classic" });
+        }
         return;
       }
       const tuneBtn = target.closest<HTMLElement>(
@@ -936,37 +944,47 @@ export class TimingRulesEditor extends Component {
     grid.classList.add("is-mobile-stacked");
   }
 
+  private readyTrainedModels() {
+    return (this.store.mlStatus?.models ?? []).filter((m) => !m.builtIn && Boolean(m.ready));
+  }
+
   private renderDetectorModelOptionsHtml(): string {
     const ml = this.store.mlStatus;
-    const models = ml?.models ?? [];
-    if (models.length === 0) {
-      return `<option value="ai-base-v0" selected>AI Base v0 (Pretrained)</option>`;
+    const ready = this.readyTrainedModels();
+    if (ready.length === 0) {
+      return "";
     }
-    const activeId = ml.config?.activeModelId || models[0].modelId;
-    return models
+    const activeId = ml.config?.activeModelId || ready[0].modelId;
+    const selectedId = ready.some((m) => m.modelId === activeId) ? activeId : ready[0].modelId;
+    return ready
       .map((m) => {
-        const sel = m.modelId === activeId ? "selected" : "";
+        const sel = m.modelId === selectedId ? "selected" : "";
         const f1Pct = m.aiMetrics ? ` · F1 ${(m.aiMetrics.f1 * 100).toFixed(1)}%` : "";
-        const shortName = m.builtIn ? `AI Base v${m.version} (Pretrained)` : `AI Base v${m.version}${f1Pct}`;
-        return `<option value="${esc(m.modelId)}" ${sel}>${esc(shortName)}</option>`;
+        return `<option value="${esc(m.modelId)}" ${sel}>${esc(`${m.name}${f1Pct}`)}</option>`;
       })
       .join("");
   }
 
   private renderGlobalDetectorRow(disAttr = ""): string {
     const ml = this.store.mlStatus;
-    const isAi = ml?.config?.detectorMode === "ai";
+    const ready = this.readyTrainedModels();
+    const hasReady = ready.length > 0;
+    const isAi = hasReady && ml?.config?.detectorMode === "ai";
     const liveTuneOn = ml?.config?.liveTuneEnabled ?? true;
+    const aiBtnDis = disAttr || (!hasReady ? "disabled" : "");
+    const helpText = hasReady
+      ? "Choose Classic Schmitt DSP or a trained model marked Ready in Practice → AI Training."
+      : "Train a model in any Practice session → AI Training tab and mark it Ready to select it here.";
     return `
       <div class="rule-row ${isAi ? "is-overridden" : ""}" data-detector-rule-row>
         <div class="rule-text">
           <div class="rule-label">Crossing detector</div>
-          <div class="rule-help">Select Classic Schmitt DSP or a trained 1D TCN crossing model (<a href="#/ai/train">AI Training</a>).</div>
+          <div class="rule-help">${esc(helpText)}</div>
         </div>
         <div class="rule-input rule-detector-controls">
           <div class="scope-tune-seg detector-mode-seg" role="radiogroup" aria-label="Crossing detector">
             <button type="button" role="radio" aria-checked="${!isAi}" class="scope-tune-seg-btn ${!isAi ? "is-active" : ""}" data-ml-detector-mode="classic" ${disAttr}>Classic</button>
-            <button type="button" role="radio" aria-checked="${isAi}" class="scope-tune-seg-btn ${isAi ? "is-active" : ""}" data-ml-detector-mode="ai" ${disAttr}>AI Model</button>
+            <button type="button" role="radio" aria-checked="${isAi}" class="scope-tune-seg-btn ${isAi ? "is-active" : ""}" data-ml-detector-mode="ai" title="${hasReady ? "Use a trained AI crossing model" : "Train and mark a model Ready in Practice → AI Training first"}" ${aiBtnDis}>Trained Model</button>
           </div>
           ${
             isAi
@@ -987,8 +1005,14 @@ export class TimingRulesEditor extends Component {
 
   private renderMobileDetectorCard(disAttr = ""): string {
     const ml = this.store.mlStatus;
-    const isAi = ml?.config?.detectorMode === "ai";
+    const ready = this.readyTrainedModels();
+    const hasReady = ready.length > 0;
+    const isAi = hasReady && ml?.config?.detectorMode === "ai";
     const liveTuneOn = ml?.config?.liveTuneEnabled ?? true;
+    const aiBtnDis = disAttr || (!hasReady ? "disabled" : "");
+    const helpText = hasReady
+      ? "Run Classic DSP or pick a Ready model trained in Practice → AI Training."
+      : "Train a model in any Practice → AI Training tab and mark it Ready to select it here.";
     return `
       <div class="scope-tune-card is-detector-card ${isAi ? "is-overridden" : ""}" data-tune-card="detectorMode">
         <div class="scope-tune-card-info">
@@ -996,16 +1020,16 @@ export class TimingRulesEditor extends Component {
             <span class="scope-tune-card-label">Crossing detector</span>
             ${
               isAi
-                ? `<span class="scope-tune-custom-icon" title="AI Model active" aria-label="AI Model active">${icons.ai(12)}</span>`
+                ? `<span class="scope-tune-custom-icon" title="Trained Model active" aria-label="Trained Model active">${icons.ai(12)}</span>`
                 : ""
             }
           </div>
-          <div class="scope-tune-card-help">Run Classic DSP or pick a trained model from <a href="#/ai/train">AI Training</a>.</div>
+          <div class="scope-tune-card-help">${esc(helpText)}</div>
         </div>
         <div class="scope-tune-card-controls is-detector-controls">
           <div class="scope-tune-seg detector-mode-seg" role="radiogroup" aria-label="Crossing detector">
             <button type="button" role="radio" aria-checked="${!isAi}" class="scope-tune-seg-btn ${!isAi ? "is-active" : ""}" data-ml-detector-mode="classic" ${disAttr}>Classic</button>
-            <button type="button" role="radio" aria-checked="${isAi}" class="scope-tune-seg-btn ${isAi ? "is-active" : ""}" data-ml-detector-mode="ai" ${disAttr}>AI Model</button>
+            <button type="button" role="radio" aria-checked="${isAi}" class="scope-tune-seg-btn ${isAi ? "is-active" : ""}" data-ml-detector-mode="ai" title="${hasReady ? "Use a trained AI crossing model" : "Train and mark a model Ready in Practice → AI Training first"}" ${aiBtnDis}>Trained Model</button>
           </div>
           ${
             isAi

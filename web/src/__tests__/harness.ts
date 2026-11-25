@@ -1215,6 +1215,26 @@ export function makeMockApiClient(store: AppStore): MockApiClientRecord {
       calls.push({ method: "startMLTraining", args });
       return Promise.resolve(store.mlStatus);
     },
+    updateMLModel: (...args: unknown[]) => {
+      calls.push({ method: "updateMLModel", args });
+      const [modelId, patch] = args as [string, { name?: string; ready?: boolean }?];
+      const next = structuredClone(store.mlStatus);
+      const target = next.models.find((m) => m.modelId === modelId);
+      if (target && patch) {
+        if (patch.name !== undefined) target.name = patch.name;
+        if (patch.ready !== undefined) target.ready = patch.ready;
+      }
+      store.ingestMLStatus(next);
+      return Promise.resolve(next);
+    },
+    deleteMLModel: (...args: unknown[]) => {
+      calls.push({ method: "deleteMLModel", args });
+      const [modelId] = args as [string];
+      const next = structuredClone(store.mlStatus);
+      next.models = next.models.filter((m) => m.modelId !== modelId);
+      store.ingestMLStatus(next);
+      return Promise.resolve(next);
+    },
     exportMLDatasetArchive: record("exportMLDatasetArchive", {
       filename: "slaprf-ai-dataset.tar.gz",
       archiveB64: "",

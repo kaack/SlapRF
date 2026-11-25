@@ -156,6 +156,31 @@ func TestHandsFreePackLoopTraceReplayAndOnDeviceMLTraining(t *testing.T) {
 		t.Fatalf("timed out waiting for background ML training: %+v", eng.MLStatus().Training)
 	}
 
+	// Continue fine-tuning the draft model (+4 epochs) and mark it Ready!
+	if _, err := eng.StartMLTraining(MLTrainRequest{
+		Epochs:          4,
+		SessionIDs:      []string{pack1ID},
+		ContinueModelID: trainedID,
+		ModelName:       "Backyard 2-Gate Ready",
+	}); err != nil {
+		t.Fatalf("StartMLTraining continue: %v", err)
+	}
+	for time.Now().Before(deadline) {
+		st := eng.MLStatus()
+		if !st.Training.Running && st.Training.CompletedModelID == trainedID {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	readyTrue := true
+	stReady, err := eng.UpdateMLModel(trainedID, MLModelUpdatePayload{Ready: &readyTrue})
+	if err != nil {
+		t.Fatalf("UpdateMLModel ready: %v", err)
+	}
+	if !stReady.Models[0].Ready || stReady.Models[0].Name != "Backyard 2-Gate Ready" {
+		t.Fatalf("expected model marked Ready with updated name, got %+v", stReady.Models[0])
+	}
+
 	// Activate trained AI Base v1 + Live 2-Lap Tune and fly 2 laps in Pack 2!
 	aiMode := "ai"
 	liveTune := true

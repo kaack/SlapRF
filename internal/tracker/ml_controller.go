@@ -47,6 +47,7 @@ func cloneMLPersistedState(st domain.MLPersistedState) domain.MLPersistedState {
 	for i, m := range st.Models {
 		cp := m
 		cp.Weights = append([]float32(nil), m.Weights...)
+		cp.SourceSessionIDs = append([]string(nil), m.SourceSessionIDs...)
 		out.Models[i] = cp
 	}
 	return out
@@ -732,20 +733,122 @@ func (e *Engine) sealAndAdvancePackLocked() string {
 	return newID
 }
 
-// ---------------------------------------------------------------------------
-// Background Pure-Go Base Model Trainer (`POST /v1/ml/train`)
-// ---------------------------------------------------------------------------
-
-// MLTrainRequest optionally customizes epochs or synthetic augmentation count.
-type MLTrainRequest struct {
-	Epochs          int  `json:"epochs,omitempty"`
-	IncludeUnverified bool `json:"includeUnverified,omitempty"`
+// MLModelUpdatePayload updates a saved custom model's display name or Ready state.
+type MLModelUpdatePayload struct {
+	Name  *string `json:"name,omitempty"`
+	Ready *bool   `json:"ready,omitempty"`
 }
 
-// StartMLTraining launches an asynchronous multi-core Go training run across verified `.rfbin`
-// packs (plus synthetic RF physics stabilization traces), evaluating against an 80/20 pack holdout.
+// UpdateMLModel renames a saved model or marks/unmarks it Ready for Race & Practice selection.
+func (e *Engine) UpdateMLModel(modelID string, req MLModelUpdatePayload) (domain.MLStatus, error) {
+	id := strings.TrimSpace(modelID)
+	e.mu.Lock()
+	e.ensureMLInitializedLocked()
+
+	idx := -1
+	for i := range e.mlState.Models {
+		if e.mlState.Models[i].ModelID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		st := e.buildMLStatusLocked()
+		e.mu.Unlock()
+		return st, fmt.Errorf("unknown modelId %q", id)
+	}
+
+	if req.Name != nil {
+		trimmed := strings.TrimSpace(*req.Name)
+		if trimmed != "" {
+			e.mlState.Models[idx].Name = trimmed
+		}
+	}
+	if req.Ready != nil {
+		e.mlState.Models[idx].Ready = *req.Ready
+		if !*req.Ready && e.mlState.Config.ActiveModelID == id {
+			e.fallbackActiveReadyModelLocked()
+		}
+	}
+
+	st := e.buildMLStatusLocked()
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	e.notifyMLUpdated(st, subs)
+	return st, nil
+}
+
+// DeleteMLModel removes a custom model snapshot and falls back cleanly if it was active.
+func (e *Engine) DeleteMLModel(modelID string) (domain.MLStatus, error) {
+	id := strings.TrimSpace(modelID)
+	e.mu.Lock()
+	e.ensureMLInitializedLocked()
+
+	idx := -1
+	for i := range e.mlState.Models {
+		if e.mlState.Models[i].ModelID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		st := e.buildMLStatusLocked()
+		e.mu.Unlock()
+		return st, fmt.Errorf("unknown modelId %q", id)
+	}
+
+	e.mlState.Models = append(e.mlState.Models[:idx], e.mlState.Models[idx+1:]...)
+	if e.mlState.Config.ActiveModelID == id {
+		e.fallbackActiveReadyModelLocked()
+	}
+
+	st := e.buildMLStatusLocked()
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	e.notifyMLUpdated(st, subs)
+	return st, nil
+}
+
+func (e *Engine) fallbackActiveReadyModelLocked() {
+	for i := len(e.mlState.Models) - 1; i >= 0; i-- {
+		if e.mlState.Models[i].Ready {
+			e.mlState.Config.ActiveModelID = e.mlState.Models[i].ModelID
+			e.mlActiveTCN = nil
+			tcn := e.resolveActiveTCNLocked()
+			for _, det := range e.mlDetectors {
+				det.SetModel(tcn)
+			}
+			e.mlLiveTunes = make(map[detKey]domain.MLLiveGateTune)
+			e.syncLiveTuneSliceLocked()
+			return
+		}
+	}
+	e.mlState.Config.DetectorMode = domain.DetectorModeClassic
+	e.mlState.Config.ActiveModelID = "ai-base-v0"
+	e.mlActiveTCN = nil
+	e.mlLiveTunes = make(map[detKey]domain.MLLiveGateTune)
+	e.syncLiveTuneSliceLocked()
+}
+
+// ---------------------------------------------------------------------------
+// Background Pure-Go Base Model Trainer (`POST /v1/ml:train`)
+// ---------------------------------------------------------------------------
+
+// MLTrainRequest customizes epochs, source Practice sessions, model name, or continued fine-tuning.
+type MLTrainRequest struct {
+	Epochs            int      `json:"epochs,omitempty"`
+	IncludeUnverified bool     `json:"includeUnverified,omitempty"`
+	SessionIDs        []string `json:"sessionIds,omitempty"`
+	ContinueModelID   string   `json:"continueModelId,omitempty"`
+	ModelName         string   `json:"modelName,omitempty"`
+}
+
+// StartMLTraining launches an asynchronous multi-core Go training run across selected Practice
+// `.rfbin` traces (plus synthetic RF physics stabilization traces).
 func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
-	initTCN, _ := ml.PretrainedBaseModel()
+	basePretrained, _ := ml.PretrainedBaseModel()
 
 	e.mu.Lock()
 	e.ensureMLInitializedLocked()
@@ -755,19 +858,48 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 		e.mu.Unlock()
 		return st, errors.New("an on-device model training job is already running")
 	}
-	if e.isLiveRaceHeatActiveLocked() || (e.practiceState.ActiveSessionID != "" && e.raceArmed) {
-		if activeSess := e.findPracticeSessionLocked(e.practiceState.ActiveSessionID); activeSess != nil && activeSess.Active && !activeSess.Paused {
-			st := e.buildMLStatusLocked()
-			e.mu.Unlock()
-			return st, errors.New("pause or stop the active session before training the base model so live timing stays real-time")
-		}
+	if e.isLiveRaceHeatActiveLocked() {
+		st := e.buildMLStatusLocked()
+		e.mu.Unlock()
+		return st, errors.New("finish or abort the active race heat before training a model")
+	}
+	if e.practiceState.ActiveSessionID != "" {
+		e.syncActivePracticeRecordsLocked()
 	}
 
 	epochs := req.Epochs
 	if epochs <= 0 {
-		epochs = 32
+		epochs = 28
 	} else if epochs > 80 {
 		epochs = 80
+	}
+
+	initTCN := basePretrained
+	lr := float32(0.0035)
+	updateInPlaceID := ""
+	prevEpochs := 0
+	prevDurMs := int64(0)
+	baseName := strings.TrimSpace(req.ModelName)
+
+	if cid := strings.TrimSpace(req.ContinueModelID); cid != "" {
+		for _, m := range e.mlState.Models {
+			if m.ModelID == cid && len(m.Weights) == ml.TotalParams {
+				cloned := &ml.TCN{}
+				if cloned.ImportWeights(m.Weights) {
+					initTCN = cloned
+					lr = 0.0018
+					if !m.Ready {
+						updateInPlaceID = m.ModelID
+						prevEpochs = m.EpochsTrained
+						prevDurMs = m.TrainDurationMs
+						if baseName == "" {
+							baseName = m.Name
+						}
+					}
+				}
+				break
+			}
+		}
 	}
 
 	// Snapshot candidate sessions & pilot defaults so training runs outside Engine.mu!
@@ -790,7 +922,7 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 		Epoch:       0,
 		TotalEpochs: epochs,
 		Loss:        0,
-		Message:     "Preparing verified flight traces...",
+		Message:     "Preparing practice signal traces...",
 		StartedAt:   nowISO(),
 	}
 	st := e.buildMLStatusLocked()
@@ -799,7 +931,21 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 
 	e.notifyMLUpdated(st, subs)
 
-	go e.runMLTrainingWorker(sessionsCopy, pilotsCopy, ts, initTCN, nextVer, epochs, req.IncludeUnverified)
+	go e.runMLTrainingWorker(
+		sessionsCopy,
+		pilotsCopy,
+		ts,
+		initTCN,
+		nextVer,
+		epochs,
+		lr,
+		req.IncludeUnverified,
+		append([]string(nil), req.SessionIDs...),
+		updateInPlaceID,
+		prevEpochs,
+		prevDurMs,
+		baseName,
+	)
 	return st, nil
 }
 
@@ -810,7 +956,13 @@ func (e *Engine) runMLTrainingWorker(
 	initTCN *ml.TCN,
 	nextVer int,
 	epochs int,
+	lr float32,
 	includeUnverified bool,
+	requestedSessionIDs []string,
+	updateInPlaceID string,
+	prevEpochs int,
+	prevDurMs int64,
+	customName string,
 ) {
 	t0 := time.Now()
 	type packGroup struct {
@@ -819,9 +971,22 @@ func (e *Engine) runMLTrainingWorker(
 		passes    int
 	}
 	var packs []packGroup
+	var usedSessionIDs []string
+
+	selectedSet := make(map[string]bool, len(requestedSessionIDs))
+	for _, id := range requestedSessionIDs {
+		trimmed := strings.TrimSpace(id)
+		if trimmed != "" {
+			selectedSet[trimmed] = true
+		}
+	}
 
 	for _, s := range sessions {
-		if !s.TrainingVerified && !includeUnverified {
+		if len(selectedSet) > 0 {
+			if !selectedSet[s.SessionID] {
+				continue
+			}
+		} else if !s.TrainingVerified && !includeUnverified {
 			continue
 		}
 		samples, err := ts.ReadSession(s.SessionID)
@@ -836,7 +1001,7 @@ func (e *Engine) runMLTrainingWorker(
 		for _, tr := range ltr {
 			passSum += len(tr.Positives)
 		}
-		if passSum == 0 && !s.TrainingVerified {
+		if passSum == 0 && len(selectedSet) == 0 && !s.TrainingVerified {
 			continue
 		}
 		packs = append(packs, packGroup{
@@ -844,9 +1009,10 @@ func (e *Engine) runMLTrainingWorker(
 			traces:    ltr,
 			passes:    passSum,
 		})
+		usedSessionIDs = append(usedSessionIDs, s.SessionID)
 	}
 
-	// If no verified packs had `.rfbin` traces yet, fall back to any recorded session with >= 1 lap
+	// If no explicit/verified packs had `.rfbin` traces yet, fall back to any recorded session with >= 1 crossing
 	if len(packs) == 0 {
 		for _, s := range sessions {
 			if len(s.Crossings) == 0 {
@@ -867,6 +1033,7 @@ func (e *Engine) runMLTrainingWorker(
 					traces:    ltr,
 					passes:    passSum,
 				})
+				usedSessionIDs = append(usedSessionIDs, s.SessionID)
 			}
 		}
 	}
@@ -898,10 +1065,9 @@ func (e *Engine) runMLTrainingWorker(
 			valTraces = append(valTraces, packs[i].traces...)
 			realPassCount += packs[i].passes
 		}
-		// Blend 4 synthetic physics traces so small datasets keep broad dipole/Wi-Fi generalization
 		trainTraces = append(trainTraces, ml.GenerateSyntheticTraces(4, 20261124+int64(nextVer))...)
 	} else {
-		// 1-2 packs: train on real + synthetic, validate on real + unseen synthetic
+		// 1-2 sessions: train on real + synthetic, validate on real + unseen synthetic
 		trainPackCount = len(packs)
 		valPackCount = len(packs)
 		for _, p := range packs {
@@ -915,7 +1081,7 @@ func (e *Engine) runMLTrainingWorker(
 
 	trained, finalLoss := ml.TrainModel(trainTraces, initTCN, ml.TrainOptions{
 		Epochs:       epochs,
-		LearningRate: 0.0035,
+		LearningRate: lr,
 		WeightDecay:  1e-4,
 		AugPerTrace:  3,
 		Seed:         time.Now().UnixNano(),
@@ -934,37 +1100,72 @@ func (e *Engine) runMLTrainingWorker(
 
 	aiM, clM := ml.BenchmarkTraces(trained, valTraces, 1_500_000)
 	durMs := time.Since(t0).Milliseconds()
-	modelID := fmt.Sprintf("ai-base-v%d", nextVer)
-	snap := domain.MLModelSnapshot{
-		MLModelSummary: domain.MLModelSummary{
-			ModelID:         modelID,
-			Name:            fmt.Sprintf("AI Base v%d", nextVer),
-			Version:         nextVer,
-			CreatedAt:       nowISO(),
-			BuiltIn:         false,
-			TrainPacks:      trainPackCount,
-			ValPacks:        valPackCount,
-			TrainPasses:     realPassCount,
-			TrainDurationMs: durMs,
-			FinalLoss:       math.Round(finalLoss*10000) / 10000,
-			AIMetrics:       aiM,
-			ClassicMetrics:  clM,
-		},
-		Weights: trained.ExportWeights(),
+	modelID := updateInPlaceID
+	if modelID == "" {
+		modelID = fmt.Sprintf("ai-base-v%d", nextVer)
 	}
+	modelName := strings.TrimSpace(customName)
+	if modelName == "" {
+		modelName = fmt.Sprintf("AI Model v%d", nextVer)
+	}
+	totalEpochsTrained := prevEpochs + epochs
+	totalDurMs := prevDurMs + durMs
 
 	e.mu.Lock()
-	e.mlState.Models = append(e.mlState.Models, snap)
-	// Keep at most 8 custom model snapshots so bbolt config stays compact (~160 KB max)
-	if len(e.mlState.Models) > 8 {
-		e.mlState.Models = e.mlState.Models[len(e.mlState.Models)-8:]
+	updatedExisting := false
+	if updateInPlaceID != "" {
+		for i := range e.mlState.Models {
+			if e.mlState.Models[i].ModelID == updateInPlaceID {
+				e.mlState.Models[i].Name = modelName
+				e.mlState.Models[i].EpochsTrained = totalEpochsTrained
+				e.mlState.Models[i].SourceSessionIDs = usedSessionIDs
+				e.mlState.Models[i].TrainPacks = trainPackCount
+				e.mlState.Models[i].ValPacks = valPackCount
+				e.mlState.Models[i].TrainPasses = realPassCount
+				e.mlState.Models[i].TrainDurationMs = totalDurMs
+				e.mlState.Models[i].FinalLoss = math.Round(finalLoss*10000) / 10000
+				e.mlState.Models[i].AIMetrics = aiM
+				e.mlState.Models[i].ClassicMetrics = clM
+				e.mlState.Models[i].Weights = trained.ExportWeights()
+				modelID = e.mlState.Models[i].ModelID
+				modelName = e.mlState.Models[i].Name
+				updatedExisting = true
+				break
+			}
+		}
+	}
+	if !updatedExisting {
+		snap := domain.MLModelSnapshot{
+			MLModelSummary: domain.MLModelSummary{
+				ModelID:          modelID,
+				Name:             modelName,
+				Version:          nextVer,
+				CreatedAt:        nowISO(),
+				BuiltIn:          false,
+				Ready:            false,
+				EpochsTrained:    totalEpochsTrained,
+				SourceSessionIDs: usedSessionIDs,
+				TrainPacks:       trainPackCount,
+				ValPacks:         valPackCount,
+				TrainPasses:      realPassCount,
+				TrainDurationMs:  totalDurMs,
+				FinalLoss:        math.Round(finalLoss*10000) / 10000,
+				AIMetrics:        aiM,
+				ClassicMetrics:   clM,
+			},
+			Weights: trained.ExportWeights(),
+		}
+		e.mlState.Models = append(e.mlState.Models, snap)
+		if len(e.mlState.Models) > 8 {
+			e.mlState.Models = e.mlState.Models[len(e.mlState.Models)-8:]
+		}
 	}
 	e.mlTraining = domain.MLTrainingProgress{
 		Running:          false,
 		Epoch:            epochs,
 		TotalEpochs:      epochs,
-		Loss:             snap.FinalLoss,
-		Message:          fmt.Sprintf("Trained %s in %.1fs (F1 %.1f%%)", snap.Name, float64(durMs)/1000.0, aiM.F1*100.0),
+		Loss:             math.Round(finalLoss*10000) / 10000,
+		Message:          fmt.Sprintf("Trained %s (%d epochs · F1 %.1f%%)", modelName, totalEpochsTrained, aiM.F1*100.0),
 		CompletedModelID: modelID,
 	}
 	st := e.buildMLStatusLocked()

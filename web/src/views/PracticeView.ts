@@ -48,10 +48,11 @@ import { mountTagPillEditor, renderTagPillBoxHtml } from "../widgets/TagPillEdit
 import { cleanConnectionInvalidReason, showToast } from "../widgets/Toast";
 import { AllPilotsPanel } from "./live/AllPilotsPanel";
 import { PilotPanel } from "./live/PilotPanel";
+import { PracticeAITrainingTab } from "./live/PracticeAITrainingTab";
 import { PilotView } from "./PilotView";
 
 type SessionDirStatusFilter = "all" | "live" | "stopped" | "laps";
-type MobilePracticeTab = "pilots" | "track" | "overview" | "laps" | "trends" | "signals" | "analytics";
+type MobilePracticeTab = "pilots" | "track" | "overview" | "laps" | "trends" | "signals" | "analytics" | "ai";
 
 function formatShortSessionDate(iso?: string): string {
   if (!iso) return "";
@@ -204,6 +205,8 @@ export class PracticeView extends Component {
   private practiceTrackSessionId = "";
   private practiceAnalyticsView: PilotView | null = null;
   private practiceAnalyticsEl: HTMLElement | null = null;
+  private practiceAIView: PracticeAITrainingTab | null = null;
+  private practiceAIEl: HTMLElement | null = null;
   private dirOpenMenuSessionId = "";
   private pendingRouteTarget: PracticeRouteTarget | null = null;
   private resolvingSessionId = "";
@@ -262,6 +265,9 @@ export class PracticeView extends Component {
                 <button type="button" role="tab" aria-selected="false" class="rc-topleft-btn rc-mode-btn" data-practice-mobile-tab="analytics">
                   ${icons.chart(15)}<span>Analytics</span>
                 </button>
+                <button type="button" role="tab" aria-selected="false" class="rc-topleft-btn rc-mode-btn" data-practice-mobile-tab="ai">
+                  ${icons.ai(15)}<span>AI Training</span>
+                </button>
               </div>
               <button type="button" class="sched-lineup-cue is-right" data-lineup-scroll="1" aria-label="Scroll tabs right" title="More tabs" hidden>${icons.chevronRight(14)}</button>
             </div>
@@ -284,6 +290,7 @@ export class PracticeView extends Component {
           <div class="practice-mobile-sectors-wrap" data-slot="mobile-sectors" data-practice-mobile-pane="laps"></div>
           <section class="rc-canvas-panel rc-page-card is-signals-panel practice-mobile-signals-panel" data-slot="mobile-signals" data-practice-mobile-pane="signals"></section>
           <div class="practice-mobile-analytics-wrap" data-slot="mobile-analytics" data-practice-mobile-pane="analytics"></div>
+          <div class="practice-mobile-ai-wrap" data-slot="mobile-ai" data-practice-mobile-pane="ai"></div>
         </div>
       </div>`;
 
@@ -373,6 +380,7 @@ export class PracticeView extends Component {
       this.disposePracticeSignalsChart();
       this.disposePracticeTrackView();
       this.disposePracticeAnalyticsView();
+      this.disposePracticeAIView();
       this.panel?.destroy();
       setPracticeTopBarContext({
         tab: "directory",
@@ -496,7 +504,8 @@ export class PracticeView extends Component {
       requestedPane === "laps" ||
       requestedPane === "trends" ||
       requestedPane === "signals" ||
-      requestedPane === "analytics"
+      requestedPane === "analytics" ||
+      requestedPane === "ai"
     ) {
       this.setMobilePracticeTab(requestedPane, null, false);
     }
@@ -579,12 +588,13 @@ export class PracticeView extends Component {
       this.disposePracticeSignalsChart();
       this.disposePracticeTrackView();
       this.disposePracticeAnalyticsView();
+      this.disposePracticeAIView();
       this.renderDirectory();
     } else {
       dirEl.style.display = "none";
       wsEl.style.display = "";
       const selSess = this.store.selectedPracticeSession;
-      if (selSess && !selSess.active) {
+      if (selSess && (!selSess.active || !this.store.hasSessionTrace(selSess.sessionId))) {
         void this.api.ensurePracticeSessionTrace(selSess.sessionId).catch(() => undefined);
       }
       wsEl.dataset.mobilePracticeView = this.mobilePracticeTab;
@@ -619,6 +629,13 @@ export class PracticeView extends Component {
           this.shownFocus = undefined;
         }
         this.renderMobileAnalyticsPanel();
+      } else if (tab === "ai") {
+        if (this.panel) {
+          this.panel.destroy();
+          this.panel = undefined;
+          this.shownFocus = undefined;
+        }
+        this.renderMobileAIPanel();
       } else {
         this.showPanel();
         if (tab === "laps") {
@@ -751,6 +768,13 @@ export class PracticeView extends Component {
         this.shownFocus = undefined;
       }
       this.renderMobileAnalyticsPanel(true);
+    } else if (nextTab === "ai") {
+      if (this.panel) {
+        this.panel.destroy();
+        this.panel = undefined;
+        this.shownFocus = undefined;
+      }
+      this.renderMobileAIPanel(true);
     } else {
       this.showPanel();
     }
@@ -3394,6 +3418,44 @@ export class PracticeView extends Component {
     }
     if (force) {
       this.practiceAnalyticsView.onActivate();
+    }
+  }
+
+  private disposePracticeAIView(): void {
+    if (this.practiceAIView) {
+      this.practiceAIView.destroy();
+      this.practiceAIView = null;
+    }
+    if (this.practiceAIEl) {
+      this.practiceAIEl.remove();
+      this.practiceAIEl = null;
+    }
+  }
+
+  private renderMobileAIPanel(force = false): void {
+    const host = this.slot("mobile-ai");
+    if (this.activeTab !== "session") {
+      this.disposePracticeAIView();
+      host.innerHTML = "";
+      return;
+    }
+    if (!this.practiceAIView || !this.practiceAIEl) {
+      this.practiceAIEl = document.createElement("div");
+      this.practiceAIEl.className = "rc-ai-embedded";
+      this.practiceAIView = new PracticeAITrainingTab(
+        this.practiceAIEl,
+        this.store,
+        this.api,
+        (targetTab) => {
+          this.setMobilePracticeTab(targetTab, null, true);
+        }
+      );
+    }
+    if (this.practiceAIEl.parentElement !== host) {
+      host.appendChild(this.practiceAIEl);
+    }
+    if (force) {
+      this.practiceAIView.onActivate();
     }
   }
 
