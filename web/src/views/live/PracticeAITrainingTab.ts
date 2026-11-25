@@ -152,11 +152,15 @@ export class PracticeAITrainingTab extends Component {
           `${m.modelId}:${m.name}:${m.builtIn ? 1 : 0}:${m.epochsTrained ?? 0}:${m.aiMetrics?.f1 ?? 0}:${m.finalLoss}`
       )
       .join("|");
+    const packsSig = (ml.teacher?.packs ?? [])
+      .map((p) => `${p.packId}:${p.installed ? 1 : 0}:${p.partialBytes ?? 0}`)
+      .join("|");
     return [
       sess?.sessionId ?? "",
       sess?.name ?? "",
       sess?.laps.length ?? 0,
       sess?.crossings.length ?? 0,
+      sess?.teacherLabeledAt ?? "",
       others.length,
       others.reduce((sum, s) => sum + countValidPasses(s), 0),
       this.searchQuery,
@@ -168,6 +172,14 @@ export class PracticeAITrainingTab extends Component {
       this.startingEpochs,
       ml.config.detectorMode,
       ml.config.activeModelId,
+      ml.config.teacherPackId ?? "",
+      ml.config.autoLabelOnTrain !== false ? 1 : 0,
+      ml.teacher?.ready ? 1 : 0,
+      ml.teacher?.activePackId ?? "",
+      ml.teacher?.download?.running ? 1 : 0,
+      ml.teacher?.download?.percent ?? 0,
+      ml.teacher?.download?.error ?? "",
+      packsSig,
       ml.training.running ? 1 : 0,
       ml.training.epoch,
       ml.training.totalEpochs,
@@ -302,7 +314,79 @@ export class PracticeAITrainingTab extends Component {
 
     const alertsHtml = `
       ${this.errorMsg ? `<div class="ai-train-banner is-error" role="alert">${esc(this.errorMsg)}</div>` : ""}
+      ${ml.teacher?.download?.error ? `<div class="ai-train-banner is-error" role="alert">${esc(ml.teacher.download.error)}</div>` : ""}
       ${this.statusMsg ? `<div class="ai-train-banner is-ok" role="status">${esc(this.statusMsg)}</div>` : ""}`;
+
+    const teacher = ml.teacher;
+    const teacherPacks = teacher?.packs ?? [];
+    const selectedPackId = ml.config.teacherPackId || teacher?.activePackId || "qwen3-1.7b-q4_k_m";
+    const autoLabelChecked = ml.config.autoLabelOnTrain !== false;
+    const activeTeacherPack = teacherPacks.find((p) => p.packId === (teacher?.activePackId || selectedPackId));
+    const activePackBadge = activeTeacherPack?.packId.includes("0.6b") ? "Qwen3 0.6B" : "Qwen3 1.7B";
+
+    let teacherRowHtml = "";
+    if (teacher?.download?.running) {
+      const dlPct = Math.max(1, Math.min(100, teacher.download.percent || 0));
+      teacherRowHtml = `
+        <div class="ai-teacher-dl-box" data-ai-teacher-dl>
+          <div class="ai-train-progress-text">
+            <span>Downloading on-device AI labeler…</span>
+            <span class="ai-teacher-dl-right">
+              <span class="mono">${dlPct.toFixed(1)}%</span>
+              <button type="button" class="btn btn-ghost btn-xs" data-ai-act="cancel-teacher">Cancel</button>
+            </span>
+          </div>
+          <div class="ai-progress-track">
+            <div class="ai-progress-fill" style="width:${dlPct}%"></div>
+          </div>
+        </div>`;
+    } else if (teacher?.ready) {
+      teacherRowHtml = `
+        <div class="ai-teacher-row is-ready" data-ai-teacher-ready>
+          <label class="ai-check-label">
+            <input type="checkbox" data-ai-auto-label ${autoLabelChecked ? "checked" : ""} ${isBusy ? "disabled" : ""} />
+            <span>Auto-label RSSI on-device</span>
+          </label>
+          <div class="ai-teacher-meta">
+            <span class="badge mono">${esc(activePackBadge)}</span>
+            ${
+              activeTeacherPack?.installed
+                ? `<button
+                     type="button"
+                     class="btn btn-ghost btn-xs ai-model-del-btn"
+                     data-ai-act="delete-teacher"
+                     data-pack-id="${esc(activeTeacherPack.packId)}"
+                     title="Remove downloaded labeler weights"
+                     aria-label="Remove downloaded labeler weights"
+                     ${isBusy ? "disabled" : ""}
+                   >${icons.trash(13)}</button>`
+                : ""
+            }
+          </div>
+        </div>`;
+    } else if (teacherPacks.length > 0) {
+      const packOpts = teacherPacks
+        .map((p) => {
+          const mb =
+            p.sizeBytes >= 1e9
+              ? `${(p.sizeBytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+              : `${Math.round(p.sizeBytes / (1024 * 1024))} MB`;
+          return `<option value="${esc(p.packId)}" ${p.packId === selectedPackId ? "selected" : ""}>${esc(p.name)} (${mb})</option>`;
+        })
+        .join("");
+      teacherRowHtml = `
+        <div class="ai-teacher-row" data-ai-teacher-setup>
+          <span class="ai-teacher-label">On-device AI RSSI Labeler</span>
+          <div class="ai-teacher-actions">
+            <select class="input input-sm ai-teacher-pack-select" data-ai-teacher-pack aria-label="On-device AI labeler model" ${isBusy ? "disabled" : ""}>
+              ${packOpts}
+            </select>
+            <button type="button" class="btn btn-ghost btn-xs" data-ai-act="download-teacher" ${isBusy ? "disabled" : ""}>
+              Download
+            </button>
+          </div>
+        </div>`;
+    }
 
     const canCreate = this.canCreateFromSearch();
     const modelsCardHtml = `
@@ -354,6 +438,7 @@ export class PracticeAITrainingTab extends Component {
                </label>`
             : ""
         }
+        ${teacherRowHtml}
 
         <div class="ai-train-controls-row">
           ${
@@ -407,7 +492,7 @@ export class PracticeAITrainingTab extends Component {
           isBusy
             ? `<div class="ai-train-progress-wrap" data-ai-progress>
                  <div class="ai-train-progress-text">
-                   <span>${effEpoch > 0 ? `Epoch ${effEpoch} / ${effTotalEpochs}` : "Preparing training data…"}</span>
+                   <span>${effEpoch > 0 ? `Epoch ${effEpoch} / ${effTotalEpochs}` : esc(ml.training.message || "Preparing training data…")}</span>
                    <span class="mono">${effEpoch > 0 ? `loss ${ml.training.loss.toFixed(4)}` : `0 / ${effTotalEpochs}`}</span>
                  </div>
                  <div class="ai-progress-track">
@@ -596,6 +681,20 @@ export class PracticeAITrainingTab extends Component {
       return;
     }
 
+    if (target instanceof HTMLInputElement && target.hasAttribute("data-ai-auto-label")) {
+      void this.api
+        .updateMLConfig({ autoLabelOnTrain: target.checked })
+        .catch((err: unknown) => this.setErr(err));
+      return;
+    }
+
+    if (target instanceof HTMLSelectElement && target.hasAttribute("data-ai-teacher-pack")) {
+      void this.api
+        .updateMLConfig({ teacherPackId: target.value })
+        .catch((err: unknown) => this.setErr(err));
+      return;
+    }
+
     if (target instanceof HTMLInputElement && target.hasAttribute("data-ai-import-file")) {
       const file = target.files?.[0];
       target.value = "";
@@ -670,6 +769,36 @@ export class PracticeAITrainingTab extends Component {
         break;
       }
 
+      case "download-teacher": {
+        const selEl = this.el.querySelector<HTMLSelectElement>("[data-ai-teacher-pack]");
+        const packId =
+          selEl?.value ||
+          this.store.mlStatus.config.teacherPackId ||
+          "qwen3-1.7b-q4_k_m";
+        void this.api
+          .downloadMLTeacherPack(packId)
+          .catch((err: unknown) => this.setErr(err));
+        break;
+      }
+
+      case "cancel-teacher": {
+        void this.api
+          .cancelMLTeacherDownload()
+          .catch((err: unknown) => this.setErr(err));
+        break;
+      }
+
+      case "delete-teacher": {
+        const packId =
+          btn.dataset.packId ||
+          this.store.mlStatus.teacher?.activePackId ||
+          "qwen3-1.7b-q4_k_m";
+        void this.api
+          .deleteMLTeacherPack(packId)
+          .catch((err: unknown) => this.setErr(err));
+        break;
+      }
+
       case "train-fresh": {
         if (this.startingTraining || this.store.mlStatus.training.running) return;
         const modelId =
@@ -686,6 +815,7 @@ export class PracticeAITrainingTab extends Component {
           .startMLTraining({
             epochs: 28,
             includeUnverified: true,
+            autoLabel: this.store.mlStatus.config.autoLabelOnTrain !== false,
             sessionIds: this.selectedSessionIds(false),
             continueModelId: modelId,
           })
@@ -718,6 +848,7 @@ export class PracticeAITrainingTab extends Component {
           .startMLTraining({
             epochs: 20,
             includeUnverified: true,
+            autoLabel: this.store.mlStatus.config.autoLabelOnTrain !== false,
             sessionIds: this.selectedSessionIds(true),
             continueModelId: modelId,
           })

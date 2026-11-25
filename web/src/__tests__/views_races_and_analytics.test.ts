@@ -2611,6 +2611,33 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
         verifiedPasses: 0,
         storageBytes: 65536,
         liveTunes: [],
+        teacher: {
+          activePackId: "qwen3-1.7b-q4_k_m",
+          ready: false,
+          packs: [
+            {
+              packId: "qwen3-1.7b-q4_k_m",
+              name: "Qwen3 1.7B (Recommended)",
+              description: "Best accuracy",
+              sizeBytes: 1107409472,
+              recommended: true,
+              installed: false,
+            },
+            {
+              packId: "qwen3-0.6b-q4_k_m",
+              name: "Qwen3 0.6B Lite",
+              description: "Lite",
+              sizeBytes: 396705472,
+              installed: false,
+            },
+          ],
+          download: {
+            running: false,
+            downloadedBytes: 0,
+            totalBytes: 0,
+            percent: 0,
+          },
+        },
       },
     });
     store.setSessionTrace("pack-1", [
@@ -2676,6 +2703,32 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       expect(editorModal.querySelector('[data-lap-ed-gate="2"]')).not.toBeNull();
       expect(editorModal.querySelector("line.lap-ed-rssi-line.is-synthetic")).not.toBeNull();
 
+      // Auto-Label triggers on-device teacher download on first tap, then stages dry-run crossings once ready
+      const autoLabelBtn = editorModal.querySelector<HTMLButtonElement>("[data-lap-ed-auto-label]")!;
+      expect(autoLabelBtn).not.toBeNull();
+      autoLabelBtn.click();
+      await flushMicrotasks();
+      await flushMicrotasks();
+      expect(mock.calls.some((c) => c.method === "downloadMLTeacherPack")).toBe(true);
+      expect(store.mlStatus.teacher?.ready).toBe(true);
+
+      document.body
+        .querySelector<HTMLButtonElement>(".lap-editor-modal [data-lap-ed-auto-label]")!
+        .click();
+      await flushMicrotasks();
+      await flushMicrotasks();
+      expect(
+        mock.calls.some(
+          (c) =>
+            c.method === "labelPracticeSession" &&
+            (c.args[1] as { dryRun?: boolean })?.dryRun === true
+        )
+      ).toBe(true);
+      expect(
+        document.body.querySelector<HTMLButtonElement>(".lap-editor-modal [data-lap-ed-save]")!
+          .disabled
+      ).toBe(false);
+
       // Clicking mobile TopBar `< Back` closes the RSSI editor modal and stays in the Practice session
       fakeBackBtn.click();
       await flushMicrotasks();
@@ -2693,6 +2746,8 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       const aiPane = host.querySelector<HTMLElement>('[data-slot="mobile-ai"]')!;
       expect(aiPane.textContent ?? "").not.toContain("AI Training");
       expect(aiPane.textContent ?? "").toContain("Pack 1 Model");
+      expect(aiPane.querySelector("[data-ai-teacher-ready]")).not.toBeNull();
+      expect(aiPane.querySelector<HTMLInputElement>("[data-ai-auto-label]")?.checked).toBe(true);
 
       // 4. Fine-Tune mode shows non-editable model field with pencil button to rename on blur!
       expect(host.querySelector("[data-ai-readonly-field]")).not.toBeNull();

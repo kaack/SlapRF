@@ -1278,6 +1278,83 @@ export function makeMockApiClient(store: AppStore): MockApiClientRecord {
       store.ingestMLStatus(next);
       return Promise.resolve(next);
     },
+    downloadMLTeacherPack: (...args: unknown[]) => {
+      calls.push({ method: "downloadMLTeacherPack", args });
+      const [packId] = args as [string?];
+      const next = structuredClone(store.mlStatus);
+      const id = packId || next.config.teacherPackId || "qwen3-1.7b-q4_k_m";
+      next.config.teacherPackId = id;
+      next.teacher = {
+        activePackId: id,
+        ready: true,
+        packs: (next.teacher?.packs ?? []).map((p) =>
+          p.packId === id ? { ...p, installed: true } : p
+        ),
+        download: {
+          running: false,
+          packId: id,
+          downloadedBytes: 1107409472,
+          totalBytes: 1107409472,
+          percent: 100,
+        },
+      };
+      store.ingestMLStatus(next);
+      return Promise.resolve(next);
+    },
+    cancelMLTeacherDownload: record("cancelMLTeacherDownload"),
+    deleteMLTeacherPack: (...args: unknown[]) => {
+      calls.push({ method: "deleteMLTeacherPack", args });
+      const [packId] = args as [string];
+      const next = structuredClone(store.mlStatus);
+      if (next.teacher) {
+        next.teacher.ready = false;
+        next.teacher.packs = (next.teacher.packs ?? []).map((p) =>
+          p.packId === packId ? { ...p, installed: false } : p
+        );
+      }
+      store.ingestMLStatus(next);
+      return Promise.resolve(next);
+    },
+    labelPracticeSession: (...args: unknown[]) => {
+      calls.push({ method: "labelPracticeSession", args });
+      const [sessionId, payload] = args as [
+        string,
+        { dryRun: boolean; slotIndex?: number; packId?: string },
+      ];
+      return Promise.resolve({
+        sessionId,
+        packId: "qwen3-1.7b-q4_k_m",
+        dryRun: Boolean(payload?.dryRun),
+        candidateCount: 2,
+        crossingsCount: 1,
+        hardNegsCount: 1,
+        decisions: [
+          {
+            id: "C1",
+            gateId: 1,
+            slotIndex: payload?.slotIndex ?? 1,
+            label: "crossing",
+            anchorTsUs: 2_500_000,
+            deltaMs: 0,
+            finalTsUs: 2_500_000,
+            peakRssiDbm: -45,
+            confidence: 0.96,
+          },
+          {
+            id: "C2",
+            gateId: 2,
+            slotIndex: payload?.slotIndex ?? 1,
+            label: "bleed",
+            anchorTsUs: 2_520_000,
+            deltaMs: 0,
+            finalTsUs: 2_520_000,
+            peakRssiDbm: -74,
+            confidence: 0.93,
+          },
+        ],
+        mlStatus: store.mlStatus,
+      });
+    },
     exportMLDatasetArchive: record("exportMLDatasetArchive", {
       filename: "slaprf-ai-dataset.tar.gz",
       archiveB64: "",

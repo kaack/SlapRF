@@ -139,6 +139,7 @@ export function openPracticeLapEditorModal(
   let customY: { minDbm: number; maxDbm: number } | null = null;
   let panAnimFrame = 0;
   let isSaving = false;
+  let isAutoLabeling = false;
   let nextDraftId = -1;
 
   // Map<gateId, DraftGateCrossing[]> for staged edits per timer
@@ -764,6 +765,21 @@ export function openPracticeLapEditorModal(
               <button type="button" class="btn btn-ghost btn-xs" data-lap-ed-reset-view ${hasCustomView ? "" : "hidden"}>
                 ${icons.maximize(13)}<span>Reset View</span>
               </button>
+              <button
+                type="button"
+                class="btn btn-ghost btn-xs"
+                data-lap-ed-auto-label
+                ${isAutoLabeling || isSaving || Boolean(rootStore.mlStatus.teacher?.download?.running) ? "disabled" : ""}
+                title="Auto-label crossings on-device with AI"
+              >
+                ${icons.reviewCheck(13)}<span>${
+                  isAutoLabeling
+                    ? "Labeling…"
+                    : rootStore.mlStatus.teacher?.download?.running
+                      ? `AI ${Math.round(rootStore.mlStatus.teacher.download.percent || 0)}%`
+                      : "Auto-Label"
+                }</span>
+              </button>
               <button type="button" class="btn ${addMode ? "btn-armed" : "btn-ghost"} btn-xs" data-lap-ed-add-mode>
                 ${icons.plus(13)}<span>${addMode ? "Click Peak…" : "Add Crossing"}</span>
               </button>
@@ -1272,6 +1288,10 @@ export function openPracticeLapEditorModal(
       renderModal();
       return;
     }
+    if (target.closest("[data-lap-ed-auto-label]")) {
+      void runAutoLabelPreview();
+      return;
+    }
     if (target.closest("[data-lap-ed-discard]")) {
       draftByGate.clear();
       draftThresholdsByGate.clear();
@@ -1335,8 +1355,105 @@ export function openPracticeLapEditorModal(
     close();
   };
 
-  const unsubStore = rootStore.subscribe(["practice", "laps", "crossings", "config"], () => {
-    if (!dragState && !threshDrag && !viewDrag && !isSaving) {
+  const runAutoLabelPreview = async (): Promise<void> => {
+    const sess = getSession();
+    if (!sess || isAutoLabeling || isSaving) return;
+    const teacher = rootStore.mlStatus.teacher;
+    if (teacher && !teacher.ready) {
+      if (!teacher.download?.running) {
+        try {
+          await rootApi.downloadMLTeacherPack(rootStore.mlStatus.config.teacherPackId);
+          showToast("Downloading on-device AI labeler in background…", "info");
+        } catch (err) {
+          showToast(err instanceof Error ? err.message : String(err), "error");
+        }
+      }
+      return;
+    }
+
+    isAutoLabeling = true;
+    addMode = false;
+    renderModal();
+    try {
+      const res = await rootApi.labelPracticeSession(sessionId, {
+        dryRun: true,
+        slotIndex: selectedPilotSlot,
+      });
+      const latestSess = getSession();
+      if (!latestSess) return;
+
+      const byGateDecs = new Map<number, typeof res.decisions>();
+      for (const d of res.decisions ?? []) {
+        if (d.slotIndex !== selectedPilotSlot) continue;
+        let arr = byGateDecs.get(d.gateId);
+        if (!arr) {
+          arr = [];
+          byGateDecs.set(d.gateId, arr);
+        }
+        arr.push(d);
+      }
+
+      for (const node of nodesList()) {
+        const gid = node.gateId;
+        const orig = extractOriginalGateCrossings(latestSess, gid, selectedPilotSlot);
+        const manualKept = orig.filter((c) => Boolean(c.manual)).map((c) => ({ ...c }));
+        const nonManualOrig = orig.filter((c) => !c.manual);
+        const usedOrigIds = new Set<number>();
+        const nextList: DraftGateCrossing[] = [...manualKept];
+
+        const gateDecs = (byGateDecs.get(gid) ?? []).filter(
+          (d) => d.label === "crossing" && d.confidence >= 0.5
+        );
+        for (const dec of gateDecs) {
+          if (manualKept.some((m) => Math.abs(m.timestampUs - dec.finalTsUs) <= 220_000)) {
+            continue;
+          }
+          // Match closest unedited crossing within +-220 ms so Save Changes cleanly adjusts rather than delete+add
+          let bestOrig: DraftGateCrossing | null = null;
+          let bestDiff = 220_001;
+          for (const cand of nonManualOrig) {
+            if (usedOrigIds.has(cand.crossingId)) continue;
+            const diff = Math.abs(cand.timestampUs - dec.finalTsUs);
+            if (diff < bestDiff) {
+              bestDiff = diff;
+              bestOrig = cand;
+            }
+          }
+          if (bestOrig) {
+            usedOrigIds.add(bestOrig.crossingId);
+            nextList.push({
+              ...bestOrig,
+              timestampUs: dec.finalTsUs,
+              peakRssiDbm: dec.peakRssiDbm,
+            });
+          } else {
+            nextList.push({
+              crossingId: nextDraftId--,
+              gateId: gid,
+              timestampUs: dec.finalTsUs,
+              peakRssiDbm: dec.peakRssiDbm,
+              manual: true,
+            });
+          }
+        }
+        nextList.sort((a, b) => a.timestampUs - b.timestampUs);
+        draftByGate.set(gid, nextList);
+      }
+
+      showToast(
+        `Staged ${res.crossingsCount} AI pass${res.crossingsCount === 1 ? "" : "es"} (${res.hardNegsCount} bleed/noise rejected)`,
+        "info"
+      );
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), "error");
+    } finally {
+      isAutoLabeling = false;
+      renderModal();
+    }
+  };
+
+  const unsubStore = rootStore.subscribe(["practice", "laps", "crossings", "config", "ml"], () => {
+    if (!dragState && !threshDrag && !viewDrag && !isSaving && !isAutoLabeling) {
       renderModal();
     }
   });

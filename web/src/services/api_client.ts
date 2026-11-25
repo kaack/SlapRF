@@ -1223,6 +1223,8 @@ export class ApiClient {
     detectorMode?: "classic" | "ai";
     activeModelId?: string;
     liveTuneEnabled?: boolean;
+    teacherPackId?: string;
+    autoLabelOnTrain?: boolean;
     resetLiveTunes?: boolean;
   }): Promise<MLStatus> {
     const st = await this.transport.request<MLStatus>("PATCH", "/v1/ml", payload);
@@ -1234,6 +1236,7 @@ export class ApiClient {
   public async startMLTraining(payload?: {
     epochs?: number;
     includeUnverified?: boolean;
+    autoLabel?: boolean;
     sessionIds?: string[];
     continueModelId?: string;
     modelName?: string;
@@ -1241,6 +1244,49 @@ export class ApiClient {
     const st = await this.transport.request<MLStatus>("POST", "/v1/ml:train", payload ?? {});
     this.store.ingestMLStatus(st);
     return st;
+  }
+
+  public async downloadMLTeacherPack(packId?: string): Promise<MLStatus> {
+    const st = await this.transport.request<MLStatus>(
+      "POST",
+      "/v1/ml/teacher:download",
+      packId ? { packId } : {}
+    );
+    this.store.ingestMLStatus(st);
+    return st;
+  }
+
+  public async cancelMLTeacherDownload(): Promise<MLStatus> {
+    const st = await this.transport.request<MLStatus>("POST", "/v1/ml/teacher:cancel", {});
+    this.store.ingestMLStatus(st);
+    return st;
+  }
+
+  public async deleteMLTeacherPack(packId: string): Promise<MLStatus> {
+    const st = await this.transport.request<MLStatus>(
+      "DELETE",
+      `/v1/ml/teacher/${encodeURIComponent(packId)}`
+    );
+    this.store.ingestMLStatus(st);
+    return st;
+  }
+
+  public async labelPracticeSession(
+    sessionId: string,
+    payload: { dryRun: boolean; slotIndex?: number; packId?: string }
+  ): Promise<import("../types/models").MLSessionLabelResponse> {
+    const res = await this.transport.request<import("../types/models").MLSessionLabelResponse>(
+      "POST",
+      `/v1/ml/sessions/${encodeURIComponent(sessionId)}:label`,
+      payload
+    );
+    if (res.mlStatus) {
+      this.store.ingestMLStatus(res.mlStatus);
+    }
+    if (!payload.dryRun && res.practice) {
+      this.store.ingestPractice(res.practice);
+    }
+    return res;
   }
 
   public async createMLModel(name: string): Promise<MLStatus> {

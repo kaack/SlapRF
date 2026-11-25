@@ -809,6 +809,15 @@ export interface ManualDeletedCrossing {
   peakRssiDbm?: number;
 }
 
+export interface TeacherNegativeMark {
+  gateId: number;
+  slotIndex: number;
+  timestampUs: number;
+  label: string;
+  confidence: number;
+  peakRssiDbm?: number;
+}
+
 export interface PracticeSession {
   sessionId: string;
   name: string;
@@ -826,6 +835,9 @@ export interface PracticeSession {
   filtered: FilteredDetection[];
   summaries: PilotTrackSummary[];
   trainingVerified?: boolean;
+  teacherLabeledAt?: string;
+  teacherPackId?: string;
+  teacherHardNegs?: TeacherNegativeMark[];
   manualDeletedCrossings?: ManualDeletedCrossing[];
   traceSampleCount?: number;
   traceDurationSec?: number;
@@ -916,6 +928,58 @@ export interface MLConfig {
   detectorMode: DetectorMode;
   activeModelId: string;
   liveTuneEnabled: boolean;
+  teacherPackId?: string;
+  autoLabelOnTrain?: boolean;
+}
+
+export interface MLTeacherPackInfo {
+  packId: string;
+  name: string;
+  description: string;
+  sizeBytes: number;
+  recommended?: boolean;
+  installed: boolean;
+  partialBytes?: number;
+}
+
+export interface MLTeacherDownloadProgress {
+  running: boolean;
+  packId?: string;
+  downloadedBytes: number;
+  totalBytes: number;
+  percent: number;
+  error?: string;
+}
+
+export interface MLTeacherStatus {
+  activePackId: string;
+  ready: boolean;
+  packs: MLTeacherPackInfo[];
+  download: MLTeacherDownloadProgress;
+}
+
+export interface MLCandidateDecision {
+  id: string;
+  gateId: number;
+  slotIndex: number;
+  label: "crossing" | "bleed" | "multipath" | "noise" | string;
+  anchorTsUs: number;
+  deltaMs: number;
+  finalTsUs: number;
+  peakRssiDbm: number;
+  confidence: number;
+}
+
+export interface MLSessionLabelResponse {
+  sessionId: string;
+  packId: string;
+  dryRun: boolean;
+  candidateCount: number;
+  crossingsCount: number;
+  hardNegsCount: number;
+  decisions: MLCandidateDecision[];
+  practice?: PracticeManagerState;
+  mlStatus: MLStatus;
 }
 
 export interface MLLiveGateTune {
@@ -942,6 +1006,7 @@ export interface MLTrainingProgress {
 export interface MLStatus {
   config: MLConfig;
   training: MLTrainingProgress;
+  teacher?: MLTeacherStatus;
   models: MLModelSummary[];
   verifiedPacks: number;
   unverifiedPacks: number;

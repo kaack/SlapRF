@@ -28208,6 +28208,41 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
   cursor: pointer;
 }
 
+.ai-teacher-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-height: 30px;
+}
+
+.ai-teacher-label {
+  font-size: 12.5px;
+  color: var(--text-muted, rgba(255, 255, 255, 0.72));
+}
+
+.ai-teacher-actions,
+.ai-teacher-meta,
+.ai-teacher-dl-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ai-teacher-pack-select {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+  max-width: 210px;
+}
+
+.ai-teacher-dl-box {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
 .ai-pack-status-box {
   display: flex;
   flex-direction: column;
