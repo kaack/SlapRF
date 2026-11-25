@@ -3258,11 +3258,57 @@ html[data-theme="light"] .bar-time {
   box-sizing: border-box;
 }
 .scoped-track-workspace > [data-slot="track"],
+.scoped-track-workspace > [data-slot="detector"],
 .scoped-track-workspace > [data-slot="rules"] {
   width: 100%;
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
+}
+
+.track-detector-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 20px;
+}
+
+.track-detector-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.track-detector-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.track-detector-copy > .note {
+  margin: 0;
+}
+
+.track-detector-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.track-detector-subrow {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
 }
 
 /* Timing rules: global vs per-gate scope */
@@ -3316,8 +3362,28 @@ html[data-theme="light"] .bar-time {
     gap: 10px;
     overflow: hidden;
   }
-  .scoped-track-workspace > [data-slot="track"] {
+  .scoped-track-workspace > [data-slot="track"],
+  .scoped-track-workspace > [data-slot="detector"] {
     flex: 0 0 auto;
+  }
+  .track-detector-bar {
+    padding: 10px 14px;
+    gap: 8px;
+  }
+  .track-detector-main {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .track-detector-main .detector-mode-seg {
+    width: 100%;
+  }
+  .track-detector-main .detector-mode-seg > .scope-tune-seg-btn {
+    flex: 1 1 50%;
+  }
+  .track-detector-subrow {
+    justify-content: space-between;
+    width: 100%;
   }
   .scoped-track-workspace > [data-slot="rules"] {
     flex: 0 1 auto;

@@ -2,7 +2,7 @@ import { dispatchRacesTopBarCommand, replaceAppHash, Router, setAnalyticsScope }
 import { TopBar } from "../layout/TopBar";
 import { Announcer } from "../services/announcer";
 import { PracticeView } from "../views/PracticeView";
-import { TimingRulesEditor } from "../widgets/TimingRulesEditor";
+import { ScopedTrackWorkspace } from "../widgets/ScopedTrackWorkspace";
 import { focusAnalyticsPilotForScope, PilotView } from "../views/PilotView";
 import {
   computeBinPackedControlLayout,
@@ -2585,17 +2585,22 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
     ]);
 
     replaceAppHash("#/practice/pack-1");
-    const root = mountHtml(`<div id="prac-host"></div><div id="rules-host"></div>`);
+    const root = mountHtml(`<div id="prac-host"></div><div id="track-ws-host"></div>`);
     const host = root.querySelector<HTMLElement>("#prac-host")!;
-    const rulesHost = root.querySelector<HTMLElement>("#rules-host")!;
+    const trackWsHost = root.querySelector<HTMLElement>("#track-ws-host")!;
     const mock = makeMockApiClient(store);
     const view = new PracticeView(host, store, mock.api);
-    const rulesEditor = new TimingRulesEditor(rulesHost, store, mock.api);
+    const trackWorkspace = new ScopedTrackWorkspace(trackWsHost, store, mock.api);
     try {
       await flushMicrotasks();
 
-      // 1. While model is still a Draft (ready: false), Trained Model button in Track is disabled
-      const rulesAiBtnBefore = rulesHost.querySelector<HTMLButtonElement>(
+      // 1. Crossing Detector sits in its own top-level [data-slot="detector"] card outside [data-slot="rules"]
+      const detectorSlot = trackWsHost.querySelector<HTMLElement>('[data-slot="detector"]')!;
+      const rulesSlot = trackWsHost.querySelector<HTMLElement>('[data-slot="rules"]')!;
+      expect(detectorSlot).not.toBeNull();
+      expect(rulesSlot.querySelector("[data-ml-detector-mode]")).toBeNull();
+
+      const rulesAiBtnBefore = detectorSlot.querySelector<HTMLButtonElement>(
         '[data-ml-detector-mode="ai"]'
       )!;
       expect(rulesAiBtnBefore).not.toBeNull();
@@ -2625,14 +2630,14 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
         )
       ).toBe(true);
 
-      // 4. Mark Model as Ready -> unlocks Trained Model selection in Race & Practice Track!
+      // 4. Mark Model as Ready -> unlocks AI Model selection in the top-level Track Crossing Detector card!
       const readyBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="toggle-model-ready"]')!;
       expect(readyBtn).not.toBeNull();
       readyBtn.click();
       await flushMicrotasks();
       expect(store.mlStatus.models[0].ready).toBe(true);
 
-      const rulesAiBtnAfter = rulesHost.querySelector<HTMLButtonElement>(
+      const rulesAiBtnAfter = detectorSlot.querySelector<HTMLButtonElement>(
         '[data-ml-detector-mode="ai"]'
       )!;
       expect(rulesAiBtnAfter.disabled).toBe(false);
@@ -2640,9 +2645,9 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       await flushMicrotasks();
       expect(store.mlStatus.config.detectorMode).toBe("ai");
       expect(store.mlStatus.config.activeModelId).toBe("ai-base-v1");
-      expect(rulesHost.querySelector("[data-ml-model-select]")).not.toBeNull();
+      expect(detectorSlot.querySelector("[data-ml-model-select]")).not.toBeNull();
     } finally {
-      rulesEditor.destroy();
+      trackWorkspace.destroy();
       view.destroy();
     }
   });
