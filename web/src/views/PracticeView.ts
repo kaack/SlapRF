@@ -531,6 +531,7 @@ export class PracticeView extends Component {
     this.activeTab = next;
     if (next === "directory") {
       this.pilotPopoverOpen = false;
+      closeActivePracticeLapEditorModal();
     } else if (enteringSession) {
       this.mobilePracticeTab = "overview";
       if (this.store.liveFocus !== null) {

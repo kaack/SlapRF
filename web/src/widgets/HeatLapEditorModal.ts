@@ -900,7 +900,7 @@ export function openHeatLapEditorModal(
         <text x="${(Number(hx) + 4).toFixed(1)}" y="${PAD_T + 11}" class="lap-ed-horn-lbl">HORN 0.0s</text>`;
     }
 
-    // RSSI waveform path (or synthetic crossing pulses if heat predates live RSSI capture)
+    // RSSI waveform path (or flat baseline if heat predates live RSSI capture)
     let waveHtml = "";
     if (trace.length >= 2) {
       const pts = trace.map((p) => `${msToX(p.t).toFixed(1)},${dbmToY(p.r).toFixed(1)}`);
@@ -912,31 +912,12 @@ export function openHeatLapEditorModal(
       waveHtml = `
         <path d="${areaD}" class="lap-ed-rssi-area" />
         <path d="${lineD}" class="lap-ed-rssi-line" />`;
-    } else if (rows.length > 0) {
-      const synPts: string[] = [];
-      const steps = 180;
-      const baseFloor = isLapRFMode(hwMode) ? 360 : isRotorHazardMode(hwMode) ? 22 : -90;
-      const defaultPeak = isLapRFMode(hwMode) ? 2100 : isRotorHazardMode(hwMode) ? 185 : -44;
-      for (let i = 0; i <= steps; i++) {
-        const ms = lastDomain.minMs + (i / steps) * spanMs;
-        let db = baseFloor;
-        for (const r of rows) {
-          const effMs =
-            dragState && dragState.crossingId === r.crossing.crossingId
-              ? dragState.currentOffsetMs
-              : r.offsetMs;
-          const dist = Math.abs(ms - effMs);
-          if (dist < 900) {
-            const pk = r.peakDbm ?? defaultPeak;
-            const g = Math.exp(-(dist * dist) / (2 * 180 * 180));
-            db = Math.max(db, baseFloor + (pk - baseFloor) * g);
-          }
-        }
-        synPts.push(`${msToX(ms).toFixed(1)},${dbmToY(db).toFixed(1)}`);
-      }
-      waveHtml = `<path d="M ${synPts.join(" L ")}" class="lap-ed-rssi-line is-synthetic" />`;
     } else {
-      waveHtml = `<text x="${PAD_L + plotW / 2}" y="${PAD_T + PLOT_H / 2}" class="lap-ed-empty-svg" text-anchor="middle">No RSSI trace recorded yet — double-click or use "+ Add Crossing" to place a manual crossing</text>`;
+      const baseFloor = isLapRFMode(hwMode) ? 360 : isRotorHazardMode(hwMode) ? 22 : -90;
+      const flatY = clamp(dbmToY(baseFloor), PAD_T + 8, SVG_H - PAD_B - 8).toFixed(1);
+      waveHtml = `
+        <line x1="${PAD_L}" y1="${flatY}" x2="${svgW - PAD_R}" y2="${flatY}" class="lap-ed-rssi-line is-synthetic" />
+        <text x="${PAD_L + plotW / 2}" y="${PAD_T + PLOT_H / 2}" class="lap-ed-empty-svg" text-anchor="middle">No RSSI waveform recorded</text>`;
     }
 
     // Crossing pins (only render pins visible within current X window)
@@ -1209,10 +1190,10 @@ export function openHeatLapEditorModal(
             <h3>
               <span class="lap-ed-title-pilot">
                 <span class="dot" style="background:${esc(seat.color || "#38bdf8")}"></span>
-                <span>${esc(seat.callsign)}</span>
+                <span>${esc(seat.callsign)}${chLabel !== "—" ? ` (${esc(chLabel)})` : ""}</span>
               </span>
-              <span class="lap-ed-title-sep">-</span>
-              <span>${esc(heatAcronym)} Review</span>
+              <span class="lap-ed-title-sep lap-ed-lbl-full">-</span>
+              <span class="lap-ed-lbl-full">${esc(heatAcronym)} Review</span>
             </h3>
           </div>
           <button type="button" class="btn btn-ghost btn-xs lap-ed-desktop-close-btn" data-lap-ed-close aria-label="Close">

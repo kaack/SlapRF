@@ -177,7 +177,7 @@ export class TopBar extends Component {
     } else if (target instanceof HTMLElement) {
       if (
         target.closest(
-          ".sidebar, .topbar, .custom-select-popover, .mgp-page-backdrop, .table-scroll, .rc-panel-body, .rc-mobile-laps-scroll, [data-mre-carousel], [data-mre-stepper], [data-rc-topleft-track], .races-page:not(.is-configure-page) .races-page-stack, .practice-mobile-analytics-wrap, .practice-mobile-review-wrap, .practice-mobile-ai-wrap"
+          ".sidebar, .topbar, .custom-select-popover, .mgp-page-backdrop, .lap-editor-backdrop, .lap-ed-table-wrap, .table-scroll, .rc-panel-body, .rc-mobile-laps-scroll, [data-mre-carousel], [data-mre-stepper], [data-rc-topleft-track], .races-page:not(.is-configure-page) .races-page-stack, .practice-mobile-analytics-wrap, .practice-mobile-review-wrap, .practice-mobile-ai-wrap"
         )
       ) {
         return;

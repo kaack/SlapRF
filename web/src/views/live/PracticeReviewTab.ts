@@ -158,15 +158,13 @@ export class PracticeReviewTab extends Component {
             .join("");
 
     this.el.innerHTML = `
-      <div class="ai-train-stack">
+      <div class="practice-review-pane">
         ${pilotTabsHtml}
         <section class="card card-flush practice-review-card">
           <header class="rc-panel-header">
             <div class="rc-panel-title-wrap">
-              ${icons.reviewCheck(15)}
-              <strong>${esc(callsign)}</strong>
-              ${chLabel ? `<span class="badge mono">${esc(chLabel)}</span>` : ""}
-              <span class="note">${validLaps.length} lap${validLaps.length === 1 ? "" : "s"} · ${passCount} passes</span>
+              <span class="dot" style="background:${esc(pilot?.color || "#38bdf8")}"></span>
+              <strong>${esc(callsign)}${chLabel ? ` (${esc(chLabel)})` : ""}</strong>
             </div>
             <div class="rc-panel-actions">
               <button type="button" class="btn btn-primary btn-xs" data-review-open-editor>
@@ -174,7 +172,7 @@ export class PracticeReviewTab extends Component {
               </button>
             </div>
           </header>
-          <div class="table-scroll">
+          <div class="table-scroll practice-review-table-scroll">
             <table class="table rc-compact-table practice-review-table">
               <thead>
                 <tr>

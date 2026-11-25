@@ -2617,8 +2617,13 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       await flushMicrotasks();
 
       const reviewPane = host.querySelector<HTMLElement>('[data-slot="mobile-review"]')!;
-      expect(reviewPane.textContent ?? "").toContain("OneEye");
+      expect(reviewPane.textContent ?? "").toContain("OneEye (R7)");
       expect(reviewPane.textContent ?? "").toContain("L1");
+
+      const fakeBackBtn = document.createElement("button");
+      fakeBackBtn.className = "topbar-back-btn";
+      fakeBackBtn.setAttribute("data-action", "practice-back");
+      root.appendChild(fakeBackBtn);
 
       const lapRssiBtn = reviewPane.querySelector<HTMLButtonElement>(
         '[data-review-open-lap-rssi="1"]'
@@ -2629,9 +2634,16 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
 
       const editorModal = document.body.querySelector<HTMLElement>(".lap-editor-modal")!;
       expect(editorModal).not.toBeNull();
+      expect(editorModal.querySelector(".slaprf-modal-head")?.textContent ?? "").toContain(
+        "OneEye (R7)"
+      );
+      expect(editorModal.querySelector(".lap-ed-metrics-strip")).toBeNull();
       expect(editorModal.querySelector('[data-lap-ed-gate="1"]')).not.toBeNull();
       expect(editorModal.querySelector('[data-lap-ed-gate="2"]')).not.toBeNull();
-      editorModal.querySelector<HTMLButtonElement>("[data-lap-ed-close]")!.click();
+      expect(editorModal.querySelector("line.lap-ed-rssi-line.is-synthetic")).not.toBeNull();
+
+      // Clicking mobile TopBar `< Back` closes the RSSI editor modal and stays in the Practice session
+      fakeBackBtn.click();
       await flushMicrotasks();
       expect(document.body.querySelector(".lap-editor-modal")).toBeNull();
 

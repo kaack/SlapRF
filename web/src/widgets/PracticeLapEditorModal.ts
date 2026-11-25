@@ -214,11 +214,15 @@ export function openPracticeLapEditorModal(
     draftByGate.size > 0 || draftThresholdsByGate.size > 0;
 
   const buildTraceMs = (
+    sess: PracticeSession,
     anchorUs: number,
     gateId: number,
     slotIndex: number
   ): Array<{ t: number; r: number }> => {
-    const frames = reviewStore.historyFor(gateId);
+    let frames = reviewStore.historyFor(gateId);
+    if (frames.length === 0 && sess.active) {
+      frames = rootStore.historyFor(gateId);
+    }
     if (frames.length === 0) return [];
     const slotZeroIdx = Math.max(0, slotIndex - 1);
     const step = frames.length > 2400 ? Math.ceil(frames.length / 2400) : 1;
@@ -572,29 +576,12 @@ export function openPracticeLapEditorModal(
       waveHtml = `
         <path d="M ${xFirst},${baseY} L ${pts.join(" L ")} L ${xLast},${baseY} Z" class="lap-ed-rssi-area" />
         <path d="M ${pts.join(" L ")}" class="lap-ed-rssi-line" />`;
-    } else if (rows.length > 0) {
-      const synPts: string[] = [];
-      const baseFloor = -90;
-      for (let i = 0; i <= 180; i++) {
-        const ms = lastDomain.minMs + (i / 180) * spanMs;
-        let db = baseFloor;
-        for (const r of rows) {
-          const effMs =
-            dragState && dragState.crossingId === r.crossing.crossingId
-              ? dragState.currentOffsetMs
-              : r.offsetMs;
-          const dist = Math.abs(ms - effMs);
-          if (dist < 900) {
-            const pk = r.peakDbm ?? -46;
-            const g = Math.exp(-(dist * dist) / (2 * 180 * 180));
-            db = Math.max(db, baseFloor + (pk - baseFloor) * g);
-          }
-        }
-        synPts.push(`${msToX(ms).toFixed(1)},${dbmToY(db).toFixed(1)}`);
-      }
-      waveHtml = `<path d="M ${synPts.join(" L ")}" class="lap-ed-rssi-line is-synthetic" />`;
     } else {
-      waveHtml = `<text x="${PAD_L + plotW / 2}" y="${PAD_T + PLOT_H / 2}" class="lap-ed-empty-svg" text-anchor="middle">No RSSI trace for this timer — click "+ Add Crossing" or double-click to add a pass</text>`;
+      const flatVal = isLapRFMode(hwMode) ? 360 : isRotorHazardMode(hwMode) ? 22 : -90;
+      const flatY = clamp(dbmToY(flatVal), PAD_T + 8, SVG_H - PAD_B - 8).toFixed(1);
+      waveHtml = `
+        <line x1="${PAD_L}" y1="${flatY}" x2="${svgW - PAD_R}" y2="${flatY}" class="lap-ed-rssi-line is-synthetic" />
+        <text x="${PAD_L + plotW / 2}" y="${PAD_T + PLOT_H / 2}" class="lap-ed-empty-svg" text-anchor="middle">No RSSI waveform recorded</text>`;
     }
 
     const pinsHtml = rows
@@ -695,25 +682,19 @@ export function openPracticeLapEditorModal(
     if (prevSvgWrap && prevSvgWrap.clientWidth > 120) {
       svgW = Math.round(prevSvgWrap.clientWidth);
     }
+    const prevTableWrap = backdrop.querySelector<HTMLElement>(".lap-ed-table-wrap");
+    const savedTableScrollTop = prevTableWrap ? prevTableWrap.scrollTop : 0;
 
     const anchorUs = computeSessionAnchorUs(sess);
-    const trace = buildTraceMs(anchorUs, selectedGateId, selectedPilotSlot);
+    const trace = buildTraceMs(sess, anchorUs, selectedGateId, selectedPilotSlot);
     const rows = derivePassRows(sess, anchorUs, selectedGateId);
     const pilot =
       sess.pilots.find((p) => p.slotIndex === selectedPilotSlot) ??
       reviewStore.pilot(selectedPilotSlot);
     const callsign = pilot?.callsign || `Pilot ${selectedPilotSlot}`;
     const color = pilot?.color || "#38bdf8";
-    const chLabel = pilot?.channel ? formatBandChannelShort(pilot.band, pilot.channel) : "—";
-
-    const pilotLaps = (sess.laps ?? []).filter(
-      (l) => l.slotIndex === selectedPilotSlot && !l.invalidated
-    );
-    const bestLapSec = pilotLaps.reduce(
-      (best, l) => (l.lapTimeSec > 0 && (best === 0 || l.lapTimeSec < best) ? l.lapTimeSec : best),
-      0
-    );
-    const { enterDb, exitDb, hwMode } = getGateThresholds(selectedGateId, selectedPilotSlot);
+    const chLabel = pilot?.channel ? formatBandChannelShort(pilot.band, pilot.channel) : "";
+    const { hwMode } = getGateThresholds(selectedGateId, selectedPilotSlot);
 
     const gateChipsHtml = `<div class="lap-ed-gate-pills">${nodesList()
       .map((g) => {
@@ -739,7 +720,7 @@ export function openPracticeLapEditorModal(
                   : `<span class="muted">—</span>`;
               const rssiCell =
                 r.peakDbm !== null
-                  ? `<span class="lap-ed-num mono">${r.peakDbm}${isSlapRFMode(hwMode) ? " dBm" : ""}</span>`
+                  ? `<span class="lap-ed-num mono">${r.peakDbm}<span class="lap-ed-rssi-unit">${isSlapRFMode(hwMode) ? " dBm" : ""}</span></span>`
                   : `<span class="muted">—</span>`;
               return `
                 <tr class="lap-ed-row ${r.label === "INV" ? "is-invalid-row" : ""} ${isSel ? "is-selected" : ""}" data-lap-ed-row="${r.crossing.crossingId}">
@@ -764,10 +745,8 @@ export function openPracticeLapEditorModal(
             <h3>
               <span class="lap-ed-title-pilot">
                 <span class="dot" style="background:${esc(color)}"></span>
-                <span>${esc(callsign)}</span>
+                <span>${esc(callsign)}${chLabel ? ` (${esc(chLabel)})` : ""}</span>
               </span>
-              <span class="lap-ed-title-sep">-</span>
-              <span>${esc(sess.name || "Practice")} Review</span>
             </h3>
           </div>
           <button type="button" class="btn btn-ghost btn-xs lap-ed-desktop-close-btn" data-lap-ed-close aria-label="Close">
@@ -775,14 +754,6 @@ export function openPracticeLapEditorModal(
           </button>
         </div>
         <div class="slaprf-modal-body lap-ed-body">
-          <div class="lap-ed-metrics-strip">
-            <div class="lap-ed-metric"><span class="lap-ed-metric-lbl">Channel</span><span class="lap-ed-metric-val mono">${esc(chLabel)}</span></div>
-            <div class="lap-ed-metric"><span class="lap-ed-metric-lbl">Laps</span><span class="lap-ed-metric-val mono">${pilotLaps.length}</span></div>
-            <div class="lap-ed-metric"><span class="lap-ed-metric-lbl">Best Lap</span><span class="lap-ed-metric-val mono">${bestLapSec > 0 ? `${bestLapSec.toFixed(2)}s` : "—"}</span></div>
-            <div class="lap-ed-metric"><span class="lap-ed-metric-lbl">${esc(curGateLabel)} Passes</span><span class="lap-ed-metric-val mono">${rows.length}</span></div>
-            <div class="lap-ed-metric is-thresh-metric"><span class="lap-ed-metric-lbl">${isLapRFMode(hwMode) ? "Threshold" : "Enter / Exit"}</span><span class="lap-ed-metric-val mono">${isLapRFMode(hwMode) ? `${enterDb}` : isRotorHazardMode(hwMode) ? `${enterDb} / ${exitDb}` : `${enterDb} / ${exitDb} dBm`}</span></div>
-          </div>
-
           <div class="lap-ed-controls-strip">
             <div class="lap-ed-controls-left">${gateChipsHtml}</div>
             <div class="lap-ed-controls-right" role="group" aria-label="Crossing actions">
@@ -827,6 +798,11 @@ export function openPracticeLapEditorModal(
           </button>
         </div>
       </div>`;
+
+    const nextTableWrap = backdrop.querySelector<HTMLElement>(".lap-ed-table-wrap");
+    if (nextTableWrap && savedTableScrollTop > 0) {
+      nextTableWrap.scrollTop = savedTableScrollTop;
+    }
   };
 
   const refreshSvgOnly = (): void => {
@@ -835,7 +811,7 @@ export function openPracticeLapEditorModal(
     if (!wrap || !sess) return;
     if (wrap.clientWidth > 120) svgW = Math.round(wrap.clientWidth);
     const anchorUs = computeSessionAnchorUs(sess);
-    const trace = buildTraceMs(anchorUs, selectedGateId, selectedPilotSlot);
+    const trace = buildTraceMs(sess, anchorUs, selectedGateId, selectedPilotSlot);
     const rows = derivePassRows(sess, anchorUs, selectedGateId);
     wrap.innerHTML = renderGraphSvg(trace, rows);
     const resetBtn = backdrop.querySelector<HTMLButtonElement>("[data-lap-ed-reset-view]");
@@ -858,7 +834,7 @@ export function openPracticeLapEditorModal(
     const sess = getSession();
     if (!sess) return;
     const anchorUs = computeSessionAnchorUs(sess);
-    const trace = buildTraceMs(anchorUs, selectedGateId, selectedPilotSlot);
+    const trace = buildTraceMs(sess, anchorUs, selectedGateId, selectedPilotSlot);
     const peak = sampleTraceAtMs(trace, offsetMs);
     const draft = ensureDraftGateCrossings(sess, selectedGateId);
     const newId = nextDraftId--;
@@ -1046,6 +1022,9 @@ export function openPracticeLapEditorModal(
       const rows = derivePassRows(sess, anchorUs, selectedGateId);
       const row = rows.find((r) => r.crossing.crossingId === cid);
       if (!row) return;
+      if (!customX) {
+        customX = { ...lastDomain };
+      }
       selectedCrossingId = cid;
       dragState = {
         crossingId: cid,
@@ -1185,7 +1164,7 @@ export function openPracticeLapEditorModal(
     if (e.pointerType === "mouse") {
       const offsetMs = clientXToMs(svg, e.clientX);
       const anchorUs = computeSessionAnchorUs(sess);
-      const trace = buildTraceMs(anchorUs, selectedGateId, selectedPilotSlot);
+      const trace = buildTraceMs(sess, anchorUs, selectedGateId, selectedPilotSlot);
       hoverInfo = { offsetMs, dbm: sampleTraceAtMs(trace, offsetMs) };
       refreshSvgOnly();
     }
@@ -1201,7 +1180,7 @@ export function openPracticeLapEditorModal(
       const nextMs = dragState.currentOffsetMs;
       dragState = null;
       const anchorUs = computeSessionAnchorUs(sess);
-      const trace = buildTraceMs(anchorUs, selectedGateId, selectedPilotSlot);
+      const trace = buildTraceMs(sess, anchorUs, selectedGateId, selectedPilotSlot);
       const draft = ensureDraftGateCrossings(sess, selectedGateId);
       const item = draft.find((c) => c.crossingId === movedId);
       if (item) {
@@ -1324,6 +1303,7 @@ export function openPracticeLapEditorModal(
 
   const onKeyDown = (e: KeyboardEvent): void => {
     if (e.key === "Escape") {
+      e.preventDefault();
       if (addMode) {
         addMode = false;
         renderModal();
@@ -1333,15 +1313,50 @@ export function openPracticeLapEditorModal(
     }
   };
 
+  const onTopBarBackCapture = (e: MouseEvent): void => {
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    const backBtn = target.closest<HTMLElement>(
+      ".topbar-back-btn, [data-action='races-back'], [data-action='practice-back']"
+    );
+    if (backBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    }
+  };
+
+  const onHashChange = (): void => {
+    close();
+  };
+
   const unsubStore = rootStore.subscribe(["practice", "laps", "crossings", "config"], () => {
     if (!dragState && !threshDrag && !viewDrag && !isSaving) {
       renderModal();
     }
   });
 
+  let resizeObserver: ResizeObserver | null = null;
+  const topbarEl = document.querySelector<HTMLElement>(".topbar");
+  const appEl = document.querySelector<HTMLElement>(".app");
+  const hadSubpageBack = Boolean(topbarEl?.classList.contains("has-subpage-back"));
+  const hadMobileSubpage = Boolean(appEl?.classList.contains("is-mobile-subpage"));
+  topbarEl?.classList.remove("is-mobile-collapsed");
+  appEl?.classList.remove("is-mobile-topbar-collapsed");
+  topbarEl?.classList.add("has-subpage-back");
+  appEl?.classList.add("is-mobile-subpage");
+
   function close(): void {
     if (panAnimFrame) cancelAnimationFrame(panAnimFrame);
     unsubStore();
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    if (!hadSubpageBack) {
+      topbarEl?.classList.remove("has-subpage-back");
+    }
+    if (!hadMobileSubpage) {
+      appEl?.classList.remove("is-mobile-subpage");
+    }
     backdrop.removeEventListener("pointerdown", onPointerDown);
     window.removeEventListener("pointermove", onPointerMove);
     window.removeEventListener("pointerup", onPointerUp);
@@ -1349,7 +1364,9 @@ export function openPracticeLapEditorModal(
     backdrop.removeEventListener("wheel", onWheel);
     backdrop.removeEventListener("dblclick", onDblClick);
     backdrop.removeEventListener("click", onClick);
-    document.removeEventListener("keydown", onKeyDown);
+    window.removeEventListener("keydown", onKeyDown, true);
+    window.removeEventListener("click", onTopBarBackCapture, true);
+    window.removeEventListener("hashchange", onHashChange);
     backdrop.remove();
     if (activePracticeEditorCleanup === close) {
       activePracticeEditorCleanup = null;
@@ -1364,10 +1381,27 @@ export function openPracticeLapEditorModal(
   backdrop.addEventListener("wheel", onWheel, { passive: false });
   backdrop.addEventListener("dblclick", onDblClick);
   backdrop.addEventListener("click", onClick);
-  document.addEventListener("keydown", onKeyDown);
+  window.addEventListener("keydown", onKeyDown, true);
+  window.addEventListener("click", onTopBarBackCapture, true);
+  window.addEventListener("hashchange", onHashChange);
   document.body.appendChild(backdrop);
 
   renderModal();
+  const mountedWrap = backdrop.querySelector<HTMLElement>("[data-lap-ed-svg-wrap]");
+  if (mountedWrap && mountedWrap.clientWidth > 120 && Math.abs(mountedWrap.clientWidth - svgW) >= 2) {
+    svgW = Math.round(mountedWrap.clientWidth);
+    refreshSvgOnly();
+  }
+  if (typeof ResizeObserver !== "undefined") {
+    resizeObserver = new ResizeObserver(() => {
+      const wEl = backdrop.querySelector<HTMLElement>("[data-lap-ed-svg-wrap]");
+      if (wEl && wEl.clientWidth > 120 && Math.abs(wEl.clientWidth - svgW) >= 2) {
+        svgW = Math.round(wEl.clientWidth);
+        refreshSvgOnly();
+      }
+    });
+    resizeObserver.observe(backdrop);
+  }
   void rootApi
     .ensurePracticeSessionTrace(sessionId)
     .then(() => {
