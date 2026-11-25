@@ -92,10 +92,24 @@ export function openPracticeLapEditorModal(
   if (!lockedLap && opts.focusStartUs === undefined && initPilotLaps.length > 0) {
     lockedLap = initPilotLaps[initPilotLaps.length - 1];
   }
-  const lockedLapId: number | null = lockedLap?.lapId ?? null;
-  const lockedLapNumber: number | null = lockedLap?.lapNumber ?? null;
+  let lockedLapId: number | null = lockedLap?.lapId ?? null;
+  let lockedLapNumber: number | null = lockedLap?.lapNumber ?? null;
   const fallbackStartUs = opts.focusStartUs;
   const fallbackEndUs = opts.focusEndUs;
+
+  const resolveCurrentLapIndex = (sess: PracticeSession): number => {
+    const pLaps = getPilotLaps(sess);
+    if (pLaps.length === 0) return -1;
+    if (lockedLapId !== null) {
+      const idx = pLaps.findIndex((l) => l.lapId === lockedLapId);
+      if (idx >= 0) return idx;
+    }
+    if (lockedLapNumber !== null) {
+      const idx = pLaps.findIndex((l) => l.lapNumber === lockedLapNumber);
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
 
   const computeLapBounds = (sess: PracticeSession): LockedLapWindowBounds => {
     const pLaps = getPilotLaps(sess);
@@ -242,6 +256,43 @@ export function openPracticeLapEditorModal(
   renderHeader();
   document.body.appendChild(backdrop);
 
+  const canStepLap = (dir: -1 | 1): boolean => {
+    const sess = getSession();
+    if (!sess) return false;
+    const pLaps = getPilotLaps(sess);
+    const curIdx = resolveCurrentLapIndex(sess);
+    if (curIdx < 0) return false;
+    const nextIdx = curIdx + dir;
+    return nextIdx >= 0 && nextIdx < pLaps.length;
+  };
+
+  let chartRef: PilotRssiChart | null = null;
+  const stepToAdjacentLap = (dir: -1 | 1): void => {
+    const sess = getSession();
+    if (!sess || !chartRef) return;
+    const pLaps = getPilotLaps(sess);
+    const curIdx = resolveCurrentLapIndex(sess);
+    if (curIdx < 0) return;
+    const target = pLaps[curIdx + dir];
+    if (!target) return;
+    lockedLap = target;
+    lockedLapId = target.lapId;
+    lockedLapNumber = target.lapNumber;
+    renderHeader();
+    const nextBounds = computeLapBounds(sess);
+    chartRef.setLapWindow(
+      {
+        minUs: nextBounds.hardMinUs,
+        maxUs: nextBounds.hardMaxUs,
+        passMinUs: nextBounds.passMinUs,
+        passMaxUs: nextBounds.passMaxUs,
+        canStepLap,
+        onStepLap: stepToAdjacentLap,
+      },
+      true
+    );
+  };
+
   const chart = new PilotRssiChart(chartInnerEl, reviewStore, scopedApi, {
     contextMode: "practice",
     lapWindow: {
@@ -250,8 +301,11 @@ export function openPracticeLapEditorModal(
       passMinUs: initBounds.passMinUs,
       passMaxUs: initBounds.passMaxUs,
       initialFocusGateId: defaultFocusedGateId(),
+      canStepLap,
+      onStepLap: stepToAdjacentLap,
     },
   });
+  chartRef = chart;
   chart.setPilotSlotOverride(selectedPilotSlot);
 
   const runSingleLapAutoLabel = async (): Promise<void> => {

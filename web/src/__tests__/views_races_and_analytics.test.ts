@@ -2702,6 +2702,10 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       const reviewPane = host.querySelector<HTMLElement>('[data-slot="mobile-review"]')!;
       expect(reviewPane.textContent ?? "").toContain("OneEye (R7)");
       expect(reviewPane.textContent ?? "").toContain("L1");
+      // L1 & L2 missed T1 (`sectors.length < 2`), so Review highlights them in red with `[data-missed-timers]`!
+      expect(
+        reviewPane.querySelector(".practice-review-row.is-missed-timers [data-missed-timers]")
+      ).not.toBeNull();
       const reviewBreakRow = reviewPane.querySelector<HTMLElement>("[data-lap-break-row]")!;
       expect(reviewBreakRow).not.toBeNull();
       expect(reviewBreakRow.textContent ?? "").toContain("Break · 1m 35s");
@@ -2725,15 +2729,36 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
         "OneEye (R7)"
       );
       expect(editorModal.querySelector(".slaprf-modal-head")?.textContent ?? "").toContain("L1");
-      // Mounts the real `Signals` (`PilotRssiChart`) widget locked to Lap 1 (no Prev/Live/Next bar; square reset-view button shown)!
+      // No `AI v2` chip; `<` (`prev-lap`) on left, square `reset-view` in center, `>` (`next-lap`) on right!
+      expect(editorModal.querySelector("[data-slot='ai-chip']")).toBeNull();
       expect(editorModal.querySelector("[data-lap-ed-lap-select]")).toBeNull();
       expect(editorModal.querySelector(".scope-root.is-lap-locked")).not.toBeNull();
       expect(editorModal.querySelector(".scope-canvas")).not.toBeNull();
       expect(editorModal.querySelector<HTMLElement>(".scope-transport")!.hidden).toBe(true);
-      expect(
-        editorModal.querySelector<HTMLElement>('[data-slot="chart-left-actions"]')!.hidden
-      ).toBe(false);
-      expect(editorModal.querySelector<HTMLButtonElement>('[data-act="reset-view"]')).not.toBeNull();
+      const prevLapBtn = editorModal.querySelector<HTMLButtonElement>(
+        '[data-slot="chart-left-actions"] [data-act="prev-lap"]'
+      )!;
+      const centerResetBtn = editorModal.querySelector<HTMLButtonElement>(
+        '[data-slot="chart-center-actions"] [data-act="reset-view"]'
+      )!;
+      const nextLapBtn = editorModal.querySelector<HTMLButtonElement>(
+        '[data-slot="chart-right-actions"] [data-act="next-lap"]'
+      )!;
+      expect(prevLapBtn).not.toBeNull();
+      expect(prevLapBtn.disabled).toBe(true); // On L1 (first lap)
+      expect(centerResetBtn).not.toBeNull();
+      expect(nextLapBtn).not.toBeNull();
+      expect(nextLapBtn.disabled).toBe(false);
+
+      // Step L1 -> L2 via `next-lap`, then back L2 -> L1 via `prev-lap`
+      nextLapBtn.click();
+      await flushMicrotasks();
+      expect(editorModal.querySelector(".slaprf-modal-head")?.textContent ?? "").toContain("L2");
+      expect(prevLapBtn.disabled).toBe(false);
+      expect(nextLapBtn.disabled).toBe(true);
+      prevLapBtn.click();
+      await flushMicrotasks();
+      expect(editorModal.querySelector(".slaprf-modal-head")?.textContent ?? "").toContain("L1");
 
       const allTimersRow = editorModal.querySelector<HTMLButtonElement>('[data-focus="all"]')!;
       expect(allTimersRow).not.toBeNull();

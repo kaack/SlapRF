@@ -3174,8 +3174,27 @@ html[data-theme="light"] .bar-time {
   gap: 5px;
   pointer-events: auto;
 }
-.scope-chart-left-actions[hidden] {
+.scope-chart-left-actions[hidden],
+.scope-chart-center-actions[hidden],
+.scope-chart-right-actions [hidden] {
   display: none !important;
+}
+.scope-chart-center-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  pointer-events: auto;
+}
+.scope-chart-right-actions {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  pointer-events: auto;
 }
 .scope-drag-readout {
   margin-left: auto;
@@ -3194,10 +3213,6 @@ html[data-theme="light"] .bar-time {
   display: none !important;
 }
 .scope-chart-overlay-actions {
-  position: absolute;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -3243,6 +3258,8 @@ html[data-theme="light"] .bar-time {
     min-height: 28px;
   }
   .scope-chart-left-actions,
+  .scope-chart-center-actions,
+  .scope-chart-right-actions,
   .scope-chart-overlay-actions {
     gap: 4px;
   }
@@ -28077,6 +28094,31 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
 
 .practice-review-row {
   cursor: pointer;
+}
+
+.practice-review-row.is-missed-timers {
+  background: color-mix(in srgb, var(--bad, #ef4444) 7%, transparent);
+}
+
+.practice-review-row.is-missed-timers:hover {
+  background: color-mix(in srgb, var(--bad, #ef4444) 12%, transparent);
+}
+
+.practice-review-lap-cell.is-missed {
+  color: var(--bad, #f87171);
+  white-space: nowrap;
+}
+
+html[data-theme="light"] .practice-review-lap-cell.is-missed {
+  color: #dc2626;
+}
+
+.practice-review-missed-icon {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: -2px;
+  margin-left: 5px;
+  color: currentColor;
 }
 
 .practice-review-row:hover {

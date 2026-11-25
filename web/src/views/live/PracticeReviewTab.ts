@@ -59,14 +59,18 @@ export class PracticeReviewTab extends Component {
   private computeSig(sess: PracticeSession | undefined): string {
     if (!sess) return "none";
     const slot = this.resolveActivePilotSlot(sess);
+    const gateCount = this.store.practiceSessionNodes(sess).nodes.length;
     const lapsSig = (sess.laps ?? [])
       .filter((l) => l.slotIndex === slot)
-      .map((l) => `${l.lapId}:${l.lapNumber}:${l.lapTimeSec}:${l.invalidated ? 1 : 0}:${l.isBestLap ? 1 : 0}`)
+      .map(
+        (l) =>
+          `${l.lapId}:${l.lapNumber}:${l.lapTimeSec}:${(l.sectors ?? []).length}:${l.invalidated ? 1 : 0}:${l.isBestLap ? 1 : 0}`
+      )
       .join(",");
     const pilotsSig = (sess.pilots ?? [])
       .map((p) => `${p.slotIndex}:${p.callsign}:${p.band ?? 1}:${p.channel}`)
       .join("|");
-    return `${sess.sessionId}:${sess.name}:${slot}:${sess.crossings.length}:${pilotsSig}:${lapsSig}`;
+    return `${sess.sessionId}:${sess.name}:${slot}:${gateCount}:${sess.crossings.length}:${pilotsSig}:${lapsSig}`;
   }
 
   public render(force = false): void {
@@ -109,6 +113,8 @@ export class PracticeReviewTab extends Component {
           </div>`
         : "";
 
+    const orderedNodes = this.store.practiceSessionNodes(sess).nodes;
+    const expectedSectors = orderedNodes.length >= 2 ? orderedNodes.length : 0;
     const reversedPilotLaps = pilotLaps.slice().reverse();
     const rowsHtml =
       reversedPilotLaps.length === 0
@@ -116,6 +122,24 @@ export class PracticeReviewTab extends Component {
         : reversedPilotLaps
             .map((lap, idx) => {
               const inv = Boolean(lap.invalidated);
+              const sectors = lap.sectors ?? [];
+              const hasMissedTimers = !inv && expectedSectors >= 2 && sectors.length < expectedSectors;
+              let missedTitle = "";
+              if (hasMissedTimers) {
+                const visitedGateIds = new Set<number>();
+                for (const s of sectors) {
+                  if (s.fromGateId) visitedGateIds.add(s.fromGateId);
+                  if (s.toGateId) visitedGateIds.add(s.toGateId);
+                }
+                const missedNames = orderedNodes
+                  .slice(1)
+                  .filter((g) => !visitedGateIds.has(g.gateId))
+                  .map((g, gi) => g.name || `T${gi + 1}`);
+                missedTitle =
+                  missedNames.length > 0
+                    ? `Missed timer${missedNames.length > 1 ? "s" : ""}: ${missedNames.join(", ")}`
+                    : `Missed segment${expectedSectors - sectors.length > 1 ? "s" : ""} (${sectors.length}/${expectedSectors})`;
+              }
               const startUs = Math.max(0, Math.round(lap.completedAtUs - lap.lapTimeSec * 1_000_000));
               const deltaHtml = inv
                 ? `<span class="muted">Scratched</span>`
@@ -125,12 +149,12 @@ export class PracticeReviewTab extends Component {
                     ? `<span class="mono muted">${esc(fmtDelta(lap.lapTimeSec - bestSec))}</span>`
                     : `<span class="muted">—</span>`;
               const secSummary =
-                (lap.sectors ?? []).length > 0
-                  ? lap.sectors.map((s) => s.splitSeconds.toFixed(2)).join(" · ")
+                sectors.length > 0
+                  ? sectors.map((s) => s.splitSeconds.toFixed(2)).join(" · ")
                   : "—";
               const rowHtml = `
-                <tr class="practice-review-row ${inv ? "is-invalidated" : ""}" data-review-lap-row="${lap.lapId}" data-lap-start-us="${startUs}" data-lap-end-us="${lap.completedAtUs}">
-                  <td class="mono"><strong>L${lap.lapNumber}</strong></td>
+                <tr class="practice-review-row ${inv ? "is-invalidated" : ""} ${hasMissedTimers ? "is-missed-timers" : ""}" data-review-lap-row="${lap.lapId}" data-lap-start-us="${startUs}" data-lap-end-us="${lap.completedAtUs}"${missedTitle ? ` title="${esc(missedTitle)}"` : ""}>
+                  <td class="mono practice-review-lap-cell ${hasMissedTimers ? "is-missed" : ""}"><strong>L${lap.lapNumber}</strong>${hasMissedTimers ? `<span class="practice-review-missed-icon" data-missed-timers title="${esc(missedTitle)}">${icons.alertTriangle(12)}</span>` : ""}</td>
                   <td class="mono">${lap.isBestLap && !inv ? `<span class="split-best">${fmtTime(lap.lapTimeSec)}</span>` : fmtTime(lap.lapTimeSec)}</td>
                   <td>${deltaHtml}</td>
                   <td class="mono note practice-review-splits-col">${esc(secSummary)}</td>
@@ -244,9 +268,11 @@ export class PracticeReviewTab extends Component {
 
     const row = target.closest<HTMLElement>("[data-review-lap-row]");
     if (row) {
+      const lapId = Number(row.dataset.reviewLapRow || "0") || undefined;
       const startUs = Number(row.dataset.lapStartUs || "0");
       const endUs = Number(row.dataset.lapEndUs || "0");
       openPracticeLapEditorModal(this.store, this.api, sess.sessionId, this.selectedSlot, {
+        initialLapId: lapId,
         focusStartUs: startUs,
         focusEndUs: endUs,
       });

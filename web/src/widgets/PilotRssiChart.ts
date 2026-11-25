@@ -44,6 +44,9 @@ export interface PilotRssiLapWindow {
   passMaxUs?: number;
   /** Optional initial focused timer ID (`null` = All timers). */
   initialFocusGateId?: number | null;
+  /** Optional callbacks for stepping to the previous/next lap inside the single-lap RSSI editor. */
+  canStepLap?: (dir: -1 | 1) => boolean;
+  onStepLap?: (dir: -1 | 1) => void;
 }
 
 export interface PilotRssiChartOptions {
@@ -305,6 +308,8 @@ export class PilotRssiChart extends Component {
     maxUs: number;
     passMinUs: number;
     passMaxUs: number;
+    canStepLap?: (dir: -1 | 1) => boolean;
+    onStepLap?: (dir: -1 | 1) => void;
   } | null = null;
   private readonly lapWindowAllowedEventIds = new Set<number>();
   private windowUs = DEFAULT_WINDOW_US;
@@ -571,6 +576,8 @@ export class PilotRssiChart extends Component {
         maxUs,
         passMinUs: Math.max(minUs, Math.round(options.lapWindow.passMinUs ?? minUs)),
         passMaxUs: Math.min(maxUs, Math.round(options.lapWindow.passMaxUs ?? maxUs)),
+        canStepLap: options.lapWindow.canStepLap,
+        onStepLap: options.lapWindow.onStepLap,
       };
       this.autoX = true;
       this.windowUs = this.defaultWindowUs;
@@ -590,7 +597,10 @@ export class PilotRssiChart extends Component {
       <div class="scope-graph-box">
         <div class="scope-toolbar">
           <div class="scope-chart-left-actions" data-slot="chart-left-actions"${this.lapWindow ? "" : " hidden"}>
-            <button class="scope-chart-action-btn" type="button" data-act="reset-view" title="Reset X and Y axes to full lap view" aria-label="Reset view">${icons.maximize(14)}</button>
+            <button class="scope-chart-action-btn" type="button" data-act="prev-lap" title="Previous lap (←)" aria-label="Previous lap">${icons.chevronLeft(15)}</button>
+          </div>
+          <div class="scope-chart-center-actions" data-slot="chart-center-actions"${this.lapWindow ? "" : " hidden"}>
+            <button class="scope-chart-action-btn" type="button" data-act="reset-view" title="Center and reset view" aria-label="Center and reset view">${icons.maximize(14)}</button>
           </div>
           <div class="scope-transport" role="group" aria-label="Signal playback and pass navigation"${this.lapWindow ? " hidden" : ""}>
             <button class="btn btn-sm btn-ghost scope-step-btn" type="button" data-act="prev" title="Previous pass (←)">
@@ -601,11 +611,13 @@ export class PilotRssiChart extends Component {
               <span class="scope-step-text-full">Next pass</span><span class="scope-step-text-short">Next</span>${icons.chevronRight(16)}
             </button>
           </div>
-          <div class="scope-chart-overlay-actions" data-slot="chart-actions" hidden>
-            <button class="scope-chart-action-btn" type="button" data-act="add-crossing" title="Unlock chart lines to add crossings" aria-label="Add crossing" disabled>${icons.plus(15)}</button>
-            <button class="scope-chart-action-btn is-locked" type="button" data-act="toggle-chart-lock" aria-pressed="false" title="Unlock chart lines to adjust thresholds or crossings" aria-label="Unlock chart lines">${icons.lock(14)}</button>
+          <div class="scope-chart-right-actions" data-slot="chart-right-actions">
+            <div class="scope-chart-overlay-actions" data-slot="chart-actions" hidden>
+              <button class="scope-chart-action-btn" type="button" data-act="add-crossing" title="Unlock chart lines to add crossings" aria-label="Add crossing" disabled>${icons.plus(15)}</button>
+              <button class="scope-chart-action-btn is-locked" type="button" data-act="toggle-chart-lock" aria-pressed="false" title="Unlock chart lines to adjust thresholds or crossings" aria-label="Unlock chart lines">${icons.lock(14)}</button>
+            </div>
+            <button class="scope-chart-action-btn" type="button" data-act="next-lap" title="Next lap (→)" aria-label="Next lap"${this.lapWindow ? "" : " hidden"}>${icons.chevronRight(15)}</button>
           </div>
-          <span class="scope-ai-chip" data-slot="ai-chip" hidden></span>
         </div>
         <div class="canvas-host canvas-host-md scope-canvas" data-slot="chart" tabindex="0"
              aria-label="Signal chart. Space pauses, arrow keys jump between passes."></div>
@@ -952,6 +964,8 @@ export class PilotRssiChart extends Component {
       } else if (btn.dataset.calib === "auto") void this.autoCalibrate();
       else if (btn.dataset.calib === "reset") void this.resetToDefault();
       else if (btn.dataset.act === "reset-view") this.resetAxesToAuto();
+      else if (btn.dataset.act === "prev-lap") this.lapWindow?.onStepLap?.(-1);
+      else if (btn.dataset.act === "next-lap") this.lapWindow?.onStepLap?.(1);
       else if (btn.dataset.act === "toggle-chart-lock") this.toggleChartLock();
       else if (btn.dataset.act === "add-crossing") void this.addManualCrossing();
       else if (btn.dataset.act === "live") this.toggleLive();
@@ -975,9 +989,13 @@ export class PilotRssiChart extends Component {
 
     this.listen(host, "keydown", (e) => {
       if (e.key === " ") this.toggleLive();
-      else if (e.key === "ArrowLeft") this.jump(-1);
-      else if (e.key === "ArrowRight") this.jump(1);
-      else return;
+      else if (e.key === "ArrowLeft") {
+        if (this.lapWindow?.onStepLap) this.lapWindow.onStepLap(-1);
+        else this.jump(-1);
+      } else if (e.key === "ArrowRight") {
+        if (this.lapWindow?.onStepLap) this.lapWindow.onStepLap(1);
+        else this.jump(1);
+      } else return;
       e.preventDefault();
     });
 
@@ -1632,17 +1650,38 @@ export class PilotRssiChart extends Component {
     return this.lapWindow ? this.maxAllowedWindowUs : DEFAULT_WINDOW_US;
   }
 
-  /** Updates the locked single-lap bounds in place while preserving user zoom if zoomed in. */
-  public setLapWindow(next: PilotRssiLapWindow): void {
+  /** Updates the locked single-lap bounds in place (or resets zoom when stepping to a different lap). */
+  public setLapWindow(next: PilotRssiLapWindow, resetZoom = false): void {
     const minUs = Math.max(0, Math.round(next.minUs));
     const maxUs = Math.max(minUs + MIN_WINDOW_US, Math.round(next.maxUs));
+    const prevCanStep = this.lapWindow?.canStepLap;
+    const prevOnStep = this.lapWindow?.onStepLap;
     this.lapWindow = {
       minUs,
       maxUs,
       passMinUs: Math.max(minUs, Math.round(next.passMinUs ?? minUs)),
       passMaxUs: Math.min(maxUs, Math.round(next.passMaxUs ?? maxUs)),
+      canStepLap: next.canStepLap ?? prevCanStep,
+      onStepLap: next.onStepLap ?? prevOnStep,
     };
     this.refUs = maxUs;
+    if (resetZoom) {
+      this.lapWindowAllowedEventIds.clear();
+      this.crossingDrag = null;
+      this.tagDrag = null;
+      this.pendingDeleteCrossing = null;
+      this.syncDragReadout(null);
+      this.autoX = true;
+      this.autoY = true;
+      this.smoothYMin = null;
+      this.smoothYMax = null;
+      this.windowUs = this.defaultWindowUs;
+      this.endUs = maxUs;
+      this.renderControls();
+      this.renderCalib();
+      this.renderLegend();
+      return;
+    }
     if (this.autoX || this.windowUs > this.maxAllowedWindowUs) {
       this.autoX = true;
       this.windowUs = this.defaultWindowUs;
@@ -3844,11 +3883,21 @@ export class PilotRssiChart extends Component {
     if (prevBtn) prevBtn.title = `Previous pass at ${gateScope} (←)`;
     if (nextBtn) nextBtn.title = `Next pass at ${gateScope} (→)`;
 
-    const resetViewBtn = this.el.querySelector<HTMLButtonElement>('[data-act="reset-view"]');
-    if (resetViewBtn && this.lapWindow) {
-      const isZoomed = !this.autoX || !this.autoY;
-      const wantClass = `scope-chart-action-btn ${isZoomed ? "is-unlocked" : ""}`;
-      if (resetViewBtn.className !== wantClass) resetViewBtn.className = wantClass;
+    if (this.lapWindow) {
+      const resetViewBtn = this.el.querySelector<HTMLButtonElement>('[data-act="reset-view"]');
+      if (resetViewBtn) {
+        const isZoomed = !this.autoX || !this.autoY;
+        const wantClass = `scope-chart-action-btn ${isZoomed ? "is-unlocked" : ""}`;
+        if (resetViewBtn.className !== wantClass) resetViewBtn.className = wantClass;
+      }
+      const prevLapBtn = this.el.querySelector<HTMLButtonElement>('[data-act="prev-lap"]');
+      const nextLapBtn = this.el.querySelector<HTMLButtonElement>('[data-act="next-lap"]');
+      if (prevLapBtn) {
+        prevLapBtn.disabled = !(this.lapWindow.canStepLap?.(-1) ?? false);
+      }
+      if (nextLapBtn) {
+        nextLapBtn.disabled = !(this.lapWindow.canStepLap?.(1) ?? false);
+      }
     }
 
     const overlayEl = this.el.querySelector<HTMLElement>('[data-slot="chart-actions"]');
@@ -3884,27 +3933,6 @@ export class PilotRssiChart extends Component {
             lockBtn.innerHTML = this.chartLinesLocked ? icons.lock(14) : icons.unlock(14);
           }
         }
-      }
-    }
-
-    const aiChipEl = this.el.querySelector<HTMLElement>('[data-slot="ai-chip"]');
-    if (aiChipEl) {
-      const mlSt = this.store.mlStatus;
-      if (mlSt?.config?.detectorMode === "ai") {
-        const mod = mlSt.models?.find((m) => m.modelId === mlSt.config.activeModelId);
-        const verLabel = mod ? `AI v${mod.version}` : "AI";
-        const activeSlot = this.activePilotSlot;
-        const tunes = (mlSt.liveTunes ?? []).filter((lt) => lt.slotIndex === activeSlot);
-        const tuneSuffix =
-          mlSt.config.liveTuneEnabled && tunes.length > 0
-            ? ` · Tuned (${tunes[0].lapsUsed}L)`
-            : mlSt.config.liveTuneEnabled
-              ? " · Live Tune"
-              : "";
-        aiChipEl.hidden = false;
-        aiChipEl.textContent = `${verLabel}${tuneSuffix}`;
-      } else {
-        aiChipEl.hidden = true;
       }
     }
 
