@@ -2725,11 +2725,15 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
         "OneEye (R7)"
       );
       expect(editorModal.querySelector(".slaprf-modal-head")?.textContent ?? "").toContain("L1");
-      // Mounts the real `Signals` (`PilotRssiChart`) widget locked to Lap 1 (no lap-switcher, `Live` hidden)!
+      // Mounts the real `Signals` (`PilotRssiChart`) widget locked to Lap 1 (no Prev/Live/Next bar; square reset-view button shown)!
       expect(editorModal.querySelector("[data-lap-ed-lap-select]")).toBeNull();
       expect(editorModal.querySelector(".scope-root.is-lap-locked")).not.toBeNull();
       expect(editorModal.querySelector(".scope-canvas")).not.toBeNull();
-      expect(editorModal.querySelector<HTMLButtonElement>('[data-act="live"]')!.hidden).toBe(true);
+      expect(editorModal.querySelector<HTMLElement>(".scope-transport")!.hidden).toBe(true);
+      expect(
+        editorModal.querySelector<HTMLElement>('[data-slot="chart-left-actions"]')!.hidden
+      ).toBe(false);
+      expect(editorModal.querySelector<HTMLButtonElement>('[data-act="reset-view"]')).not.toBeNull();
 
       const allTimersRow = editorModal.querySelector<HTMLButtonElement>('[data-focus="all"]')!;
       expect(allTimersRow).not.toBeNull();

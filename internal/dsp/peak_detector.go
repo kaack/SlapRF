@@ -57,8 +57,9 @@ const (
 	// never bleed across reconnects or channel changes.
 	maxGapResetUs = 250_000
 
-	// disabledCutoffDbm identifies muted / unmeasured channels (-127 dBm).
-	disabledCutoffDbm = -120.0
+	// disabledCutoffDbm identifies muted / unmeasured channels (-127 dBm) while allowing single-sweep
+	// BLE/Wi-Fi coexistence dips (-119..-124 dBm) on active channels to be stripped by the 70 ms median filter.
+	disabledCutoffDbm = -125.0
 
 	prePassRingCap = 8
 )
@@ -228,6 +229,47 @@ func (d *ChannelDetector) pushPrePassSample(pt samplePoint) {
 
 // ProcessSample ingests a single RSSI sample (in dBm) at timestampUs and returns a CrossingCandidate
 // if a gate crossing peak was just confirmed by an exit nadir.
+// FilterSample runs the exact same 70 ms trimmed-mean spike rejection + 2-pole C1-smooth envelope
+// filter used by live `Signals` (`ProcessSample`), without running crossing threshold state machines.
+func (d *ChannelDetector) FilterSample(rawRSSIDbm float32, timestampUs uint64) float32 {
+	if rawRSSIDbm <= disabledCutoffDbm {
+		d.resetFilterState(rawRSSIDbm, timestampUs)
+		d.initialized = true
+		return rawRSSIDbm
+	}
+	if !d.initialized || d.smoothedRSSI <= disabledCutoffDbm ||
+		timestampUs < d.prevSampleTsUs || timestampUs-d.prevSampleTsUs > maxGapResetUs {
+		d.initialized = true
+		d.resetFilterState(rawRSSIDbm, timestampUs)
+		return d.smoothedRSSI
+	}
+	dtUs := timestampUs - d.prevSampleTsUs
+	d.prevSampleTsUs = timestampUs
+	medVal, _ := d.pushMedianSample(rawRSSIDbm, timestampUs)
+	if dtUs < 1_000 {
+		dtUs = 1_000
+	}
+	diff1 := medVal - d.stage1RSSI
+	tau1 := steadyTau1Us
+	tau2 := steadyTau2Us
+	if diff1 > asymmetryBandDb {
+		tau1 = attackTauUs
+		tau2 = attackTauUs
+	} else if diff1 < -asymmetryBandDb {
+		tau1 = releaseTauUs
+		tau2 = releasePole2TauUs
+	}
+	alpha1 := float32(1.0 - math.Exp(-float64(dtUs)/tau1))
+	d.stage1RSSI += alpha1 * (medVal - d.stage1RSSI)
+
+	if d.stage1RSSI > d.smoothedRSSI+asymmetryBandDb {
+		tau2 = attackTauUs
+	}
+	alpha2 := float32(1.0 - math.Exp(-float64(dtUs)/tau2))
+	d.smoothedRSSI += alpha2 * (d.stage1RSSI - d.smoothedRSSI)
+	return d.smoothedRSSI
+}
+
 func (d *ChannelDetector) ProcessSample(
 	rawRSSIDbm float32,
 	timestampUs uint64,

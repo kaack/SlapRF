@@ -381,6 +381,7 @@ export class PilotRssiChart extends Component {
   private lastAxisControlsHtml = "";
   private lastCalibHtml = "";
   private lastTuneDrawerHtml = "";
+  private lastDragReadoutText: string | null = null;
   private readonly tuneDrawerEl: HTMLElement;
   private tuningGateId: number | null = null;
   private tuneDrawerOpen = false;
@@ -588,7 +589,10 @@ export class PilotRssiChart extends Component {
     el.innerHTML = `
       <div class="scope-graph-box">
         <div class="scope-toolbar">
-          <div class="scope-transport" role="group" aria-label="Signal playback and pass navigation">
+          <div class="scope-chart-left-actions" data-slot="chart-left-actions"${this.lapWindow ? "" : " hidden"}>
+            <button class="scope-chart-action-btn" type="button" data-act="reset-view" title="Reset X and Y axes to full lap view" aria-label="Reset view">${icons.maximize(14)}</button>
+          </div>
+          <div class="scope-transport" role="group" aria-label="Signal playback and pass navigation"${this.lapWindow ? " hidden" : ""}>
             <button class="btn btn-sm btn-ghost scope-step-btn" type="button" data-act="prev" title="Previous pass (←)">
               ${icons.chevronLeft(16)}<span class="scope-step-text-full">Prev pass</span><span class="scope-step-text-short">Prev</span>
             </button>
@@ -608,6 +612,7 @@ export class PilotRssiChart extends Component {
         <div class="scope-bottom-bar">
           <div class="scope-axis-controls" data-slot="axis-controls" role="group" aria-label="X and Y axis scale controls"></div>
           <span class="scope-hint" data-slot="hint"></span>
+          <span class="scope-drag-readout mono" data-slot="drag-readout" hidden></span>
         </div>
       </div>
       <div class="channel-legend" data-slot="legend"></div>
@@ -946,6 +951,7 @@ export class PilotRssiChart extends Component {
         this.setWindow(Number(btn.dataset.window) * 1e6, false);
       } else if (btn.dataset.calib === "auto") void this.autoCalibrate();
       else if (btn.dataset.calib === "reset") void this.resetToDefault();
+      else if (btn.dataset.act === "reset-view") this.resetAxesToAuto();
       else if (btn.dataset.act === "toggle-chart-lock") this.toggleChartLock();
       else if (btn.dataset.act === "add-crossing") void this.addManualCrossing();
       else if (btn.dataset.act === "live") this.toggleLive();
@@ -1464,6 +1470,7 @@ export class PilotRssiChart extends Component {
       if (this.crossingDrag) {
         const { eventId, gateId, title, tsUs, origTsUs } = this.crossingDrag;
         this.crossingDrag = null;
+        this.syncDragReadout(null);
         if (e.type !== "pointercancel" && Math.abs(tsUs - origTsUs) >= 5_000) {
           void this.saveManualCrossing(eventId, gateId, title, tsUs, origTsUs);
         }
@@ -1473,6 +1480,10 @@ export class PilotRssiChart extends Component {
         this.tagDrag = null;
         const prev = kind === "enter" ? this.thresholdOf(gateId).dbm : this.exitThresholdOf(gateId).dbm;
         if (dbm !== prev) void this.saveManual(gateId, kind, dbm);
+      }
+      if (e.pointerType === "touch") {
+        this.hoverX = null;
+        this.hoverY = null;
       }
       if (this.drag) {
         if (this.drag.mode === "ybox" && this.yZoomBox) {
@@ -3452,38 +3463,47 @@ export class PilotRssiChart extends Component {
     this.crossingBoxes = nextCrossingBoxes;
 
     if (this.crossingDrag) {
-      const dragX = Math.max(padL, Math.min(padL + plotW, xOf(this.crossingDrag.tsUs)));
-      const deltaSec = (this.crossingDrag.tsUs - this.crossingDrag.origTsUs) / 1e6;
-      const signed = `${deltaSec >= 0 ? "+" : "−"}${Math.abs(deltaSec).toFixed(2)}s`;
       const pilotEntry = pilotEntries[0];
       const liveDbm = pilotEntry
         ? this.rssiAt(this.crossingDrag.gateId, pilotEntry.slot, this.crossingDrag.tsUs)
         : undefined;
-      const liveEval = this.liveEvalByEventId.get(this.crossingDrag.eventId);
-      const dragCounted = liveEval ? liveEval.counted : true;
-      const dragTitle =
-        !dragCounted && liveEval?.invalidReason
-          ? `${this.labelOfGate(this.crossingDrag.gateId)}-${FILTER_SHORT_CODES[liveEval.invalidReason] ?? liveEval.invalidReason}`
-          : this.crossingDrag.title;
-      const dragDetail =
-        !dragCounted && liveEval?.invalidDetail
-          ? liveEval.invalidDetail
-          : `Move ${signed}${liveDbm !== undefined ? ` · ${liveDbm.toFixed(0)}${this.unitSuffix}` : ""}`;
-      this.drawCursor(ctx, h, plotH, dragX, {
-        ts: this.crossingDrag.tsUs,
-        gateId: this.crossingDrag.gateId,
-        counted: dragCounted,
-        title: dragTitle,
-        detail: dragDetail,
-      });
-    } else if (
-      !this.tagDrag &&
-      !this.yZoomBox &&
-      this.hoverX !== null &&
-      this.hoverX >= padL &&
-      this.hoverX <= padL + plotW
-    ) {
-      this.drawCursor(ctx, h, plotH, this.hoverX, hovered);
+      const gLbl = this.labelOfGate(this.crossingDrag.gateId);
+      const readout =
+        liveDbm !== undefined
+          ? `${gLbl} · ${liveDbm.toFixed(1)}${this.unitSuffix}`
+          : gLbl;
+      this.syncDragReadout(readout);
+    } else {
+      if (this.lastDragReadoutText !== null) {
+        this.syncDragReadout(null);
+      }
+      if (
+        !this.tagDrag &&
+        !this.yZoomBox &&
+        !canEdit &&
+        this.hoverX !== null &&
+        this.hoverX >= padL &&
+        this.hoverX <= padL + plotW
+      ) {
+        this.drawCursor(ctx, h, plotH, this.hoverX, hovered);
+      }
+    }
+  }
+
+  private syncDragReadout(text: string | null): void {
+    if (text === this.lastDragReadoutText) return;
+    this.lastDragReadoutText = text;
+    const readoutEl = this.el.querySelector<HTMLElement>('[data-slot="drag-readout"]');
+    const hintEl = this.el.querySelector<HTMLElement>('[data-slot="hint"]');
+    if (!readoutEl) return;
+    if (text === null) {
+      readoutEl.hidden = true;
+      readoutEl.textContent = "";
+      if (hintEl) hintEl.hidden = false;
+    } else {
+      readoutEl.textContent = text;
+      readoutEl.hidden = false;
+      if (hintEl) hintEl.hidden = true;
     }
   }
 
@@ -3823,6 +3843,13 @@ export class PilotRssiChart extends Component {
     const nextBtn = this.el.querySelector<HTMLButtonElement>('[data-act="next"]');
     if (prevBtn) prevBtn.title = `Previous pass at ${gateScope} (←)`;
     if (nextBtn) nextBtn.title = `Next pass at ${gateScope} (→)`;
+
+    const resetViewBtn = this.el.querySelector<HTMLButtonElement>('[data-act="reset-view"]');
+    if (resetViewBtn && this.lapWindow) {
+      const isZoomed = !this.autoX || !this.autoY;
+      const wantClass = `scope-chart-action-btn ${isZoomed ? "is-unlocked" : ""}`;
+      if (resetViewBtn.className !== wantClass) resetViewBtn.className = wantClass;
+    }
 
     const overlayEl = this.el.querySelector<HTMLElement>('[data-slot="chart-actions"]');
     if (overlayEl) {

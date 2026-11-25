@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"slaprf/internal/domain"
+	"slaprf/internal/dsp"
 	"slaprf/internal/ml"
 	"slaprf/internal/tracestore"
 )
@@ -121,6 +122,12 @@ func (e *Engine) SessionTraceFrames(sessionID string) ([]domain.TimerTelemetryFr
 		return nil, err
 	}
 
+	// Smooth raw `.rfbin` ADC readings through the exact same 70 ms spike-rejecting trimmed-mean +
+	// 2-pole C1-smooth `ChannelDetector` envelope used by live `Signals` so single-sweep BLE/Wi-Fi
+	// coexistence dips (`-91..-119 dBm`) are stripped identically in saved trace replay while `.rfbin`
+	// on disk stays 100% raw for offline ML training.
+	smoothPracticeTraceSamples(samples)
+
 	// Keep 100% lossless 50-100 Hz samples inside all active flight spans (+-5s around laps, crossings,
 	// manual edits, filtered spikes, and the trailing 30s), while downsampling long idle bench lulls
 	// (`> 80,000` samples) to 2 Hz (500 ms peak-preserving buckets per gate) so hour-long sessions
@@ -129,6 +136,31 @@ func (e *Engine) SessionTraceFrames(sessionID string) ([]domain.TimerTelemetryFr
 		samples = compactIdleBenchSamples(*sessSnap, samples)
 	}
 	return tracestore.ToTelemetryFrames(samples), nil
+}
+
+func smoothPracticeTraceSamples(samples []tracestore.Sample) {
+	type gsKey struct {
+		gateID uint8
+		slot   uint8
+	}
+	dets := make(map[gsKey]*dsp.ChannelDetector, 16)
+	for i := range samples {
+		s := &samples[i]
+		n := len(s.SlotIndices)
+		if len(s.RSSIDbm) < n {
+			n = len(s.RSSIDbm)
+		}
+		for k := 0; k < n; k++ {
+			slot := s.SlotIndices[k]
+			key := gsKey{gateID: s.GateID, slot: slot}
+			det := dets[key]
+			if det == nil {
+				det = dsp.NewChannelDetector(s.GateID, int(slot))
+				dets[key] = det
+			}
+			s.RSSIDbm[k] = det.FilterSample(s.RSSIDbm[k], s.TimestampUs)
+		}
+	}
 }
 
 func compactIdleBenchSamples(sess domain.PracticeSession, samples []tracestore.Sample) []tracestore.Sample {
