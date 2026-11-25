@@ -1497,6 +1497,48 @@ export class ApiClient {
     );
   }
 
+  public async addBreak(
+    slotIndex: number,
+    timestampUs: number,
+    scope?: TrackScope | null
+  ): Promise<void> {
+    this.store.hydrate(
+      await this.transport.request<FullStateResponse>(
+        "POST",
+        `${this.resolveSessionBaseUrl(scope)}/breaks`,
+        {
+          slotIndex: Math.round(slotIndex),
+          timestampUs: Math.round(timestampUs),
+        }
+      )
+    );
+  }
+
+  public async adjustBreak(
+    breakId: number,
+    timestampUs: number,
+    scope?: TrackScope | null
+  ): Promise<void> {
+    this.store.hydrate(
+      await this.transport.request<FullStateResponse>(
+        "PATCH",
+        `${this.resolveSessionBaseUrl(scope)}/breaks/${encodeURIComponent(String(breakId))}`,
+        {
+          timestampUs: Math.round(timestampUs),
+        }
+      )
+    );
+  }
+
+  public async deleteBreak(breakId: number, scope?: TrackScope | null): Promise<void> {
+    this.store.hydrate(
+      await this.transport.request<FullStateResponse>(
+        "DELETE",
+        `${this.resolveSessionBaseUrl(scope)}/breaks/${encodeURIComponent(String(breakId))}`
+      )
+    );
+  }
+
   public async updateTrackNode(update: GateUpdate, scope?: TrackScope | null): Promise<void> {
     this.store.hydrate(
       await this.transport.request<FullStateResponse>(

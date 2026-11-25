@@ -1577,6 +1577,115 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /v1/practice/sessions/{sessionId}/breaks:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Practice Sessions]
+      summary: Insert a manual pilot break so before/after stints do not merge into a phantom lap
+      operationId: addPracticeSessionBreak
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slotIndex, timestampUs]
+              properties:
+                slotIndex:
+                  type: integer
+                  example: 1
+                timestampUs:
+                  type: integer
+                  example: 62500000
+      responses:
+        "200":
+          description: Updated full state with recalculated crossings, laps, and summaries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Missing or invalid slotIndex / timestampUs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/practice/sessions/{sessionId}/breaks/{breakId}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: breakId
+        in: path
+        required: true
+        schema:
+          type: integer
+    patch:
+      tags: [Practice Sessions]
+      summary: Adjust a manual pilot break timestamp and recalculate laps
+      operationId: patchPracticeSessionBreak
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [timestampUs]
+              properties:
+                timestampUs:
+                  type: integer
+                  example: 63100000
+      responses:
+        "200":
+          description: Updated full state with recalculated crossings, laps, and summaries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid timestampUs body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session or break not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags: [Practice Sessions]
+      summary: Delete a manual pilot break and replay crossings for that pilot
+      operationId: deletePracticeSessionBreak
+      responses:
+        "200":
+          description: Updated full state with recalculated crossings, laps, and summaries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session or break not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /v1/race/sessions/{sessionId}/crossings:
     parameters:
       - name: sessionId

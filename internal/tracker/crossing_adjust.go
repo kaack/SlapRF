@@ -81,6 +81,38 @@ func (e *Engine) replayPilotCrossingsLocked(
 	slotIndex int,
 	defaultCallsign string,
 ) ([]domain.GateCrossingEvent, []domain.LapRecord) {
+	return e.replayPilotCrossingsWithBreaksLocked(
+		allCrossings,
+		prevAllLaps,
+		orderedGates,
+		detected,
+		globalRules,
+		slotIndex,
+		defaultCallsign,
+		nil,
+	)
+}
+
+func (e *Engine) replayPilotCrossingsWithBreaksLocked(
+	allCrossings []domain.GateCrossingEvent,
+	prevAllLaps []domain.LapRecord,
+	orderedGates []domain.TrackGate,
+	detected map[uint8]*domain.DetectedTimer,
+	globalRules domain.TimingRules,
+	slotIndex int,
+	defaultCallsign string,
+	breaks []domain.PracticeBreakMark,
+) ([]domain.GateCrossingEvent, []domain.LapRecord) {
+	var pilotBreaks []domain.PracticeBreakMark
+	for _, b := range breaks {
+		if b.SlotIndex == slotIndex && b.TimestampUs > 0 {
+			pilotBreaks = append(pilotBreaks, b)
+		}
+	}
+	sort.Slice(pilotBreaks, func(a, b int) bool {
+		return pilotBreaks[a].TimestampUs < pilotBreaks[b].TimestampUs
+	})
+	breakIdx := 0
 	otherCrossings := make([]domain.GateCrossingEvent, 0, len(allCrossings))
 	pilotCrossings := make([]domain.GateCrossingEvent, 0, len(allCrossings))
 	for _, c := range allCrossings {
@@ -161,6 +193,17 @@ func (e *Engine) replayPilotCrossingsLocked(
 		gateLbl := gateLabelFromOrdered(orderedGates, detected, c.GateID)
 		if c.GateName == "" {
 			c.GateName = gateLbl
+		}
+
+		// 0. Manual pilot break marker: resets lap progress & per-gate lockout across the break boundary.
+		advancedBreak := false
+		for breakIdx < len(pilotBreaks) && pilotBreaks[breakIdx].TimestampUs <= c.TimestampUs {
+			breakIdx++
+			advancedBreak = true
+		}
+		if advancedBreak {
+			prog = pilotProgress{}
+			clear(lastAcceptedGateUs)
 		}
 
 		// 1. Stale progress: pilot landed/stopped for longer than MaxLapSec.
@@ -322,6 +365,16 @@ func (e *Engine) rebuildPilotLiveProgressFromCrossingsLocked(slotIndex int, orde
 	if lastSf == nil {
 		delete(e.progress, slotIndex)
 		return
+	}
+	if !e.isLiveRaceHeatActiveLocked() && e.practiceState.ActiveSessionID != "" {
+		if activeSess := e.findPracticeSessionLocked(e.practiceState.ActiveSessionID); activeSess != nil {
+			for _, b := range activeSess.Breaks {
+				if b.SlotIndex == slotIndex && b.TimestampUs > lastSf.TimestampUs {
+					delete(e.progress, slotIndex)
+					return
+				}
+			}
+		}
 	}
 
 	prog := &pilotProgress{
@@ -540,7 +593,7 @@ func (e *Engine) AddPracticeSessionCrossing(
 		}
 		target.ManualDeletedCrossings = keptNeg
 	}
-	target.Crossings, target.Laps = e.replayPilotCrossingsLocked(
+	target.Crossings, target.Laps = e.replayPilotCrossingsWithBreaksLocked(
 		target.Crossings,
 		target.Laps,
 		orderedGates,
@@ -548,6 +601,7 @@ func (e *Engine) AddPracticeSessionCrossing(
 		e.rules,
 		slotIndex,
 		ev.Callsign,
+		target.Breaks,
 	)
 	e.recomputePracticeSessionLapsLocked(target)
 	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
@@ -630,7 +684,7 @@ func (e *Engine) AdjustPracticeSessionCrossing(
 		target.Crossings[movedIdx].PeakRSSIDbm = *peakRSSIDbm
 	}
 
-	target.Crossings, target.Laps = e.replayPilotCrossingsLocked(
+	target.Crossings, target.Laps = e.replayPilotCrossingsWithBreaksLocked(
 		target.Crossings,
 		target.Laps,
 		orderedGates,
@@ -638,6 +692,7 @@ func (e *Engine) AdjustPracticeSessionCrossing(
 		e.rules,
 		slotIndex,
 		callsign,
+		target.Breaks,
 	)
 	e.recomputePracticeSessionLapsLocked(target)
 	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
@@ -721,7 +776,7 @@ func (e *Engine) DeletePracticeSessionCrossing(
 		}
 	}
 	orderedGates := e.orderedGatesForPracticeSessionLocked(target)
-	target.Crossings, target.Laps = e.replayPilotCrossingsLocked(
+	target.Crossings, target.Laps = e.replayPilotCrossingsWithBreaksLocked(
 		target.Crossings,
 		target.Laps,
 		orderedGates,
@@ -729,6 +784,7 @@ func (e *Engine) DeletePracticeSessionCrossing(
 		e.rules,
 		removed.SlotIndex,
 		removed.Callsign,
+		target.Breaks,
 	)
 	e.recomputePracticeSessionLapsLocked(target)
 	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
@@ -754,6 +810,287 @@ func (e *Engine) DeletePracticeSessionCrossing(
 	if mlChanged {
 		e.notifyMLUpdated(mlSnap, subs)
 	}
+	return practiceSnap, nil
+}
+
+// AddPracticeSessionBreak inserts a manual pilot break (`PracticeBreakMark`) at `timestampUs` in a
+// Practice session and replays that pilot's crossings so dead-air across the break never forms a phantom lap.
+func (e *Engine) AddPracticeSessionBreak(
+	sessionID string,
+	slotIndex int,
+	timestampUs uint64,
+) (domain.PracticeManagerState, uint64, error) {
+	if slotIndex <= 0 || timestampUs == 0 {
+		return e.PracticeSnapshot(), 0, fmt.Errorf("slotIndex and timestampUs must be positive")
+	}
+
+	e.mu.Lock()
+	targetID := strings.TrimSpace(sessionID)
+	if targetID == "" || strings.EqualFold(targetID, "current") {
+		targetID = e.practiceState.SelectedSessionID
+		if targetID == "" {
+			targetID = e.practiceState.ActiveSessionID
+		}
+	}
+	target := e.findPracticeSessionLocked(targetID)
+	if target == nil {
+		snap := clonePracticeManagerState(e.practiceState)
+		e.mu.Unlock()
+		return snap, 0, fmt.Errorf("practice session %q not found", sessionID)
+	}
+
+	isActive := target.Active && e.practiceState.ActiveSessionID == target.SessionID && !e.isLiveRaceHeatActiveLocked()
+	if isActive && len(e.crossings) > len(target.Crossings) {
+		e.syncActivePracticeRecordsLocked()
+	}
+
+	for i := range target.Breaks {
+		if target.Breaks[i].SlotIndex == slotIndex && absDiffUs(target.Breaks[i].TimestampUs, timestampUs) <= 200_000 {
+			target.Breaks[i].TimestampUs = timestampUs
+			snap := clonePracticeManagerState(e.practiceState)
+			bid := target.Breaks[i].BreakID
+			e.mu.Unlock()
+			return snap, bid, nil
+		}
+	}
+
+	e.nextEventID++
+	breakID := e.nextEventID
+	for _, b := range target.Breaks {
+		if b.BreakID >= breakID {
+			breakID = b.BreakID + 1
+			e.nextEventID = breakID
+		}
+	}
+	for _, c := range target.Crossings {
+		if c.EventID >= breakID {
+			breakID = c.EventID + 1
+			e.nextEventID = breakID
+		}
+	}
+
+	target.Breaks = append(target.Breaks, domain.PracticeBreakMark{
+		BreakID:     breakID,
+		SlotIndex:   slotIndex,
+		TimestampUs: timestampUs,
+	})
+	sort.Slice(target.Breaks, func(a, b int) bool {
+		return target.Breaks[a].TimestampUs < target.Breaks[b].TimestampUs
+	})
+
+	callsign := ""
+	for _, p := range target.Pilots {
+		if p.SlotIndex == slotIndex && p.Callsign != "" {
+			callsign = p.Callsign
+			break
+		}
+	}
+	orderedGates := e.orderedGatesForPracticeSessionLocked(target)
+	sessionRules := e.rules
+	if target.Rules != nil {
+		sessionRules = target.Rules.Normalized()
+	}
+	target.Crossings, target.Laps = e.replayPilotCrossingsWithBreaksLocked(
+		target.Crossings,
+		target.Laps,
+		orderedGates,
+		e.detected,
+		sessionRules,
+		slotIndex,
+		callsign,
+		target.Breaks,
+	)
+	e.recomputePracticeSessionLapsLocked(target)
+	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+
+	if isActive {
+		e.crossings = append([]domain.GateCrossingEvent(nil), target.Crossings...)
+		e.syncActivePracticeLapsLocked(target)
+		e.rebuildPilotLiveProgressFromCrossingsLocked(slotIndex, orderedGates)
+	}
+	target.Summaries = e.computePracticeSessionSummariesLocked(target)
+
+	practiceSnap := clonePracticeManagerState(e.practiceState)
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	e.notifyPracticeUpdated(practiceSnap, subs)
+	return practiceSnap, breakID, nil
+}
+
+// AdjustPracticeSessionBreak moves an existing `PracticeBreakMark` to `newTimestampUs` and replays
+// that pilot's crossings.
+func (e *Engine) AdjustPracticeSessionBreak(
+	sessionID string,
+	breakID uint64,
+	newTimestampUs uint64,
+) (domain.PracticeManagerState, error) {
+	if breakID == 0 || newTimestampUs == 0 {
+		return e.PracticeSnapshot(), fmt.Errorf("breakId and timestampUs must be positive")
+	}
+
+	e.mu.Lock()
+	targetID := strings.TrimSpace(sessionID)
+	if targetID == "" || strings.EqualFold(targetID, "current") {
+		targetID = e.practiceState.SelectedSessionID
+		if targetID == "" {
+			targetID = e.practiceState.ActiveSessionID
+		}
+	}
+	target := e.findPracticeSessionLocked(targetID)
+	if target == nil {
+		snap := clonePracticeManagerState(e.practiceState)
+		e.mu.Unlock()
+		return snap, fmt.Errorf("practice session %q not found", sessionID)
+	}
+
+	isActive := target.Active && e.practiceState.ActiveSessionID == target.SessionID && !e.isLiveRaceHeatActiveLocked()
+	if isActive && len(e.crossings) > len(target.Crossings) {
+		e.syncActivePracticeRecordsLocked()
+	}
+
+	idx := -1
+	for i := range target.Breaks {
+		if target.Breaks[i].BreakID == breakID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		snap := clonePracticeManagerState(e.practiceState)
+		e.mu.Unlock()
+		return snap, fmt.Errorf("break %d not found in practice session %q", breakID, target.SessionID)
+	}
+
+	slotIndex := target.Breaks[idx].SlotIndex
+	target.Breaks[idx].TimestampUs = newTimestampUs
+	sort.Slice(target.Breaks, func(a, b int) bool {
+		return target.Breaks[a].TimestampUs < target.Breaks[b].TimestampUs
+	})
+
+	callsign := ""
+	for _, p := range target.Pilots {
+		if p.SlotIndex == slotIndex && p.Callsign != "" {
+			callsign = p.Callsign
+			break
+		}
+	}
+	orderedGates := e.orderedGatesForPracticeSessionLocked(target)
+	sessionRules := e.rules
+	if target.Rules != nil {
+		sessionRules = target.Rules.Normalized()
+	}
+	target.Crossings, target.Laps = e.replayPilotCrossingsWithBreaksLocked(
+		target.Crossings,
+		target.Laps,
+		orderedGates,
+		e.detected,
+		sessionRules,
+		slotIndex,
+		callsign,
+		target.Breaks,
+	)
+	e.recomputePracticeSessionLapsLocked(target)
+	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+
+	if isActive {
+		e.crossings = append([]domain.GateCrossingEvent(nil), target.Crossings...)
+		e.syncActivePracticeLapsLocked(target)
+		e.rebuildPilotLiveProgressFromCrossingsLocked(slotIndex, orderedGates)
+	}
+	target.Summaries = e.computePracticeSessionSummariesLocked(target)
+
+	practiceSnap := clonePracticeManagerState(e.practiceState)
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	e.notifyPracticeUpdated(practiceSnap, subs)
+	return practiceSnap, nil
+}
+
+// DeletePracticeSessionBreak removes a `PracticeBreakMark` from a Practice session and replays
+// that pilot's crossings.
+func (e *Engine) DeletePracticeSessionBreak(
+	sessionID string,
+	breakID uint64,
+) (domain.PracticeManagerState, error) {
+	if breakID == 0 {
+		return e.PracticeSnapshot(), fmt.Errorf("breakId must be positive")
+	}
+
+	e.mu.Lock()
+	targetID := strings.TrimSpace(sessionID)
+	if targetID == "" || strings.EqualFold(targetID, "current") {
+		targetID = e.practiceState.SelectedSessionID
+		if targetID == "" {
+			targetID = e.practiceState.ActiveSessionID
+		}
+	}
+	target := e.findPracticeSessionLocked(targetID)
+	if target == nil {
+		snap := clonePracticeManagerState(e.practiceState)
+		e.mu.Unlock()
+		return snap, fmt.Errorf("practice session %q not found", sessionID)
+	}
+
+	isActive := target.Active && e.practiceState.ActiveSessionID == target.SessionID && !e.isLiveRaceHeatActiveLocked()
+	if isActive && len(e.crossings) > len(target.Crossings) {
+		e.syncActivePracticeRecordsLocked()
+	}
+
+	delIdx := -1
+	for i := range target.Breaks {
+		if target.Breaks[i].BreakID == breakID {
+			delIdx = i
+			break
+		}
+	}
+	if delIdx < 0 {
+		snap := clonePracticeManagerState(e.practiceState)
+		e.mu.Unlock()
+		return snap, fmt.Errorf("break %d not found in practice session %q", breakID, target.SessionID)
+	}
+
+	removed := target.Breaks[delIdx]
+	target.Breaks = append(target.Breaks[:delIdx], target.Breaks[delIdx+1:]...)
+
+	callsign := ""
+	for _, p := range target.Pilots {
+		if p.SlotIndex == removed.SlotIndex && p.Callsign != "" {
+			callsign = p.Callsign
+			break
+		}
+	}
+	orderedGates := e.orderedGatesForPracticeSessionLocked(target)
+	sessionRules := e.rules
+	if target.Rules != nil {
+		sessionRules = target.Rules.Normalized()
+	}
+	target.Crossings, target.Laps = e.replayPilotCrossingsWithBreaksLocked(
+		target.Crossings,
+		target.Laps,
+		orderedGates,
+		e.detected,
+		sessionRules,
+		removed.SlotIndex,
+		callsign,
+		target.Breaks,
+	)
+	e.recomputePracticeSessionLapsLocked(target)
+	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+
+	if isActive {
+		e.crossings = append([]domain.GateCrossingEvent(nil), target.Crossings...)
+		e.syncActivePracticeLapsLocked(target)
+		e.rebuildPilotLiveProgressFromCrossingsLocked(removed.SlotIndex, orderedGates)
+	}
+	target.Summaries = e.computePracticeSessionSummariesLocked(target)
+
+	practiceSnap := clonePracticeManagerState(e.practiceState)
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	e.notifyPracticeUpdated(practiceSnap, subs)
 	return practiceSnap, nil
 }
 

@@ -184,6 +184,7 @@ export interface ScopedStoreOverrides {
   isScopeLive?: () => boolean;
   laps?: () => LapRecord[];
   crossings?: () => GateCrossingEvent[];
+  breaks?: () => import("../types/models").PracticeBreakMark[];
   filtered?: () => FilteredDetection[];
   summaries?: () => PilotTrackSummary[];
   enabledPilots?: () => PilotSlot[];
@@ -1398,6 +1399,9 @@ export class AppStore {
     if (overrides.crossings) {
       props.crossings = { get: overrides.crossings, enumerable: true };
     }
+    if (overrides.breaks) {
+      props.breaks = { get: overrides.breaks, enumerable: true };
+    }
     if (overrides.filtered) {
       props.filtered = { get: overrides.filtered, enumerable: true };
     }
@@ -1471,6 +1475,7 @@ export class AppStore {
       isScopeLive: () => false,
       laps: () => getSession()?.laps ?? [],
       crossings: () => getSession()?.crossings ?? [],
+      breaks: () => getSession()?.breaks ?? [],
       filtered: () => getSession()?.filtered ?? [],
       summaries: () => getSession()?.summaries ?? [],
       enabledPilots: () => {
@@ -1664,6 +1669,12 @@ export class AppStore {
       return res;
     }
     return this._crossings;
+  }
+  public get breaks(): import("../types/models").PracticeBreakMark[] {
+    if (this.hasPracticeSessions) {
+      return this.selectedPracticeSession?.breaks ?? [];
+    }
+    return [];
   }
   /** Detections set aside by the timing rules, oldest first. */
   public get filtered(): FilteredDetection[] {

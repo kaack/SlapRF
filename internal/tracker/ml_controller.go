@@ -1523,7 +1523,7 @@ func (e *Engine) applyTeacherDecisionsLocked(
 	}
 	sort.Ints(slotsList)
 	for _, sl := range slotsList {
-		target.Crossings, target.Laps = e.replayPilotCrossingsLocked(
+		target.Crossings, target.Laps = e.replayPilotCrossingsWithBreaksLocked(
 			target.Crossings,
 			target.Laps,
 			orderedGates,
@@ -1531,6 +1531,7 @@ func (e *Engine) applyTeacherDecisionsLocked(
 			sessionRules,
 			sl,
 			callsignBySlot[sl],
+			target.Breaks,
 		)
 	}
 	e.recomputePracticeSessionLapsLocked(target)

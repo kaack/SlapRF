@@ -780,6 +780,92 @@ func (s *Server) handleDeletePracticeSessionCrossing(w http.ResponseWriter, r *h
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
+// handleAddPracticeSessionBreak serves `POST /v1/practice/sessions/{sessionId}/breaks`.
+func (s *Server) handleAddPracticeSessionBreak(w http.ResponseWriter, r *http.Request) {
+	rawID := strings.TrimSpace(r.PathValue("sessionId"))
+	if !rejectColonInPathValue(w, rawID) {
+		return
+	}
+	var body struct {
+		SlotIndex   *int    `json:"slotIndex"`
+		TimestampUs *uint64 `json:"timestampUs"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil ||
+		body.SlotIndex == nil || *body.SlotIndex <= 0 ||
+		body.TimestampUs == nil || *body.TimestampUs == 0 {
+		writeErrorJSON(w, http.StatusBadRequest, "request body must specify positive integer fields 'slotIndex' and 'timestampUs'")
+		return
+	}
+	eng := s.activeEngine()
+	sess, targetID := resolvePracticeSession(eng, rawID)
+	if sess == nil {
+		writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("practice session %q not found", rawID))
+		return
+	}
+	_, breakID, err := eng.AddPracticeSessionBreak(targetID, *body.SlotIndex, *body.TimestampUs)
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	s.logUserAction("Practice", "Added manual break #%d slot=%d timestamp=%d us in session %q (id=%s)", breakID, *body.SlotIndex, *body.TimestampUs, sess.Name, targetID)
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+// handlePatchPracticeSessionBreak serves `PATCH /v1/practice/sessions/{sessionId}/breaks/{breakId}`.
+func (s *Server) handlePatchPracticeSessionBreak(w http.ResponseWriter, r *http.Request) {
+	rawID := strings.TrimSpace(r.PathValue("sessionId"))
+	if !rejectColonInPathValue(w, rawID) {
+		return
+	}
+	breakID, ok := parseUint64PathValue(w, r, "breakId")
+	if !ok {
+		return
+	}
+	var body struct {
+		TimestampUs *uint64 `json:"timestampUs"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil || body.TimestampUs == nil || *body.TimestampUs == 0 {
+		writeErrorJSON(w, http.StatusBadRequest, "request body must specify positive integer field 'timestampUs'")
+		return
+	}
+	eng := s.activeEngine()
+	sess, targetID := resolvePracticeSession(eng, rawID)
+	if sess == nil {
+		writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("practice session %q not found", rawID))
+		return
+	}
+	if _, err := eng.AdjustPracticeSessionBreak(targetID, breakID, *body.TimestampUs); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	s.logUserAction("Practice", "Adjusted manual break #%d timestamp=%d us in session %q (id=%s)", breakID, *body.TimestampUs, sess.Name, targetID)
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+// handleDeletePracticeSessionBreak serves `DELETE /v1/practice/sessions/{sessionId}/breaks/{breakId}`.
+func (s *Server) handleDeletePracticeSessionBreak(w http.ResponseWriter, r *http.Request) {
+	rawID := strings.TrimSpace(r.PathValue("sessionId"))
+	if !rejectColonInPathValue(w, rawID) {
+		return
+	}
+	breakID, ok := parseUint64PathValue(w, r, "breakId")
+	if !ok {
+		return
+	}
+	eng := s.activeEngine()
+	sess, targetID := resolvePracticeSession(eng, rawID)
+	if sess == nil {
+		writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("practice session %q not found", rawID))
+		return
+	}
+	if _, err := eng.DeletePracticeSessionBreak(targetID, breakID); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	s.logUserAction("Practice", "Deleted manual break #%d in session %q (id=%s)", breakID, sess.Name, targetID)
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
 // handleAddRaceSessionCrossing serves `POST /v1/race/sessions/{sessionId}/crossings`.
 func (s *Server) handleAddRaceSessionCrossing(w http.ResponseWriter, r *http.Request) {
 	rawID := strings.TrimSpace(r.PathValue("sessionId"))

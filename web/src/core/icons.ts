@@ -35,6 +35,11 @@ export const icons = {
   reset: (s?: number) => svg(`<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>`, s),
   play: (s?: number) => svg(`<path d="M7 4l13 8-13 8z"/>`, s),
   pause: (s?: number) => svg(`<path d="M9 5v14M15 5v14"/>`, s),
+  splitBreak: (s?: number) =>
+    svg(
+      `<path d="M12 3v18" stroke-dasharray="3 3"/><path d="M8 8l-4 4 4 4"/><path d="M16 8l4 4-4 4"/>`,
+      s
+    ),
   timer: (s?: number) =>
     svg(`<path d="M10 2h4"/><path d="M12 14l3-3"/><circle cx="12" cy="14" r="8"/>`, s),
   timerOff: (s?: number) =>

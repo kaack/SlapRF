@@ -2778,6 +2778,15 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       await flushMicrotasks();
       expect(mock.calls.some((c) => c.method === "addCrossing")).toBe(true);
 
+      // Break button in modal header inserts a manual break inside the visible window
+      const addBreakBtn = document.body.querySelector<HTMLButtonElement>(
+        ".lap-editor-modal [data-lap-ed-add-break]"
+      )!;
+      expect(addBreakBtn).not.toBeNull();
+      addBreakBtn.click();
+      await flushMicrotasks();
+      expect(mock.calls.some((c) => c.method === "addBreak")).toBe(true);
+
       // Auto-Label triggers on-device teacher download on first tap, then labels strictly this single lap
       const autoLabelBtn = document.body.querySelector<HTMLButtonElement>(
         ".lap-editor-modal [data-lap-ed-auto-label]"

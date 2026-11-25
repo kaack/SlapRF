@@ -47,6 +47,7 @@ func clonePracticeSession(s domain.PracticeSession) domain.PracticeSession {
 	}
 	out.Laps = cloneLaps(s.Laps)
 	out.Crossings = append([]domain.GateCrossingEvent(nil), s.Crossings...)
+	out.Breaks = append([]domain.PracticeBreakMark(nil), s.Breaks...)
 	out.Filtered = append([]domain.FilteredDetection(nil), s.Filtered...)
 	out.TeacherHardNegs = append([]domain.TeacherNegativeMark(nil), s.TeacherHardNegs...)
 	out.ManualDeletedCrossings = append([]domain.ManualDeletedCrossing(nil), s.ManualDeletedCrossings...)

@@ -250,6 +250,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/practice/sessions/{sessionId}/crossings", wrap(s.handleAddPracticeSessionCrossing))
 	mux.HandleFunc("PATCH /v1/practice/sessions/{sessionId}/crossings/{eventId}", wrap(s.handlePatchPracticeSessionCrossing))
 	mux.HandleFunc("DELETE /v1/practice/sessions/{sessionId}/crossings/{eventId}", wrap(s.handleDeletePracticeSessionCrossing))
+	mux.HandleFunc("POST /v1/practice/sessions/{sessionId}/breaks", wrap(s.handleAddPracticeSessionBreak))
+	mux.HandleFunc("PATCH /v1/practice/sessions/{sessionId}/breaks/{breakId}", wrap(s.handlePatchPracticeSessionBreak))
+	mux.HandleFunc("DELETE /v1/practice/sessions/{sessionId}/breaks/{breakId}", wrap(s.handleDeletePracticeSessionBreak))
 	s.registerScopedTrackRoutes(mux, wrap, trackScopePractice)
 
 	// Race Sessions Resource Hierarchy (`/v1/race/sessions` - symmetric with `/v1/practice/sessions`)

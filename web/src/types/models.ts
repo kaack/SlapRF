@@ -809,6 +809,12 @@ export interface ManualDeletedCrossing {
   peakRssiDbm?: number;
 }
 
+export interface PracticeBreakMark {
+  breakId: number;
+  slotIndex: number;
+  timestampUs: number;
+}
+
 export interface TeacherNegativeMark {
   gateId: number;
   slotIndex: number;
@@ -832,6 +838,7 @@ export interface PracticeSession {
   rules?: TimingRules;
   laps: LapRecord[];
   crossings: GateCrossingEvent[];
+  breaks?: PracticeBreakMark[];
   filtered: FilteredDetection[];
   summaries: PilotTrackSummary[];
   trainingVerified?: boolean;
@@ -1403,6 +1410,7 @@ export interface FullStateResponse {
   timers?: DetectedTimer[];
   laps: LapRecord[];
   crossings: GateCrossingEvent[];
+  breaks?: PracticeBreakMark[];
   filtered: FilteredDetection[];
   summaries: PilotTrackSummary[];
   rules: TimingRules;

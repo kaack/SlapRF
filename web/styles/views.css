@@ -28804,6 +28804,7 @@ html[data-theme="light"] .practice-review-lap-cell.is-missed {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
+  gap: 4px;
   padding: 1px 7px;
   border-radius: 999px;
   border: 1px dashed var(--border);
@@ -28815,6 +28816,27 @@ html[data-theme="light"] .practice-review-lap-cell.is-missed {
   line-height: 1.35;
   letter-spacing: 0.01em;
   white-space: nowrap;
+}
+.lap-break-undo-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 1px;
+  margin-right: -3px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1;
+  cursor: pointer;
+}
+.lap-break-undo-btn:hover {
+  background: rgba(239, 68, 68, 0.16);
+  color: var(--bad, #ef4444);
 }
 
 /* Lap-based multi-timer Practice RSSI Editor header & timer chips */

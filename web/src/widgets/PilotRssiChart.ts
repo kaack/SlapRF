@@ -241,6 +241,7 @@ interface CrossingBox {
   tsUs: number;
   title: string;
   counted: boolean;
+  isBreak?: boolean;
   lineX: number;
   pillX: number;
   pillY: number;
@@ -341,10 +342,13 @@ export class PilotRssiChart extends Component {
     minTsUs: number;
     maxTsUs: number;
     grabOffsetPx: number;
+    isBreak?: boolean;
   } | null = null;
   /** Optimistic crossing timestamps while a PATCH is in flight, so the line never snaps back. */
   private readonly pendingCrossings = new Map<number, number>();
   private readonly pendingDeletedCrossings = new Set<number>();
+  private readonly pendingBreaks = new Map<number, number>();
+  private readonly pendingDeletedBreaks = new Set<number>();
   private pendingDeleteCrossing: { box: CrossingBox; startX: number; startY: number } | null = null;
   private crossingBoxes: CrossingBox[] = [];
   /** Values shown while a save is in flight, so the line doesn't jump back. */
@@ -1162,6 +1166,7 @@ export class PilotRssiChart extends Component {
           minTsUs: bounds.minTsUs,
           maxTsUs: bounds.maxTsUs,
           grabOffsetPx: grabbedCrossing.inPill ? x - grabbedCrossing.box.lineX : 0,
+          isBreak: grabbedCrossing.box.isBreak,
         };
         host.classList.add("is-dragging", "is-over-crossing");
         return;
@@ -1482,15 +1487,23 @@ export class PilotRssiChart extends Component {
           e.type !== "pointercancel" &&
           Math.hypot(ux - pendingDel.startX, uy - pendingDel.startY) <= 14
         ) {
-          void this.deleteManualCrossing(pendingDel.box.eventId, pendingDel.box.title);
+          if (pendingDel.box.isBreak) {
+            void this.deleteManualBreak(pendingDel.box.eventId);
+          } else {
+            void this.deleteManualCrossing(pendingDel.box.eventId, pendingDel.box.title);
+          }
         }
       }
       if (this.crossingDrag) {
-        const { eventId, gateId, title, tsUs, origTsUs } = this.crossingDrag;
+        const { eventId, gateId, title, tsUs, origTsUs, isBreak } = this.crossingDrag;
         this.crossingDrag = null;
         this.syncDragReadout(null);
         if (e.type !== "pointercancel" && Math.abs(tsUs - origTsUs) >= 5_000) {
-          void this.saveManualCrossing(eventId, gateId, title, tsUs, origTsUs);
+          if (isBreak) {
+            void this.saveManualBreak(eventId, tsUs);
+          } else {
+            void this.saveManualCrossing(eventId, gateId, title, tsUs, origTsUs);
+          }
         }
       }
       if (this.tagDrag) {
@@ -2132,13 +2145,18 @@ export class PilotRssiChart extends Component {
     return this.tagBoxAt(x, y);
   }
 
-  /** Timed crossing pill, delete `×` button, or vertical line under `(x, y)` when unlocked & paused. */
+  /** Returns the microsecond timestamp at the horizontal center of the currently visible X window. */
+  public visibleCenterTimestampUs(): number {
+    return Math.max(1, Math.round(this.viewEnd() - this.windowUs * 0.5));
+  }
+
+  /** Timed crossing or manual break pill, delete `×` button, or vertical line under `(x, y)`. */
   private crossingAt(
     x: number,
     y: number,
     isTouch = false
   ): { box: CrossingBox; inPill: boolean; inDelete: boolean } | null {
-    if (!this.canEditCrossings || this.crossingBoxes.length === 0) return null;
+    if (this.crossingBoxes.length === 0) return null;
     const padPad = isTouch ? 4 : 0;
     for (let i = this.crossingBoxes.length - 1; i >= 0; i--) {
       const b = this.crossingBoxes[i];
@@ -2298,6 +2316,27 @@ export class PilotRssiChart extends Component {
       this.calibMessageShort = `Could not adjust ${title}.`;
     } finally {
       this.pendingCrossings.delete(eventId);
+      this.renderCalib();
+    }
+  }
+
+  private async deleteManualBreak(breakId: number): Promise<void> {
+    if (!breakId || this.pendingDeletedBreaks.has(breakId)) return;
+    this.pendingDeletedBreaks.add(breakId);
+    try {
+      await this.api.deleteBreak(breakId);
+    } finally {
+      this.pendingDeletedBreaks.delete(breakId);
+      this.renderCalib();
+    }
+  }
+
+  private async saveManualBreak(breakId: number, tsUs: number): Promise<void> {
+    this.pendingBreaks.set(breakId, tsUs);
+    try {
+      await this.api.adjustBreak(breakId, tsUs);
+    } finally {
+      this.pendingBreaks.delete(breakId);
       this.renderCalib();
     }
   }
@@ -3348,7 +3387,7 @@ export class PilotRssiChart extends Component {
     } else {
       this.tags = [];
     }
-    if (this.latest === 0 && this.store.crossings.length === 0) {
+    if (this.latest === 0 && this.store.crossings.length === 0 && this.store.breaks.length === 0) {
       this.crossingBoxes = [];
       return;
     }
@@ -3359,8 +3398,12 @@ export class PilotRssiChart extends Component {
     const passes = this.focusedPasses(start, end);
     const rows = passes.length > 0 ? this.labelRows(ctx, start, end) : this.cachedLabelRows;
     const canEdit = this.canEditCrossings;
+    const canEditBreaks =
+      !this.isMultiPilotMode &&
+      this.contextMode === "practice" &&
+      (this.lapWindow !== null || (!this.chartLinesLocked && this.endUs !== null));
     const prevCrossingHit =
-      canEdit && !this.tagDrag && this.hoverX !== null && this.hoverY !== null
+      (canEdit || canEditBreaks) && !this.tagDrag && this.hoverX !== null && this.hoverY !== null
         ? this.crossingAt(this.hoverX, this.hoverY)
         : null;
     const nextCrossingBoxes: CrossingBox[] = [];
@@ -3499,19 +3542,145 @@ export class PilotRssiChart extends Component {
         hovered = p;
       }
     });
+
+    // Manual pilot Break markers (`BREAK`) — splits before/after stints so dead air never forms a phantom lap.
+    if (!this.isMultiPilotMode && this.store.breaks.length > 0) {
+      const slot = this.activePilotSlot;
+      const breakColor = "#f59e0b";
+      for (const br of this.store.breaks) {
+        if (br.slotIndex !== slot || this.pendingDeletedBreaks.has(br.breakId)) continue;
+        const isDraggingBr = Boolean(
+          this.crossingDrag?.isBreak && this.crossingDrag.eventId === br.breakId
+        );
+        const effTs = isDraggingBr
+          ? this.crossingDrag!.tsUs
+          : (this.pendingBreaks.get(br.breakId) ?? br.timestampUs);
+        if (effTs < start || effTs > end) continue;
+        const bx = xOf(effTs);
+        const isActiveBr =
+          canEditBreaks &&
+          (isDraggingBr ||
+            Boolean(prevCrossingHit?.box.isBreak && prevCrossingHit.box.eventId === br.breakId));
+        const isHoverDelBr =
+          canEditBreaks &&
+          !isDraggingBr &&
+          Boolean(
+            prevCrossingHit?.inDelete &&
+              prevCrossingHit.box.isBreak &&
+              prevCrossingHit.box.eventId === br.breakId
+          );
+
+        ctx.save();
+        ctx.strokeStyle = withAlpha(breakColor, isActiveBr ? 0.98 : 0.88);
+        ctx.lineWidth = isActiveBr ? 2.2 : 1.7;
+        ctx.setLineDash(isDraggingBr ? [] : [6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(bx, padT);
+        ctx.lineTo(bx, padT + plotH);
+        ctx.stroke();
+        ctx.restore();
+
+        const bLbl = "BREAK";
+        if (canEditBreaks) {
+          ctx.font = font(700, 10.5);
+          const delW = 16;
+          const textW = ctx.measureText(bLbl).width;
+          const pillW = textW + 12 + delW;
+          const pillY = padT + 2;
+          const pillX = Math.max(
+            padL + 2,
+            Math.min(Math.max(padL + 2, padL + plotW - pillW - 2), bx - pillW * 0.5)
+          );
+          const delX = pillX + pillW - delW;
+          ctx.beginPath();
+          ctx.roundRect(pillX, pillY, pillW, TAG_H, 5);
+          if (isDraggingBr) {
+            ctx.fillStyle = breakColor;
+            ctx.fill();
+          } else {
+            ctx.fillStyle = theme.surface;
+            ctx.fill();
+            ctx.strokeStyle = breakColor;
+            ctx.lineWidth = isActiveBr ? 1.6 : 1.2;
+            ctx.stroke();
+          }
+          const fg = isDraggingBr ? inkOnColor(breakColor) : breakColor;
+          ctx.fillStyle = fg;
+          ctx.textAlign = "left";
+          ctx.fillText(bLbl, pillX + 7, pillY + 12.5);
+
+          ctx.save();
+          if (isHoverDelBr) {
+            ctx.fillStyle = theme.bad;
+            ctx.beginPath();
+            ctx.roundRect(delX + 1, pillY + 2, delW - 3, TAG_H - 4, 3.5);
+            ctx.fill();
+          } else {
+            ctx.strokeStyle = withAlpha(fg, 0.28);
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(delX + 0.5, pillY + 3.5);
+            ctx.lineTo(delX + 0.5, pillY + TAG_H - 3.5);
+            ctx.stroke();
+          }
+          const cx = delX + delW * 0.5 - 0.5;
+          const cy = pillY + TAG_H * 0.5;
+          const rHalf = 2.8;
+          ctx.strokeStyle = isHoverDelBr ? "#ffffff" : fg;
+          ctx.lineWidth = 1.5;
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.moveTo(cx - rHalf, cy - rHalf);
+          ctx.lineTo(cx + rHalf, cy + rHalf);
+          ctx.moveTo(cx + rHalf, cy - rHalf);
+          ctx.lineTo(cx - rHalf, cy + rHalf);
+          ctx.stroke();
+          ctx.restore();
+
+          nextCrossingBoxes.push({
+            eventId: br.breakId,
+            gateId: 0,
+            slotIndex: slot,
+            origTsUs: br.timestampUs,
+            tsUs: effTs,
+            title: "Break",
+            counted: true,
+            isBreak: true,
+            lineX: bx,
+            pillX,
+            pillY,
+            pillW,
+            delX,
+            delY: pillY,
+            delW,
+          });
+        } else {
+          ctx.fillStyle = breakColor;
+          ctx.font = font(700, 10.5);
+          const tw = ctx.measureText(bLbl).width;
+          const tx = Math.max(padL + 2, Math.min(padL + plotW - tw - 2, bx + 4));
+          ctx.fillText(bLbl, tx, padT + 11);
+        }
+      }
+    }
+
     this.crossingBoxes = nextCrossingBoxes;
 
     if (this.crossingDrag) {
-      const pilotEntry = pilotEntries[0];
-      const liveDbm = pilotEntry
-        ? this.rssiAt(this.crossingDrag.gateId, pilotEntry.slot, this.crossingDrag.tsUs)
-        : undefined;
-      const gLbl = this.labelOfGate(this.crossingDrag.gateId);
-      const readout =
-        liveDbm !== undefined
-          ? `${gLbl} · ${liveDbm.toFixed(1)}${this.unitSuffix}`
-          : gLbl;
-      this.syncDragReadout(readout);
+      if (this.crossingDrag.isBreak) {
+        this.syncDragReadout("BREAK");
+      } else {
+        const pilotEntry = pilotEntries[0];
+        const liveDbm = pilotEntry
+          ? this.rssiAt(this.crossingDrag.gateId, pilotEntry.slot, this.crossingDrag.tsUs)
+          : undefined;
+        const gLbl = this.labelOfGate(this.crossingDrag.gateId);
+        const readout =
+          liveDbm !== undefined
+            ? `${gLbl} · ${liveDbm.toFixed(1)}${this.unitSuffix}`
+            : gLbl;
+        this.syncDragReadout(readout);
+      }
     } else {
       if (this.lastDragReadoutText !== null) {
         this.syncDragReadout(null);

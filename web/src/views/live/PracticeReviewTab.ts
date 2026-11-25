@@ -70,7 +70,11 @@ export class PracticeReviewTab extends Component {
     const pilotsSig = (sess.pilots ?? [])
       .map((p) => `${p.slotIndex}:${p.callsign}:${p.band ?? 1}:${p.channel}`)
       .join("|");
-    return `${sess.sessionId}:${sess.name}:${slot}:${gateCount}:${sess.crossings.length}:${pilotsSig}:${lapsSig}`;
+    const breaksSig = (sess.breaks ?? [])
+      .filter((b) => b.slotIndex === slot)
+      .map((b) => `${b.breakId}:${b.timestampUs}`)
+      .join(",");
+    return `${sess.sessionId}:${sess.name}:${slot}:${gateCount}:${sess.crossings.length}:${breaksSig}:${pilotsSig}:${lapsSig}`;
   }
 
   public render(force = false): void {
@@ -182,8 +186,14 @@ export class PracticeReviewTab extends Component {
               const older = reversedPilotLaps[idx + 1];
               if (older) {
                 const gapSec = lapBreakGapSec(lap, older);
-                if (gapSec >= LAP_BREAK_GAP_THRESHOLD_SEC) {
-                  return rowHtml + renderLapBreakRowHtml(gapSec, 5);
+                const manualBreak = (sess.breaks ?? []).find(
+                  (b) =>
+                    b.slotIndex === activeSlot &&
+                    b.timestampUs >= older.completedAtUs &&
+                    b.timestampUs <= startUs
+                );
+                if (gapSec >= LAP_BREAK_GAP_THRESHOLD_SEC || manualBreak) {
+                  return rowHtml + renderLapBreakRowHtml(gapSec, 5, manualBreak?.breakId);
                 }
               }
               return rowHtml;
@@ -235,6 +245,16 @@ export class PracticeReviewTab extends Component {
 
     if (target.closest("[data-review-open-editor]")) {
       openPracticeLapEditorModal(this.store, this.api, sess.sessionId, this.selectedSlot);
+      return;
+    }
+
+    const delBreakBtn = target.closest<HTMLButtonElement>("[data-delete-break-id]");
+    if (delBreakBtn) {
+      e.stopPropagation();
+      const breakId = Number(delBreakBtn.dataset.deleteBreakId || "0");
+      if (breakId > 0) {
+        void this.api.deleteBreak(breakId, { kind: "practice", id: sess.sessionId });
+      }
       return;
     }
 

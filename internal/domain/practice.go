@@ -22,6 +22,15 @@ func (p PracticeSessionPilot) ChannelLabel() string {
 	return fmt.Sprintf("%s%d (%d MHz)", BandPrefix(p.Band), p.Channel, p.FrequencyMHz)
 }
 
+// PracticeBreakMark records an explicit pilot flight-stint break (`timestampUs`) inserted in the
+// RSSI editor so the crossing replay engine resets lap progress across that gap (preventing dead-air
+// between stints from forming a phantom lap).
+type PracticeBreakMark struct {
+	BreakID     uint64 `json:"breakId"`
+	SlotIndex   int    `json:"slotIndex"`
+	TimestampUs uint64 `json:"timestampUs"`
+}
+
 // ManualDeletedCrossing records a crossing timestamp that a human explicitly deleted (`×`)
 // on the Signals chart so on-device ML training treats that window as a verified hard negative.
 type ManualDeletedCrossing struct {
@@ -60,6 +69,7 @@ type PracticeSession struct {
 	Rules                  *TimingRules            `json:"rules,omitempty"`
 	Laps                   []LapRecord             `json:"laps"`
 	Crossings              []GateCrossingEvent     `json:"crossings"`
+	Breaks                 []PracticeBreakMark     `json:"breaks,omitempty"`
 	Filtered               []FilteredDetection     `json:"filtered"`
 	Summaries              []PilotTrackSummary     `json:"summaries"`
 	TrainingVerified       bool                    `json:"trainingVerified,omitempty"`

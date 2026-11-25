@@ -113,10 +113,39 @@ func BuildPilotFlightStints(sess domain.PracticeSession) map[int][]FlightStintSp
 	}
 	for slot, list := range stintsBySlot {
 		sort.Slice(list, func(i, j int) bool { return list[i].LoUs < list[j].LoUs })
+		var slotBreaks []uint64
+		for _, br := range sess.Breaks {
+			if br.SlotIndex == slot && br.TimestampUs > 0 {
+				slotBreaks = append(slotBreaks, br.TimestampUs)
+			}
+		}
+		sort.Slice(slotBreaks, func(i, j int) bool { return slotBreaks[i] < slotBreaks[j] })
+		hasBreakBetween := func(aUs, bUs uint64) bool {
+			if len(slotBreaks) == 0 {
+				return false
+			}
+			lo, hi := aUs, bUs
+			if lo > hi {
+				lo, hi = hi, lo
+			}
+			for _, bt := range slotBreaks {
+				if bt >= lo && bt <= hi {
+					return true
+				}
+			}
+			return false
+		}
+
 		merged := list[:1]
 		for _, s := range list[1:] {
 			last := &merged[len(merged)-1]
-			if s.LoUs <= last.HiUs+5_000_000 {
+			bridgeLo := last.HiUs
+			if bridgeLo > stintPadUs {
+				bridgeLo -= stintPadUs
+			} else {
+				bridgeLo = 0
+			}
+			if s.LoUs <= last.HiUs+5_000_000 && !hasBreakBetween(bridgeLo, s.LoUs+stintPadUs) {
 				if s.HiUs > last.HiUs {
 					last.HiUs = s.HiUs
 				}

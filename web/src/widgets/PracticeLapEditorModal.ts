@@ -94,8 +94,18 @@ export function openPracticeLapEditorModal(
   }
   let lockedLapId: number | null = lockedLap?.lapId ?? null;
   let lockedLapNumber: number | null = lockedLap?.lapNumber ?? null;
-  const fallbackStartUs = opts.focusStartUs;
-  const fallbackEndUs = opts.focusEndUs;
+  let fallbackStartUs =
+    opts.focusStartUs !== undefined
+      ? opts.focusStartUs
+      : lockedLap
+        ? Math.max(0, Math.round(lockedLap.completedAtUs - lockedLap.lapTimeSec * 1_000_000))
+        : undefined;
+  let fallbackEndUs =
+    opts.focusEndUs !== undefined
+      ? opts.focusEndUs
+      : lockedLap
+        ? lockedLap.completedAtUs
+        : undefined;
 
   const resolveCurrentLapIndex = (sess: PracticeSession): number => {
     const pLaps = getPilotLaps(sess);
@@ -217,12 +227,20 @@ export function openPracticeLapEditorModal(
         ? formatBandChannelShort(rootPilot.band, rootPilot.channel)
         : "";
     const who = `${callsign}${chLabel ? ` (${chLabel})` : ""}`;
+    const hasBreakInWindow = (sess.breaks ?? []).some(
+      (b) =>
+        b.slotIndex === selectedPilotSlot &&
+        b.timestampUs >= bounds.passMinUs &&
+        b.timestampUs <= bounds.passMaxUs
+    );
     const lapPart =
       bounds.lapNumber !== null
         ? ` · L${bounds.lapNumber}${bounds.lapTimeSec !== null ? ` · ${fmtTime(bounds.lapTimeSec)}` : ""}`
-        : bounds.lapTimeSec !== null && bounds.lapTimeSec > 0
-          ? ` · ${fmtTime(bounds.lapTimeSec)}`
-          : "";
+        : hasBreakInWindow
+          ? ` · Break${bounds.lapTimeSec !== null && bounds.lapTimeSec > 0 ? ` · ${fmtTime(bounds.lapTimeSec)}` : ""}`
+          : bounds.lapTimeSec !== null && bounds.lapTimeSec > 0
+            ? ` · ${fmtTime(bounds.lapTimeSec)}`
+            : "";
 
     const teacher = rootStore.mlStatus.teacher;
     const hasTeacherSupport = Boolean(
@@ -247,6 +265,9 @@ export function openPracticeLapEditorModal(
         <h3>${esc(who)}${esc(lapPart)}</h3>
       </div>
       <div class="lap-ed-head-right">
+        <button type="button" class="btn btn-sm btn-ghost" data-lap-ed-add-break title="Insert a flight break in this window so before/after stints do not merge into a lap">
+          ${icons.splitBreak(14)}<span>Break</span>
+        </button>
         ${
           hasTeacherSupport
             ? `<button type="button" class="btn btn-sm ${isAutoLabeling ? "btn-armed" : "btn-ghost"}" data-lap-ed-auto-label ${dlRunning ? "disabled" : ""} title="${esc(autoLabelTitle)}">
@@ -263,28 +284,51 @@ export function openPracticeLapEditorModal(
   renderHeader();
   document.body.appendChild(backdrop);
 
+  const findAdjacentLapTarget = (sess: PracticeSession, dir: -1 | 1): LapRecord | undefined => {
+    const pLaps = getPilotLaps(sess);
+    if (pLaps.length === 0) return undefined;
+    const curIdx = resolveCurrentLapIndex(sess);
+    if (curIdx >= 0) {
+      return pLaps[curIdx + dir];
+    }
+    const bounds = computeLapBounds(sess);
+    if (dir < 0) {
+      for (let i = pLaps.length - 1; i >= 0; i--) {
+        if (pLaps[i].completedAtUs <= bounds.startUs + 250_000) {
+          return pLaps[i];
+        }
+      }
+      return undefined;
+    }
+    for (let i = 0; i < pLaps.length; i++) {
+      const lapStartUs = Math.max(
+        0,
+        Math.round(pLaps[i].completedAtUs - pLaps[i].lapTimeSec * 1_000_000)
+      );
+      if (lapStartUs >= bounds.endUs - 250_000) {
+        return pLaps[i];
+      }
+    }
+    return undefined;
+  };
+
   const canStepLap = (dir: -1 | 1): boolean => {
     const sess = getSession();
     if (!sess) return false;
-    const pLaps = getPilotLaps(sess);
-    const curIdx = resolveCurrentLapIndex(sess);
-    if (curIdx < 0) return false;
-    const nextIdx = curIdx + dir;
-    return nextIdx >= 0 && nextIdx < pLaps.length;
+    return findAdjacentLapTarget(sess, dir) !== undefined;
   };
 
   let chartRef: PilotRssiChart | null = null;
   const stepToAdjacentLap = (dir: -1 | 1): void => {
     const sess = getSession();
     if (!sess || !chartRef) return;
-    const pLaps = getPilotLaps(sess);
-    const curIdx = resolveCurrentLapIndex(sess);
-    if (curIdx < 0) return;
-    const target = pLaps[curIdx + dir];
+    const target = findAdjacentLapTarget(sess, dir);
     if (!target) return;
     lockedLap = target;
     lockedLapId = target.lapId;
     lockedLapNumber = target.lapNumber;
+    fallbackStartUs = Math.max(0, Math.round(target.completedAtUs - target.lapTimeSec * 1_000_000));
+    fallbackEndUs = target.completedAtUs;
     renderHeader();
     const nextBounds = computeLapBounds(sess);
     chartRef.setLapWindow(
@@ -367,11 +411,38 @@ export function openPracticeLapEditorModal(
     }
   };
 
+  const runInsertBreak = async (): Promise<void> => {
+    const sess = getSession();
+    if (!sess || !chartRef) return;
+    const bounds = computeLapBounds(sess);
+    let tsUs = chartRef.visibleCenterTimestampUs();
+    if (bounds.endUs > bounds.startUs + 120_000) {
+      tsUs = clamp(tsUs, bounds.startUs + 50_000, bounds.endUs - 50_000);
+    } else {
+      tsUs = clamp(tsUs, bounds.hardMinUs + 10_000, bounds.hardMaxUs - 10_000);
+    }
+    fallbackStartUs = bounds.startUs;
+    fallbackEndUs = bounds.endUs;
+    lockedLap = undefined;
+    lockedLapId = null;
+    lockedLapNumber = null;
+    try {
+      await scopedApi.addBreak(selectedPilotSlot, tsUs);
+      showToast("Added break — drag BREAK handle on chart or click × to undo", "info");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), "error");
+    }
+  };
+
   const onBackdropClick = (e: MouseEvent): void => {
     const target = e.target as HTMLElement | null;
     if (!target) return;
     if (target === backdrop || target.closest("[data-lap-ed-close]")) {
       close();
+      return;
+    }
+    if (target.closest("[data-lap-ed-add-break]")) {
+      void runInsertBreak();
       return;
     }
     if (target.closest("[data-lap-ed-auto-label]")) {
@@ -406,6 +477,7 @@ export function openPracticeLapEditorModal(
   const unsubStore = rootStore.subscribe(["practice", "laps", "crossings", "ml"], () => {
     if (!document.body.contains(backdrop)) return;
     renderHeader();
+    chart.renderControls();
   });
 
   const topbarEl = document.querySelector<HTMLElement>(".topbar");
