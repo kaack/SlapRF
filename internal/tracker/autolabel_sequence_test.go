@@ -155,12 +155,24 @@ func TestAutoLabelTrackOrderBlankSlateRegression(t *testing.T) {
 	totalDurationSec := curSec + 5.0
 	totalSteps := int(totalDurationSec / 0.02)
 
+	// Record two realistic BLE spoke packet dropouts matching Session 2 Laps 20 & 22:
+	//  - Stint 1 Lap 2 T3: 2.2s BLE silence ending right AT the gate crest (`idx == 0` segment start peak!)
+	//  - Stint 2 Lap 1 T1: 1.35s BLE gap immediately after the gate crest (linear interpolation plateau!)
+	bleGapT3CrestSec := float64(expected[7].tsUs) / 1e6 // Lap 2 T3
+	bleGapT1CrestSec := float64(expected[14].tsUs) / 1e6 // Stint 2 Lap 1 T1
+
 	var seq uint32
 	for step := 0; step < totalSteps; step++ {
 		tSec := float64(step) * 0.02
 		tsUs := uint64(1_000_000) + uint64(step)*20_000
 		seq++
 		for ti := 0; ti < 4; ti++ {
+			if ti == 3 && tSec >= bleGapT3CrestSec-2.20 && tSec < bleGapT3CrestSec-0.01 {
+				continue // BLE spoke silent until right at the T3 crest!
+			}
+			if ti == 1 && tSec > bleGapT1CrestSec+0.04 && tSec <= bleGapT1CrestSec+1.38 {
+				continue // 1.34s BLE gap right after T1 crest!
+			}
 			rssi := -90.0
 			for _, ev := range events {
 				if ev.timerIdx != ti {

@@ -318,22 +318,22 @@ func ExtractSessionCandidates(sess domain.PracticeSession, samples []tracestore.
 
 func extractGridSequencePeaks(seqIdx int, seq GridSequence) []rawSeqPeak {
 	T := len(seq.MedRSSI)
-	if T < 8 {
+	if T < 4 {
 		return nil
 	}
 	var raw []rawSeqPeak
-	for t := 2; t < T-2; t++ {
+	for t := 0; t < T; t++ {
 		prom := seq.MedRSSI[t] - seq.FloorDbm[t]
 		if prom < 8.0 {
 			continue
 		}
-		// Local maximum over +-2 steps (+-40 ms) so 60..200 ms dipole M-null shoulders are both visible
-		// to the M-saddle merger below before enforcing general peak spacing.
+		// Local maximum over +-2 steps (+-40 ms), including segment boundaries `t == 0` / `t == T-1`
+		// when a BLE spoke packet gap split a pass right at its crest!
 		val := seq.MedRSSI[t]
 		isMax := true
 		for k := t - 2; k <= t+2; k++ {
 			if k >= 0 && k < T && k != t {
-				if seq.MedRSSI[k] > val || (seq.MedRSSI[k] == val && k == t-1) {
+				if seq.MedRSSI[k] > val || (seq.MedRSSI[k] == val && k < t) {
 					isMax = false
 					break
 				}
@@ -404,15 +404,16 @@ func extractGridSequencePeaks(seqIdx int, seq GridSequence) []rawSeqPeak {
 		merged = append(merged, cur)
 	}
 
-	// Filter out flat-shelf quantization ripples (`< 4.5 dB` local rise above the surrounding +-1.2s
-	// local trough) so bench dead-air shelves where an armed VTX sits steady on a table emit zero candidates,
-	// while wider medium-range sector passes remain visible to the track-order Viterbi decoder.
-	const localValleySteps = 60 // +-1.20 s at 50 Hz
+	// Filter out flat-shelf quantization ripples (`< 4.5 dB` local rise above the surrounding +-1.90s
+	// local trough) while preserving true gate passes truncated on one side by a BLE telemetry gap!
+	const localValleySteps = 95 // +-1.90 s at 50 Hz (< 2.00 s single-lap floorPadUs)
 	var prominent []rawSeqPeak
 	for _, pk := range merged {
 		if pk.promDb < 9.5 {
 			continue
 		}
+		leftTrunc := pk.stepIdx < localValleySteps
+		rightTrunc := pk.stepIdx+localValleySteps >= T
 		loL := pk.stepIdx - localValleySteps
 		if loL < 0 {
 			loL = 0
@@ -438,6 +439,19 @@ func extractGridSequencePeaks(seqIdx int, seq GridSequence) []rawSeqPeak {
 		localRise := riseLeft
 		if riseRight < localRise {
 			localRise = riseRight
+		}
+		if leftTrunc && !rightTrunc && riseRight >= 12.0 && riseRight > localRise {
+			localRise = riseRight
+		} else if rightTrunc && !leftTrunc && riseLeft >= 12.0 && riseLeft > localRise {
+			localRise = riseLeft
+		} else if leftTrunc && rightTrunc && pk.promDb >= 18.0 {
+			maxSide := riseLeft
+			if riseRight > maxSide {
+				maxSide = riseRight
+			}
+			if maxSide >= 8.0 {
+				localRise = maxSide
+			}
 		}
 		if localRise < 4.5 {
 			continue
@@ -474,17 +488,20 @@ func extractGridSequencePeaks(seqIdx int, seq GridSequence) []rawSeqPeak {
 }
 
 func buildSeqPeak(seqIdx int, seq GridSequence, t int) rawSeqPeak {
-	y0 := float64(seq.MedRSSI[t-1])
-	y1 := float64(seq.MedRSSI[t])
-	y2 := float64(seq.MedRSSI[t+1])
-	denom := y0 - 2*y1 + y2
+	T := len(seq.MedRSSI)
 	subStep := 0.0
-	if math.Abs(denom) > 1e-4 {
-		subStep = 0.5 * (y0 - y2) / denom
-		if subStep < -0.5 {
-			subStep = -0.5
-		} else if subStep > 0.5 {
-			subStep = 0.5
+	if t > 0 && t+1 < T {
+		y0 := float64(seq.MedRSSI[t-1])
+		y1 := float64(seq.MedRSSI[t])
+		y2 := float64(seq.MedRSSI[t+1])
+		denom := y0 - 2*y1 + y2
+		if math.Abs(denom) > 1e-4 {
+			subStep = 0.5 * (y0 - y2) / denom
+			if subStep < -0.5 {
+				subStep = -0.5
+			} else if subStep > 0.5 {
+				subStep = 0.5
+			}
 		}
 	}
 	tsInt := int64(seq.StartTsUs) + int64(math.Round((float64(t)+subStep)*float64(StepUs)))

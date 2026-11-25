@@ -187,16 +187,16 @@ func ResampleSegments(points []RawPoint) []GridSequence {
 }
 
 func resampleContiguous(pts []RawPoint) (GridSequence, bool) {
-	if len(pts) < 8 {
+	if len(pts) < 3 {
 		return GridSequence{}, false
 	}
 	startTs := pts[0].TimestampUs
 	endTs := pts[len(pts)-1].TimestampUs
-	if endTs <= startTs+uint64(6*StepUs) {
+	if endTs <= startTs+uint64(3*StepUs) {
 		return GridSequence{}, false
 	}
 	nSteps := int((endTs-startTs)/StepUs) + 1
-	if nSteps < 16 {
+	if nSteps < 4 {
 		return GridSequence{}, false
 	}
 

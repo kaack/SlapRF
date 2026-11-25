@@ -467,6 +467,10 @@ func LabelCandidatesTrackOrder(
 			hasTCNs[i] = okT
 
 			sc := -0.85 + 3.15*rel + 0.85*relRise + 0.038*clamp64(prom-10.0, -4.0, 28.0)
+			if rel < 0.44 && prom < 14.5 {
+				// Reject minor baseline wiggles (e.g. -80 dBm on a gate whose real passes hit -58 dBm)
+				sc -= 2.5
+			}
 			if c.MDipDb >= 1.5 {
 				sc += 0.30
 			}
@@ -554,6 +558,16 @@ func LabelCandidatesTrackOrder(
 			noLapStintPenalty = 9.5
 		}
 
+		hasEndSF := false
+		if hasWindow {
+			for i, c := range pCands {
+				if gateOrd[i] == 0 && emitScore[i] > 0.2 && endBoundaryBonus(c.AnchorTsUs) > 0.3 {
+					hasEndSF = true
+					break
+				}
+			}
+		}
+
 		stintClosePenalty := func(st dpPathState, endIdx int) float64 {
 			pen := 0.0
 			if st.lapsInStint == 0 {
@@ -562,6 +576,8 @@ func LabelCandidatesTrackOrder(
 			if hasWindow {
 				if gateOrd[endIdx] == 0 {
 					pen += endBoundaryBonus(pCands[endIdx].AnchorTsUs)
+				} else if hasEndSF {
+					pen -= 3.80
 				} else {
 					pen -= 1.20
 				}
