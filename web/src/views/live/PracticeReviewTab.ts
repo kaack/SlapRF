@@ -111,7 +111,7 @@ export class PracticeReviewTab extends Component {
 
     const rowsHtml =
       pilotLaps.length === 0
-        ? `<tr><td colspan="5" class="muted" style="text-align:center; padding: 22px 12px;">No laps recorded yet for ${esc(callsign)}. Tap <strong>RSSI Editor</strong> above to inspect or add crossings.</td></tr>`
+        ? `<tr><td colspan="5" class="muted" style="text-align:center; padding: 22px 12px;">No laps recorded yet for ${esc(callsign)}. <button type="button" class="btn btn-ghost btn-xs" data-review-open-editor style="margin-left:6px">${icons.rssiBadge(13)}<span>Open RSSI</span></button></td></tr>`
         : pilotLaps
             .slice()
             .reverse()
@@ -136,22 +136,24 @@ export class PracticeReviewTab extends Component {
                   <td>${deltaHtml}</td>
                   <td class="mono note practice-review-splits-col">${esc(secSummary)}</td>
                   <td class="practice-review-actions-col">
-                    <button
-                      type="button"
-                      class="btn btn-ghost btn-xs"
-                      data-review-open-lap-rssi="${lap.lapId}"
-                      data-lap-start-us="${startUs}"
-                      data-lap-end-us="${lap.completedAtUs}"
-                      title="Open RSSI crossing editor for Lap ${lap.lapNumber}"
-                      aria-label="Open RSSI crossing editor for Lap ${lap.lapNumber}"
-                    >${icons.rssiBadge(14)}<span>RSSI</span></button>
-                    <button
-                      type="button"
-                      class="btn btn-ghost btn-xs"
-                      data-review-toggle-lap="${lap.lapId}"
-                      title="${inv ? "Restore lap" : "Scratch lap"}"
-                      aria-label="${inv ? "Restore lap" : "Scratch lap"}"
-                    >${inv ? icons.reset(14) : icons.ban(14)}</button>
+                    <div class="practice-review-actions">
+                      <button
+                        type="button"
+                        class="btn btn-ghost btn-xs practice-review-act-btn"
+                        data-review-open-lap-rssi="${lap.lapId}"
+                        data-lap-start-us="${startUs}"
+                        data-lap-end-us="${lap.completedAtUs}"
+                        title="Open RSSI crossing editor for Lap ${lap.lapNumber}"
+                        aria-label="Open RSSI crossing editor for Lap ${lap.lapNumber}"
+                      >${icons.rssiBadge(13)}<span>RSSI</span></button>
+                      <button
+                        type="button"
+                        class="btn btn-ghost btn-xs practice-review-act-btn is-icon"
+                        data-review-toggle-lap="${lap.lapId}"
+                        title="${inv ? "Restore lap" : "Scratch lap"}"
+                        aria-label="${inv ? "Restore lap" : "Scratch lap"}"
+                      >${inv ? icons.reset(13) : icons.ban(13)}</button>
+                    </div>
                   </td>
                 </tr>`;
             })
@@ -166,14 +168,9 @@ export class PracticeReviewTab extends Component {
               <span class="dot" style="background:${esc(pilot?.color || "#38bdf8")}"></span>
               <strong>${esc(callsign)}${chLabel ? ` (${esc(chLabel)})` : ""}</strong>
             </div>
-            <div class="rc-panel-actions">
-              <button type="button" class="btn btn-primary btn-xs" data-review-open-editor>
-                ${icons.rssiBadge(14)}<span>RSSI Editor</span>
-              </button>
-            </div>
           </header>
           <div class="table-scroll practice-review-table-scroll">
-            <table class="table rc-compact-table practice-review-table">
+            <table class="table table-compact practice-review-table">
               <thead>
                 <tr>
                   <th>Lap</th>

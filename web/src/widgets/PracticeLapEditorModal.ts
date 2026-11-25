@@ -56,12 +56,11 @@ interface DerivedPassRow {
 }
 
 const DEFAULT_SVG_W = 850;
-const SVG_H = 224;
+const DEFAULT_SVG_H = 224;
 const PAD_L = 46;
 const PAD_R = 18;
 const PAD_T = 26;
 const PAD_B = 28;
-const PLOT_H = SVG_H - PAD_T - PAD_B;
 const DBM_MIN = -98;
 const DBM_MAX = -22;
 const DBM_ABS_MIN = -108;
@@ -295,7 +294,9 @@ export function openPracticeLapEditorModal(
   };
 
   let svgW = DEFAULT_SVG_W;
+  let svgH = DEFAULT_SVG_H;
   const getPlotW = (): number => Math.max(200, svgW - PAD_L - PAD_R);
+  const getPlotH = (): number => Math.max(120, svgH - PAD_T - PAD_B);
   let lastDomain = { minMs: -1000, maxMs: 25_000 };
   let lastYDomain = { minDbm: DBM_MIN, maxDbm: DBM_MAX };
   let lastHwMode: TimingHardwareMode = "slaprf";
@@ -418,12 +419,13 @@ export function openPracticeLapEditorModal(
 
   const dbmToY = (dbm: number): number => {
     const span = Math.max(1, lastYDomain.maxDbm - lastYDomain.minDbm);
-    return PAD_T + ((lastYDomain.maxDbm - dbm) / span) * PLOT_H;
+    return PAD_T + ((lastYDomain.maxDbm - dbm) / span) * getPlotH();
   };
 
   const yToDbm = (svgY: number): number => {
-    const clampedY = clamp(svgY, PAD_T, PAD_T + PLOT_H);
-    const frac = (clampedY - PAD_T) / PLOT_H;
+    const plotH = getPlotH();
+    const clampedY = clamp(svgY, PAD_T, PAD_T + plotH);
+    const frac = (clampedY - PAD_T) / plotH;
     return Math.round(lastYDomain.maxDbm - frac * (lastYDomain.maxDbm - lastYDomain.minDbm));
   };
 
@@ -435,7 +437,7 @@ export function openPracticeLapEditorModal(
   const clientToSvgCoords = (svgEl: SVGSVGElement, clientX: number, clientY: number) => {
     const rect = svgEl.getBoundingClientRect();
     const svgX = rect.width > 0 ? ((clientX - rect.left) / rect.width) * svgW : PAD_L;
-    const svgY = rect.height > 0 ? ((clientY - rect.top) / rect.height) * SVG_H : PAD_T;
+    const svgY = rect.height > 0 ? ((clientY - rect.top) / rect.height) * svgH : PAD_T;
     return { svgX, svgY };
   };
 
@@ -490,6 +492,7 @@ export function openPracticeLapEditorModal(
     rows: DerivedPassRow[]
   ): string => {
     const plotW = getPlotW();
+    const plotH = getPlotH();
     const { enterDb, exitDb, hwMode } = getGateThresholds(selectedGateId, selectedPilotSlot);
     lastHwMode = hwMode;
     lastDomain = customX ?? computeAutoDomainMs(trace, rows);
@@ -507,7 +510,7 @@ export function openPracticeLapEditorModal(
     const yTicks: string[] = [];
     for (let db = firstYDb; db <= lastYDomain.maxDbm; db += yStep) {
       const yNum = dbmToY(db);
-      if (yNum < PAD_T + 2 || yNum > SVG_H - PAD_B - 2) continue;
+      if (yNum < PAD_T + 2 || yNum > svgH - PAD_B - 2) continue;
       const y = yNum.toFixed(1);
       yTicks.push(`
         <line x1="${PAD_L}" y1="${y}" x2="${svgW - PAD_R}" y2="${y}" class="lap-ed-grid-line" />
@@ -524,14 +527,14 @@ export function openPracticeLapEditorModal(
       const x = xNum.toFixed(1);
       const dec = stepMs < 500 ? 2 : t % 1000 === 0 && stepMs >= 1000 ? 0 : 1;
       xTicks.push(`
-        <line x1="${x}" y1="${PAD_T}" x2="${x}" y2="${SVG_H - PAD_B}" class="lap-ed-grid-line is-vert" />
-        <text x="${x}" y="${SVG_H - 8}" class="lap-ed-axis-lbl" text-anchor="middle">${(t / 1000).toFixed(dec)}s</text>`);
+        <line x1="${x}" y1="${PAD_T}" x2="${x}" y2="${svgH - PAD_B}" class="lap-ed-grid-line is-vert" />
+        <text x="${x}" y="${svgH - 8}" class="lap-ed-axis-lbl" text-anchor="middle">${(t / 1000).toFixed(dec)}s</text>`);
     }
 
     const enterY = dbmToY(enterDb);
     const exitY = dbmToY(exitDb);
-    const enterVisible = enterY >= PAD_T - 2 && enterY <= SVG_H - PAD_B + 2;
-    const exitVisible = !isLapRFMode(hwMode) && exitY >= PAD_T - 2 && exitY <= SVG_H - PAD_B + 2;
+    const enterVisible = enterY >= PAD_T - 2 && enterY <= svgH - PAD_B + 2;
+    const exitVisible = !isLapRFMode(hwMode) && exitY >= PAD_T - 2 && exitY <= svgH - PAD_B + 2;
     const enterLbl = isLapRFMode(hwMode) ? `Thresh ${enterDb}` : isRotorHazardMode(hwMode) ? `Enter ${enterDb}` : `Enter ${enterDb} dBm`;
     const exitLbl = isRotorHazardMode(hwMode) ? `Exit ${exitDb}` : `Exit ${exitDb} dBm`;
     const enterPillW = Math.max(76, enterLbl.length * 6.3 + 12);
@@ -572,16 +575,16 @@ export function openPracticeLapEditorModal(
       const pts = visiblePts.map((p) => `${msToX(p.t).toFixed(1)},${dbmToY(p.r).toFixed(1)}`);
       const xFirst = msToX(visiblePts[0].t).toFixed(1);
       const xLast = msToX(visiblePts[visiblePts.length - 1].t).toFixed(1);
-      const baseY = (SVG_H - PAD_B + 4).toFixed(1);
+      const baseY = (svgH - PAD_B + 4).toFixed(1);
       waveHtml = `
         <path d="M ${xFirst},${baseY} L ${pts.join(" L ")} L ${xLast},${baseY} Z" class="lap-ed-rssi-area" />
         <path d="M ${pts.join(" L ")}" class="lap-ed-rssi-line" />`;
     } else {
       const flatVal = isLapRFMode(hwMode) ? 360 : isRotorHazardMode(hwMode) ? 22 : -90;
-      const flatY = clamp(dbmToY(flatVal), PAD_T + 8, SVG_H - PAD_B - 8).toFixed(1);
+      const flatY = clamp(dbmToY(flatVal), PAD_T + 8, svgH - PAD_B - 8).toFixed(1);
       waveHtml = `
         <line x1="${PAD_L}" y1="${flatY}" x2="${svgW - PAD_R}" y2="${flatY}" class="lap-ed-rssi-line is-synthetic" />
-        <text x="${PAD_L + plotW / 2}" y="${PAD_T + PLOT_H / 2}" class="lap-ed-empty-svg" text-anchor="middle">No RSSI waveform recorded</text>`;
+        <text x="${PAD_L + plotW / 2}" y="${PAD_T + plotH / 2}" class="lap-ed-empty-svg" text-anchor="middle">No RSSI waveform recorded</text>`;
     }
 
     const pinsHtml = rows
@@ -618,8 +621,8 @@ export function openPracticeLapEditorModal(
         const pillX = clamp(x - pillW / 2, PAD_L, svgW - PAD_R - pillW);
         return `
           <g class="${cls}" data-crossing-pin="${r.crossing.crossingId}">
-            <line x1="${xf}" y1="${PAD_T}" x2="${xf}" y2="${SVG_H - PAD_B}" class="lap-ed-pin-line" />
-            <line x1="${xf}" y1="${PAD_T}" x2="${xf}" y2="${SVG_H - PAD_B}" class="lap-ed-pin-hit" />
+            <line x1="${xf}" y1="${PAD_T}" x2="${xf}" y2="${svgH - PAD_B}" class="lap-ed-pin-line" />
+            <line x1="${xf}" y1="${PAD_T}" x2="${xf}" y2="${svgH - PAD_B}" class="lap-ed-pin-hit" />
             <rect x="${pillX.toFixed(1)}" y="4" width="${pillW.toFixed(1)}" height="18" rx="5" class="lap-ed-pin-pill" />
             <text x="${(pillX + pillW / 2).toFixed(1)}" y="16.5" text-anchor="middle" class="lap-ed-pin-lbl">${esc(tagText)}</text>
           </g>`;
@@ -632,8 +635,8 @@ export function openPracticeLapEditorModal(
       const hLbl = `${fmtOffsetSec(hoverInfo.offsetMs)}${hoverInfo.dbm !== null ? ` · ${hoverInfo.dbm}${isSlapRFMode(hwMode) ? " dBm" : ""}` : ""}${addMode ? " (Click to add)" : ""}`;
       hoverHtml = `
         <g class="lap-ed-hover-guide ${addMode ? "is-add" : ""}" pointer-events="none">
-          <line x1="${hx}" y1="${PAD_T}" x2="${hx}" y2="${SVG_H - PAD_B}" class="lap-ed-hover-line" />
-          <text x="${clamp(Number(hx) + 6, PAD_L + 4, svgW - PAD_R - 120).toFixed(1)}" y="${SVG_H - PAD_B - 6}" class="lap-ed-hover-lbl">${esc(hLbl)}</text>
+          <line x1="${hx}" y1="${PAD_T}" x2="${hx}" y2="${svgH - PAD_B}" class="lap-ed-hover-line" />
+          <text x="${clamp(Number(hx) + 6, PAD_L + 4, svgW - PAD_R - 120).toFixed(1)}" y="${svgH - PAD_B - 6}" class="lap-ed-hover-lbl">${esc(hLbl)}</text>
         </g>`;
     }
 
@@ -648,17 +651,17 @@ export function openPracticeLapEditorModal(
       .join(" ");
 
     return `
-      <svg class="${svgStateCls}" viewBox="0 0 ${svgW} ${SVG_H}" data-lap-ed-svg>
+      <svg class="${svgStateCls}" viewBox="0 0 ${svgW} ${svgH}" data-lap-ed-svg>
         <defs>
           <linearGradient id="lapEdRssiGrad" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.34" />
             <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.02" />
           </linearGradient>
           <clipPath id="lapEdPlotClip">
-            <rect x="${PAD_L}" y="${PAD_T}" width="${plotW}" height="${PLOT_H}" rx="4" />
+            <rect x="${PAD_L}" y="${PAD_T}" width="${plotW}" height="${plotH}" rx="4" />
           </clipPath>
         </defs>
-        <rect x="${PAD_L}" y="${PAD_T}" width="${plotW}" height="${PLOT_H}" rx="4" class="lap-ed-plot-bg" />
+        <rect x="${PAD_L}" y="${PAD_T}" width="${plotW}" height="${plotH}" rx="4" class="lap-ed-plot-bg" />
         ${yTicks.join("")}
         ${xTicks.join("")}
         <g clip-path="url(#lapEdPlotClip)">
@@ -667,8 +670,8 @@ export function openPracticeLapEditorModal(
         ${threshHtml}
         ${hoverHtml}
         ${pinsHtml}
-        <rect x="0" y="${PAD_T}" width="${PAD_L}" height="${PLOT_H}" fill="transparent" class="lap-ed-y-axis-hit" data-axis-drag="y"></rect>
-        <rect x="${PAD_L}" y="${SVG_H - PAD_B}" width="${plotW}" height="${PAD_B}" fill="transparent" class="lap-ed-x-axis-hit" data-axis-drag="x"></rect>
+        <rect x="0" y="${PAD_T}" width="${PAD_L}" height="${plotH}" fill="transparent" class="lap-ed-y-axis-hit" data-axis-drag="y"></rect>
+        <rect x="${PAD_L}" y="${svgH - PAD_B}" width="${plotW}" height="${PAD_B}" fill="transparent" class="lap-ed-x-axis-hit" data-axis-drag="x"></rect>
       </svg>`;
   };
 
@@ -679,8 +682,9 @@ export function openPracticeLapEditorModal(
       return;
     }
     const prevSvgWrap = backdrop.querySelector<HTMLElement>("[data-lap-ed-svg-wrap]");
-    if (prevSvgWrap && prevSvgWrap.clientWidth > 120) {
-      svgW = Math.round(prevSvgWrap.clientWidth);
+    if (prevSvgWrap) {
+      if (prevSvgWrap.clientWidth > 120) svgW = Math.round(prevSvgWrap.clientWidth);
+      if (prevSvgWrap.clientHeight > 120) svgH = Math.round(prevSvgWrap.clientHeight);
     }
     const prevTableWrap = backdrop.querySelector<HTMLElement>(".lap-ed-table-wrap");
     const savedTableScrollTop = prevTableWrap ? prevTableWrap.scrollTop : 0;
@@ -810,6 +814,7 @@ export function openPracticeLapEditorModal(
     const sess = getSession();
     if (!wrap || !sess) return;
     if (wrap.clientWidth > 120) svgW = Math.round(wrap.clientWidth);
+    if (wrap.clientHeight > 120) svgH = Math.round(wrap.clientHeight);
     const anchorUs = computeSessionAnchorUs(sess);
     const trace = buildTraceMs(sess, anchorUs, selectedGateId, selectedPilotSlot);
     const rows = derivePassRows(sess, anchorUs, selectedGateId);
@@ -988,7 +993,7 @@ export function openPracticeLapEditorModal(
           startMinDbm: lastYDomain.minDbm,
           startMaxDbm: lastYDomain.maxDbm,
           anchorXFrac: clamp(((pt1.svgX + pt2.svgX) * 0.5 - PAD_L) / plotW, 0, 1),
-          anchorYFrac: clamp(1 - ((pt1.svgY + pt2.svgY) * 0.5 - PAD_T) / PLOT_H, 0, 1),
+          anchorYFrac: clamp(1 - ((pt1.svgY + pt2.svgY) * 0.5 - PAD_T) / getPlotH(), 0, 1),
         };
         refreshSvgOnly();
         return;
@@ -1049,7 +1054,7 @@ export function openPracticeLapEditorModal(
       return;
     }
 
-    if (svgX >= PAD_L && svgX <= svgW - PAD_R && svgY >= PAD_T && svgY <= SVG_H - PAD_B) {
+    if (svgX >= PAD_L && svgX <= svgW - PAD_R && svgY >= PAD_T && svgY <= svgH - PAD_B) {
       e.preventDefault();
       viewDrag = {
         mode: "pan",
@@ -1119,7 +1124,7 @@ export function openPracticeLapEditorModal(
             const { minSpan, maxSpan } = ySpanBounds(lastHwMode);
             const nextSpanDb = clamp(startSpanDb * pinch.ySpanFactor, minSpan, maxSpan);
             const anchorDb = pinchState.startMinDbm + pinchState.anchorYFrac * startSpanDb;
-            const liveYFrac = clamp(1 - ((pt1.svgY + pt2.svgY) * 0.5 - PAD_T) / PLOT_H, 0, 1);
+            const liveYFrac = clamp(1 - ((pt1.svgY + pt2.svgY) * 0.5 - PAD_T) / getPlotH(), 0, 1);
             const nextMinDb = anchorDb - liveYFrac * nextSpanDb;
             customY = clampYDomain(nextMinDb, nextMinDb + nextSpanDb);
           }
@@ -1141,7 +1146,7 @@ export function openPracticeLapEditorModal(
       }
       if (Math.abs(dy) >= 2.5 || customY) {
         const spanDb = viewDrag.startMaxDbm - viewDrag.startMinDbm;
-        const deltaDb = (dy / PLOT_H) * spanDb;
+        const deltaDb = (dy / getPlotH()) * spanDb;
         customY = clampYDomain(viewDrag.startMinDbm + deltaDb, viewDrag.startMaxDbm + deltaDb);
       }
       refreshSvgOnly();
@@ -1226,7 +1231,7 @@ export function openPracticeLapEditorModal(
       const spanDb = lastYDomain.maxDbm - lastYDomain.minDbm;
       const { minSpan, maxSpan } = ySpanBounds(lastHwMode);
       const nextSpanDb = clamp(spanDb * ySpanFactor, minSpan, maxSpan);
-      const yFrac = clamp(1 - (svgY - PAD_T) / PLOT_H, 0, 1);
+      const yFrac = clamp(1 - (svgY - PAD_T) / getPlotH(), 0, 1);
       const anchorDb = lastYDomain.minDbm + yFrac * spanDb;
       customY = clampYDomain(anchorDb - yFrac * nextSpanDb, anchorDb + (1 - yFrac) * nextSpanDb);
     }
@@ -1237,7 +1242,7 @@ export function openPracticeLapEditorModal(
     const svg = backdrop.querySelector<SVGSVGElement>("[data-lap-ed-svg]");
     if (!svg || !(e.target instanceof Element) || !e.target.closest("[data-lap-ed-svg]")) return;
     const { svgX, svgY } = clientToSvgCoords(svg, e.clientX, e.clientY);
-    if (svgX >= PAD_L && svgX <= svgW - PAD_R && svgY >= PAD_T && svgY <= SVG_H - PAD_B) {
+    if (svgX >= PAD_L && svgX <= svgW - PAD_R && svgY >= PAD_T && svgY <= svgH - PAD_B) {
       stageAddCrossingAt(clientXToMs(svg, e.clientX));
     }
   };
@@ -1388,15 +1393,25 @@ export function openPracticeLapEditorModal(
 
   renderModal();
   const mountedWrap = backdrop.querySelector<HTMLElement>("[data-lap-ed-svg-wrap]");
-  if (mountedWrap && mountedWrap.clientWidth > 120 && Math.abs(mountedWrap.clientWidth - svgW) >= 2) {
-    svgW = Math.round(mountedWrap.clientWidth);
+  if (
+    mountedWrap &&
+    ((mountedWrap.clientWidth > 120 && Math.abs(mountedWrap.clientWidth - svgW) >= 2) ||
+      (mountedWrap.clientHeight > 120 && Math.abs(mountedWrap.clientHeight - svgH) >= 2))
+  ) {
+    if (mountedWrap.clientWidth > 120) svgW = Math.round(mountedWrap.clientWidth);
+    if (mountedWrap.clientHeight > 120) svgH = Math.round(mountedWrap.clientHeight);
     refreshSvgOnly();
   }
   if (typeof ResizeObserver !== "undefined") {
     resizeObserver = new ResizeObserver(() => {
       const wEl = backdrop.querySelector<HTMLElement>("[data-lap-ed-svg-wrap]");
-      if (wEl && wEl.clientWidth > 120 && Math.abs(wEl.clientWidth - svgW) >= 2) {
-        svgW = Math.round(wEl.clientWidth);
+      if (
+        wEl &&
+        ((wEl.clientWidth > 120 && Math.abs(wEl.clientWidth - svgW) >= 2) ||
+          (wEl.clientHeight > 120 && Math.abs(wEl.clientHeight - svgH) >= 2))
+      ) {
+        if (wEl.clientWidth > 120) svgW = Math.round(wEl.clientWidth);
+        if (wEl.clientHeight > 120) svgH = Math.round(wEl.clientHeight);
         refreshSvgOnly();
       }
     });

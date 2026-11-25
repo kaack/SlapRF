@@ -888,13 +888,11 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 				if cloned.ImportWeights(m.Weights) {
 					initTCN = cloned
 					lr = 0.0018
-					if !m.Ready {
-						updateInPlaceID = m.ModelID
-						prevEpochs = m.EpochsTrained
-						prevDurMs = m.TrainDurationMs
-						if baseName == "" {
-							baseName = m.Name
-						}
+					updateInPlaceID = m.ModelID
+					prevEpochs = m.EpochsTrained
+					prevDurMs = m.TrainDurationMs
+					if baseName == "" {
+						baseName = m.Name
 					}
 				}
 				break
@@ -1116,12 +1114,30 @@ func (e *Engine) runMLTrainingWorker(
 	if updateInPlaceID != "" {
 		for i := range e.mlState.Models {
 			if e.mlState.Models[i].ModelID == updateInPlaceID {
+				mergedIDs := append([]string(nil), e.mlState.Models[i].SourceSessionIDs...)
+				for _, sid := range usedSessionIDs {
+					found := false
+					for _, ex := range mergedIDs {
+						if ex == sid {
+							found = true
+							break
+						}
+					}
+					if !found {
+						mergedIDs = append(mergedIDs, sid)
+					}
+				}
 				e.mlState.Models[i].Name = modelName
 				e.mlState.Models[i].EpochsTrained = totalEpochsTrained
-				e.mlState.Models[i].SourceSessionIDs = usedSessionIDs
-				e.mlState.Models[i].TrainPacks = trainPackCount
+				e.mlState.Models[i].SourceSessionIDs = mergedIDs
+				e.mlState.Models[i].TrainPacks = len(mergedIDs)
+				if e.mlState.Models[i].TrainPacks < trainPackCount {
+					e.mlState.Models[i].TrainPacks = trainPackCount
+				}
 				e.mlState.Models[i].ValPacks = valPackCount
-				e.mlState.Models[i].TrainPasses = realPassCount
+				if realPassCount > e.mlState.Models[i].TrainPasses {
+					e.mlState.Models[i].TrainPasses = realPassCount
+				}
 				e.mlState.Models[i].TrainDurationMs = totalDurMs
 				e.mlState.Models[i].FinalLoss = math.Round(finalLoss*10000) / 10000
 				e.mlState.Models[i].AIMetrics = aiM
@@ -1129,6 +1145,11 @@ func (e *Engine) runMLTrainingWorker(
 				e.mlState.Models[i].Weights = trained.ExportWeights()
 				modelID = e.mlState.Models[i].ModelID
 				modelName = e.mlState.Models[i].Name
+				if e.mlState.Config.ActiveModelID == modelID {
+					e.mlActiveTCN = trained
+					e.mlActiveModelID = modelID
+					e.resetMLSessionDetectorsLocked()
+				}
 				updatedExisting = true
 				break
 			}

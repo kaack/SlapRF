@@ -152,7 +152,7 @@ export class CrossingDetectorCard extends Component {
               class="scope-tune-seg-btn ${!isAi ? "is-active" : ""}"
               data-ml-detector-mode="classic"
               ${disAttr}
-            >Classic</button>
+            >DSP</button>
             <button
               type="button"
               role="radio"

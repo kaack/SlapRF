@@ -3319,18 +3319,54 @@ html[data-theme="light"] .bar-time {
 
 .track-detector-tune-btn {
   height: 28px;
-  padding: 0 8px;
+  padding: 0 9px;
   border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text-3);
+  opacity: 0.42;
   font-size: 11.5px;
+  font-weight: 500;
   white-space: nowrap;
   flex-shrink: 0;
+  transition: opacity 0.14s ease, background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
 }
 
 .track-detector-tune-btn.is-active {
-  border-color: color-mix(in srgb, var(--accent, #38bdf8) 55%, var(--border-strong));
+  opacity: 1;
+  border-style: solid;
+  border-color: color-mix(in srgb, #10b981 65%, var(--border-strong));
+  background: color-mix(in srgb, #10b981 18%, var(--surface-3));
   color: var(--text);
+  font-weight: 650;
+}
+
+.detector-mode-seg {
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.detector-mode-seg > .scope-tune-seg-btn {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-3);
+  opacity: 0.44;
+  font-weight: 500;
+  transition: opacity 0.14s ease, background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.detector-mode-seg > .scope-tune-seg-btn:disabled {
+  opacity: 0.24;
+  cursor: not-allowed;
+}
+
+.detector-mode-seg > .scope-tune-seg-btn.is-active {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent, #38bdf8) 22%, var(--surface-3));
+  border-color: color-mix(in srgb, var(--accent, #38bdf8) 65%, transparent);
+  color: var(--text);
+  font-weight: 700;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
 }
 
 /* Timing rules: global vs per-gate scope */
@@ -19805,19 +19841,24 @@ html[data-theme="light"] .bkt-checkin-switch.is-on .bkt-checkin-thumb {
     flex-direction: column;
     overflow: hidden;
   }
-  .lap-ed-controls-strip,
-  .lap-ed-graph-card {
+  .lap-ed-controls-strip {
     flex: 0 0 auto;
   }
   .lap-ed-graph-card {
+    flex: 1.25 1 0;
+    min-height: 240px;
     padding: 8px 6px 6px;
+    display: flex;
+    flex-direction: column;
   }
   .lap-ed-svg-wrap {
-    height: 188px;
-  }
-  .lap-ed-table-wrap {
     flex: 1 1 0;
     min-height: 0;
+    height: auto;
+  }
+  .lap-ed-table-wrap {
+    flex: 0.9 1 0;
+    min-height: 110px;
     max-height: none;
     overflow-y: auto;
     overflow-x: hidden;
@@ -27882,20 +27923,44 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
   font-size: 12.5px;
 }
 
+.ai-mode-seg {
+  align-self: flex-start;
+}
+
 .ai-train-controls-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
-.ai-name-input {
+.ai-name-input,
+.ai-finetune-select,
+.ai-train-controls-row .custom-select-wrap {
   flex: 1 1 180px;
-  min-width: 140px;
+  min-width: 0;
   height: 32px;
+}
+
+.ai-name-input,
+.ai-finetune-select,
+.ai-train-controls-row .custom-select-trigger {
+  height: 32px;
+  min-height: 32px;
   padding: 4px 10px;
   font-size: 13px;
+}
+
+@media (max-width: 860px) {
+  .ai-mode-seg {
+    width: 100%;
+    max-width: 100%;
+  }
+  .ai-mode-seg > button {
+    flex: 1 1 50%;
+    justify-content: center;
+  }
 }
 
 .practice-review-pilots {
@@ -27903,6 +27968,28 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.practice-review-table th {
+  padding: 7px 10px;
+  font-size: 11px;
+}
+
+.practice-review-table td {
+  padding: 4px 10px;
+  height: 32px;
+  font-size: 12px;
+  vertical-align: middle;
+}
+
+.practice-review-table th:first-child,
+.practice-review-table td:first-child {
+  padding-left: 12px;
+}
+
+.practice-review-table th:last-child,
+.practice-review-table td:last-child {
+  padding-right: 10px;
 }
 
 .practice-review-row {
@@ -27918,11 +28005,29 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
 }
 
 .practice-review-actions-col {
-  display: flex;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.practice-review-actions {
+  display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
-  white-space: nowrap;
+  gap: 4px;
+}
+
+.practice-review-act-btn {
+  height: 23px !important;
+  min-height: 23px !important;
+  padding: 0 7px !important;
+  font-size: 11px !important;
+  gap: 4px !important;
+}
+
+.practice-review-act-btn.is-icon {
+  width: 24px;
+  padding: 0 !important;
+  justify-content: center;
 }
 
 @media (max-width: 640px) {

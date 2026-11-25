@@ -2658,9 +2658,11 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       expect(host.textContent ?? "").toContain("AI Training");
       expect(host.textContent ?? "").toContain("Pack 1 Model");
 
-      // 4. Click Train More -> calls startMLTraining with continueModelId
+      // 4. Fine-Tune mode picks existing model -> calls startMLTraining with continueModelId
+      expect(host.querySelector('[data-ai-finetune-select]')).not.toBeNull();
       const trainMoreBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="train-more"]')!;
       expect(trainMoreBtn).not.toBeNull();
+      expect(trainMoreBtn.textContent?.trim()).toBe("Fine-Tune");
       trainMoreBtn.click();
       await flushMicrotasks();
       expect(
@@ -2670,6 +2672,13 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
             (c.args[0] as { continueModelId?: string })?.continueModelId === "ai-base-v1"
         )
       ).toBe(true);
+
+      // Switching to "New Model" mode shows the new model name input + Train button (no continueModelId)
+      host.querySelector<HTMLButtonElement>('[data-ai-train-mode="new"]')!.click();
+      await flushMicrotasks();
+      expect(host.querySelector("[data-ai-model-name]")).not.toBeNull();
+      host.querySelector<HTMLButtonElement>('[data-ai-train-mode="finetune"]')!.click();
+      await flushMicrotasks();
 
       // 5. Mark Model as Ready -> unlocks AI selection in the top-level Track Crossing Detector card!
       const readyBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="toggle-model-ready"]')!;
