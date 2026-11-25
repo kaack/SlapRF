@@ -31,6 +31,17 @@ type ManualDeletedCrossing struct {
 	PeakRSSIDbm float32 `json:"peakRssiDbm,omitempty"`
 }
 
+// TeacherNegativeMark records an RSSI excursion classified by the on-device System 1 Teacher
+// as `"bleed"`, `"multipath"`, or `"noise"` so 1D TCN distillation suppresses false triggers there.
+type TeacherNegativeMark struct {
+	GateID      uint8   `json:"gateId"`
+	SlotIndex   int     `json:"slotIndex"`
+	TimestampUs uint64  `json:"timestampUs"`
+	Label       string  `json:"label"`
+	Confidence  float32 `json:"confidence"`
+	PeakRSSIDbm float32 `json:"peakRssiDbm,omitempty"`
+}
+
 // PracticeSession captures one named, taggable Practice Session along with its assigned pilot
 // lineup (up to 8 active RF slots) and all laps/crossings recorded during the session.
 // Removing a pilot from `Pilots` intentionally retains their recorded `Laps`/`Crossings` in the
@@ -52,6 +63,9 @@ type PracticeSession struct {
 	Filtered               []FilteredDetection     `json:"filtered"`
 	Summaries              []PilotTrackSummary     `json:"summaries"`
 	TrainingVerified       bool                    `json:"trainingVerified,omitempty"`
+	TeacherLabeledAt       string                  `json:"teacherLabeledAt,omitempty"`
+	TeacherPackID          string                  `json:"teacherPackId,omitempty"`
+	TeacherHardNegs        []TeacherNegativeMark   `json:"teacherHardNegs,omitempty"`
 	ManualDeletedCrossings []ManualDeletedCrossing `json:"manualDeletedCrossings,omitempty"`
 	TraceSampleCount       int                     `json:"traceSampleCount,omitempty"`
 	TraceDurationSec       float64                 `json:"traceDurationSec,omitempty"`

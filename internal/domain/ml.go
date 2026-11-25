@@ -45,20 +45,54 @@ type MLModelSnapshot struct {
 	Weights []float32 `json:"weights"`
 }
 
-// MLConfig holds the user's active detector selection and live per-timer fine-tuning preference.
+// MLConfig holds the user's active detector selection, live per-timer fine-tuning preference,
+// and on-device System 1 Teacher labeler settings.
 type MLConfig struct {
 	DetectorMode    DetectorMode `json:"detectorMode"`
 	ActiveModelID   string       `json:"activeModelId"`
 	LiveTuneEnabled bool         `json:"liveTuneEnabled"`
+	TeacherPackID   string       `json:"teacherPackId,omitempty"`
+	AutoLabelOnTrain bool        `json:"autoLabelOnTrain"`
 }
 
 // DefaultMLConfig returns the out-of-the-box detector configuration.
 func DefaultMLConfig() MLConfig {
 	return MLConfig{
-		DetectorMode:    DetectorModeClassic,
-		ActiveModelID:   "ai-base-v0",
-		LiveTuneEnabled: true,
+		DetectorMode:     DetectorModeClassic,
+		ActiveModelID:    "ai-base-v0",
+		LiveTuneEnabled:  true,
+		TeacherPackID:    "qwen3-1.7b-q4_k_m",
+		AutoLabelOnTrain: true,
 	}
+}
+
+// MLTeacherPackInfo describes an on-device downloadable System 1 GGUF teacher model pack.
+type MLTeacherPackInfo struct {
+	PackID          string `json:"packId"`
+	Name            string `json:"name"`
+	Description     string `json:"description"`
+	SizeBytes       int64  `json:"sizeBytes"`
+	Recommended     bool   `json:"recommended,omitempty"`
+	Installed       bool   `json:"installed"`
+	PartialBytes    int64  `json:"partialBytes,omitempty"`
+}
+
+// MLTeacherDownloadProgress reports background HTTPS download progress for an on-device `.gguf` teacher pack.
+type MLTeacherDownloadProgress struct {
+	Running         bool    `json:"running"`
+	PackID          string  `json:"packId,omitempty"`
+	DownloadedBytes int64   `json:"downloadedBytes"`
+	TotalBytes      int64   `json:"totalBytes"`
+	Percent         float64 `json:"percent"`
+	Error           string  `json:"error,omitempty"`
+}
+
+// MLTeacherStatus summarizes on-device System 1 Teacher readiness, pack catalog, and download state.
+type MLTeacherStatus struct {
+	ActivePackID string                    `json:"activePackId"`
+	Ready        bool                      `json:"ready"`
+	Packs        []MLTeacherPackInfo       `json:"packs"`
+	Download     MLTeacherDownloadProgress `json:"download"`
 }
 
 // MLLiveGateTune stores the 24-weight per-(gate, pilot) logistic adapter learned on the fly.
@@ -95,6 +129,7 @@ type MLPersistedState struct {
 type MLStatus struct {
 	Config             MLConfig           `json:"config"`
 	Training           MLTrainingProgress `json:"training"`
+	Teacher            MLTeacherStatus    `json:"teacher"`
 	Models             []MLModelSummary   `json:"models"`
 	VerifiedPacks      int                `json:"verifiedPacks"`
 	UnverifiedPacks    int                `json:"unverifiedPacks"`

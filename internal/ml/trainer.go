@@ -56,6 +56,9 @@ func BuildSequenceTargets(seq GridSequence, positives []CrossingLabel, hardNegs 
 		}
 		centerStep := int(math.Round(float64(int64(pos.TimestampUs)-int64(seq.StartTsUs)) / float64(StepUs)))
 		wtBoost := float32(14.0)
+		if pos.Boost > 0 {
+			wtBoost = pos.Boost
+		}
 		if pos.Manual {
 			wtBoost = 24.0
 		}
@@ -188,6 +191,10 @@ func BuildTracesFromSession(sess domain.PracticeSession, samples []tracestore.Sa
 	// Group valid crossings & deleted crossings
 	validByKey := make(map[gpKey][]CrossingLabel)
 	allValidByPilot := make(map[int][]domain.GateCrossingEvent)
+	teacherBoost := float32(0)
+	if sess.TeacherLabeledAt != "" {
+		teacherBoost = 20.0
+	}
 	for _, c := range sess.Crossings {
 		if c.InvalidReason != "" && !c.Manual {
 			continue
@@ -196,6 +203,7 @@ func BuildTracesFromSession(sess domain.PracticeSession, samples []tracestore.Sa
 		validByKey[key] = append(validByKey[key], CrossingLabel{
 			TimestampUs: c.TimestampUs,
 			Manual:      c.Manual,
+			Boost:       teacherBoost,
 		})
 		allValidByPilot[c.SlotIndex] = append(allValidByPilot[c.SlotIndex], c)
 	}
@@ -206,6 +214,21 @@ func BuildTracesFromSession(sess domain.PracticeSession, samples []tracestore.Sa
 		negsByKey[key] = append(negsByKey[key], NegativeMark{
 			TimestampUs: del.TimestampUs,
 			Weight:      6.0,
+		})
+	}
+	for _, tn := range sess.TeacherHardNegs {
+		key := gpKey{gateID: tn.GateID, slotIndex: tn.SlotIndex}
+		conf := tn.Confidence
+		if conf <= 0 {
+			conf = 0.85
+		}
+		wt := float32(4.5) * conf
+		if conf < 0.70 {
+			wt = 0.5
+		}
+		negsByKey[key] = append(negsByKey[key], NegativeMark{
+			TimestampUs: tn.TimestampUs,
+			Weight:      wt,
 		})
 	}
 	// Filtered detections (`SPIKE`, `OUT_OF_ORDER`) are also informative hard negatives unless overridden by a positive!

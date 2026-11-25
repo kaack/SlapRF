@@ -9,6 +9,7 @@ import (
 type CrossingLabel struct {
 	TimestampUs uint64
 	Manual      bool
+	Boost       float32 // Optional sample weight boost override (0 -> default 14.0 or 24.0 if Manual)
 }
 
 // NegativeMark marks a hard-negative window (human-deleted `x` or cross-gate bleed).
