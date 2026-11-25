@@ -4,7 +4,21 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"time"
 )
+
+// newModelID returns a globally unique, immutable internal model identifier (`mdl-<16 hex>`)
+// decoupled from the user-editable display name so renaming, deleting, or importing models
+// never collides or breaks active references.
+func newModelID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		if v := binary.LittleEndian.Uint64(b[:]); v != 0 {
+			return fmt.Sprintf("mdl-%016x", v)
+		}
+	}
+	return fmt.Sprintf("mdl-%016x", uint64(time.Now().UnixNano()))
+}
 
 // newFingerprintHex returns a random, non-zero 8-hex-digit board fingerprint (used for
 // simulated timers and for boards provisioned without one).

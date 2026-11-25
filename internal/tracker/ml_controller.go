@@ -1144,7 +1144,7 @@ func (e *Engine) runMLTrainingWorker(
 	durMs := time.Since(t0).Milliseconds()
 	modelID := updateInPlaceID
 	if modelID == "" {
-		modelID = fmt.Sprintf("ai-base-v%d", nextVer)
+		modelID = newModelID()
 	}
 	modelName := strings.TrimSpace(customName)
 	if modelName == "" {
@@ -1419,16 +1419,26 @@ func (e *Engine) ImportMLDatasetTarGz(r io.Reader) (importedSessions int, import
 		}
 	}
 
-	existingMod := make(map[string]bool, len(e.mlState.Models))
+	existingMod := make(map[string]domain.MLModelSnapshot, len(e.mlState.Models))
 	for _, m := range e.mlState.Models {
-		existingMod[m.ModelID] = true
+		existingMod[m.ModelID] = m
 	}
 	for _, m := range manifest.Models {
-		if m.ModelID == "" || existingMod[m.ModelID] || len(m.Weights) != ml.TotalParams {
+		if len(m.Weights) != ml.TotalParams {
 			continue
 		}
+		if m.ModelID == "" {
+			m.ModelID = newModelID()
+		} else if prev, exists := existingMod[m.ModelID]; exists {
+			// Legacy sequential IDs (`ai-base-v1`, ...) from different devices get a unique internal ID on import
+			if !m.BuiltIn && m.ModelID != "ai-base-v0" && strings.HasPrefix(m.ModelID, "ai-base-v") && prev.CreatedAt != m.CreatedAt {
+				m.ModelID = newModelID()
+			} else {
+				continue
+			}
+		}
 		e.mlState.Models = append(e.mlState.Models, m)
-		existingMod[m.ModelID] = true
+		existingMod[m.ModelID] = m
 		importedModels++
 	}
 

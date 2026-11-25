@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 	"time"
 
@@ -181,7 +182,11 @@ func TestHandsFreePackLoopTraceReplayAndOnDeviceMLTraining(t *testing.T) {
 		t.Fatalf("expected model marked Ready with updated name, got %+v", stReady.Models[0])
 	}
 
-	// Activate trained AI Base v1 + Live 2-Lap Tune and fly 2 laps in Pack 2!
+	if !strings.HasPrefix(trainedID, "mdl-") {
+		t.Fatalf("expected immutable internal mdl-* ModelID, got %q", trainedID)
+	}
+
+	// Activate trained model + Live 2-Lap Tune, then rename it and verify ActiveModelID stays linked!
 	aiMode := "ai"
 	liveTune := true
 	if _, err := eng.UpdateMLConfig(MLConfigPayload{
@@ -190,6 +195,14 @@ func TestHandsFreePackLoopTraceReplayAndOnDeviceMLTraining(t *testing.T) {
 		LiveTuneEnabled: &liveTune,
 	}); err != nil {
 		t.Fatalf("UpdateMLConfig: %v", err)
+	}
+	renamedTitle := "Indoor Championship Model"
+	stRenamed, err := eng.UpdateMLModel(trainedID, MLModelUpdatePayload{Name: &renamedTitle})
+	if err != nil {
+		t.Fatalf("UpdateMLModel rename: %v", err)
+	}
+	if stRenamed.Config.ActiveModelID != trainedID || stRenamed.Models[0].ModelID != trainedID || stRenamed.Models[0].Name != renamedTitle {
+		t.Fatalf("expected immutable ModelID=%q to remain active after rename, got cfg=%+v mod=%+v", trainedID, stRenamed.Config, stRenamed.Models[0])
 	}
 	if _, err := eng.PracticeAction(PracticeActionPayload{Action: "resume_session", SessionID: pack2ID}); err != nil {
 		t.Fatalf("resume_session: %v", err)
