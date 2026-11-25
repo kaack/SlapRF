@@ -545,9 +545,10 @@ func BuildTracesFromSession(sess domain.PracticeSession, samples []tracestore.Sa
 			Weight:      wt,
 		})
 	}
-	// Filtered detections (`SPIKE`, `OUT_OF_ORDER`) are also informative hard negatives unless overridden by a positive!
+	// Filtered SPIKE detections are informative hard negatives unless overridden by a positive;
+	// never treat OUT_OF_ORDER or MIN_LAP as negatives since those can be real passes after a missed upstream gate.
 	for _, f := range sess.Filtered {
-		if !inPilotStint(f.SlotIndex, f.TimestampUs) {
+		if f.Reason != domain.FilterSpike || !inPilotStint(f.SlotIndex, f.TimestampUs) {
 			continue
 		}
 		key := gpKey{gateID: f.GateID, slotIndex: f.SlotIndex}
@@ -1063,7 +1064,7 @@ var (
 )
 
 // PretrainedBaseSummary returns the metadata summary of built-in `SlapRF Base` (`ai-base-v0`),
-// trained on verified 4-gate 5.8 GHz SlapRF hardware telemetry across 77 laps / 320 passes (`95.9%` F1).
+// trained on verified 4-gate 5.8 GHz SlapRF hardware telemetry across 116 laps / 478 passes (`94.5%` F1).
 func PretrainedBaseSummary() domain.MLModelSummary {
 	if pretrainedTCN != nil {
 		return pretrainedSnapshot.MLModelSummary
@@ -1072,33 +1073,33 @@ func PretrainedBaseSummary() domain.MLModelSummary {
 		ModelID:       "ai-base-v0",
 		Name:          "SlapRF Base",
 		Version:       0,
-		CreatedAt:     "2026-11-25T21:46:00Z",
+		CreatedAt:     "2026-11-25T22:45:00Z",
 		BuiltIn:       true,
 		Ready:         true,
 		EpochsTrained: 72,
-		TrainPacks:    3,
-		ValPacks:      3,
-		TrainPasses:   320,
-		FinalLoss:     0.0964,
+		TrainPacks:    4,
+		ValPacks:      4,
+		TrainPasses:   478,
+		FinalLoss:     0.0901,
 		AIMetrics: domain.MLMetrics{
-			TotalPasses:    320,
-			DetectedPasses: 307,
-			MissedPasses:   13,
-			FalseTriggers:  13,
-			Precision:      0.9594,
-			Recall:         0.9594,
-			F1:             0.9594,
-			MeanJitterMs:   49.8,
+			TotalPasses:    478,
+			DetectedPasses: 452,
+			MissedPasses:   26,
+			FalseTriggers:  27,
+			Precision:      0.9436,
+			Recall:         0.9456,
+			F1:             0.9446,
+			MeanJitterMs:   51.9,
 		},
 		ClassicMetrics: domain.MLMetrics{
-			TotalPasses:    320,
-			DetectedPasses: 126,
-			MissedPasses:   194,
-			FalseTriggers:  1,
-			Precision:      0.9921,
-			Recall:         0.3938,
-			F1:             0.5638,
-			MeanJitterMs:   62.1,
+			TotalPasses:    478,
+			DetectedPasses: 190,
+			MissedPasses:   288,
+			FalseTriggers:  5,
+			Precision:      0.9744,
+			Recall:         0.3975,
+			F1:             0.5646,
+			MeanJitterMs:   59.4,
 		},
 	}
 }

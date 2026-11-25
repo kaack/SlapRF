@@ -62,20 +62,29 @@ func GenerateSyntheticTraces(count int, seed int64) []LabeledTrace {
 		tSec := 3.5 + rng.Float64()*2.0
 		passNum := 0
 		for tSec < durSec-4.0 {
-			peakExcess := 28.0 + rng.Float64()*18.0 // +28..+46 dB above floor (-64..-44 dBm)
+			peakExcess := 24.0 + rng.Float64()*21.0 // +24..+45 dB above floor (-68..-44 dBm)
 			halfWidthSec := 0.14 + rng.Float64()*0.32 // fast 35 mph to slower 12 mph whoop
+			straightInRamp := rng.Float64() < 0.35    // gradual 1.8..3.0s straight-in LOS approach followed by crisp flypast!
+			leftWidthSec := halfWidthSec
+			if straightInRamp {
+				leftWidthSec = 0.85 + rng.Float64()*0.75
+			}
 			hasDipoleNotch := rng.Float64() < 0.28
 			notchDepth := 3.0 + rng.Float64()*3.5
 			takeoffHover := passNum == 0 && rng.Float64() < 0.45
 
-			// Add inverse-square Lorentzian pass envelope: peakExcess / (1 + ((t - t0)/w)^2)
+			// Add inverse-square Lorentzian pass envelope (asymmetric when flying a long straight-in LOS approach)
 			for i := 0; i < nPts; i++ {
 				ti := float64(i) * 0.02
 				dt := ti - tSec
 				if math.Abs(dt) > 4.5 {
 					continue
 				}
-				u := dt / halfWidthSec
+				w := halfWidthSec
+				if dt < 0 {
+					w = leftWidthSec
+				}
+				u := dt / w
 				env := peakExcess / (1.0 + u*u)
 				if hasDipoleNotch && math.Abs(dt) < 0.055 {
 					notch := notchDepth * math.Exp(-(dt*dt)/(2*0.022*0.022))

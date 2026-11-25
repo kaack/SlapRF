@@ -607,7 +607,7 @@ func (e *Engine) recomputeLiveGateTunesLocked(slotIndex int, manualDeleted []dom
 			}
 		}
 		for _, f := range e.filtered {
-			if f.GateID == g.GateID && f.SlotIndex == slotIndex {
+			if f.Reason == domain.FilterSpike && f.GateID == g.GateID && f.SlotIndex == slotIndex {
 				negs = append(negs, ml.NegativeMark{
 					TimestampUs: f.TimestampUs,
 					Weight:      3.5,

@@ -60,7 +60,7 @@ func DefaultMLConfig() MLConfig {
 	return MLConfig{
 		DetectorMode:     DetectorModeClassic,
 		ActiveModelID:    "ai-base-v0",
-		LiveTuneEnabled:  true,
+		LiveTuneEnabled:  false,
 		TeacherPackID:    "qwen3-1.7b-q4_k_m",
 		AutoLabelOnTrain: true,
 	}

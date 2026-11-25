@@ -16,17 +16,19 @@ const (
 
 // FeatureNormalizer computes causal 3-channel normalized features at each 20 ms step so offline
 // full-trace training and live real-time streaming produce identical inputs with zero on-the-fly
-// peak-ceiling auto-calibration (loud passes on earlier laps never suppress softer/slower passes):
+// peak-ceiling auto-calibration (loud passes on earlier laps never suppress softer/slower passes,
+// and multi-second straight-in line-of-sight approach ramps or launch-pad hover shelves never drag
+// the reference baseline up with the approaching quad):
 //   - ch0: Excess above ambient noise floor: clamp((rssi - floor) / 35.0, -0.25, 1.6)
-//   - ch1: Contrast above trailing ~1.8s local average: clamp((rssi - slowEma) / 22.0, -1.2, 1.4)
-//   - ch2: Multi-step 120 ms slope: clamp((rssi[t] - rssi[t-6]) / 14.0, -1.5, 1.5)
+//   - ch1: Contrast above clamped ambient/far-field shelf: clamp((rssi - slowEma) / 22.0, -1.2, 1.5)
+//   - ch2: Multi-scale 120 ms + 320 ms slope: clamp(0.55*(rssi[t]-rssi[t-6])/14 + 0.45*(rssi[t]-rssi[t-16])/18, -1.5, 1.5)
 type FeatureNormalizer struct {
 	initialized bool
 	floorDbm    float32
 	slowEmaDbm  float32
 	medBuf      [3]float32
 	medCount    int
-	histRssi    [6]float32
+	histRssi    [16]float32
 	histCount   int
 }
 
@@ -110,13 +112,31 @@ func (n *FeatureNormalizer) Step(rawRssiDbm float32, reportedFloorDbm float32) (
 		n.slowEmaDbm = n.floorDbm
 	}
 	prevSlow := n.slowEmaDbm
-	n.slowEmaDbm = 0.993*n.slowEmaDbm + 0.007*med
+	if med < n.slowEmaDbm {
+		// Recover promptly after a pass or launch-pad takeoff (~1.3 s tau)
+		n.slowEmaDbm = 0.985*n.slowEmaDbm + 0.015*med
+	} else {
+		// Track ambient/far-field shelf with a ~5.0 s time constant and cap at floor + 13 dB so
+		// compact-track chatter is suppressed without letting 2-3 s straight-in approach ramps or
+		// launch-pad hover shelves climb up to the pass crest.
+		n.slowEmaDbm = 0.996*n.slowEmaDbm + 0.004*med
+		maxSlow := n.floorDbm + 13.0
+		if n.slowEmaDbm > maxSlow {
+			n.slowEmaDbm = maxSlow
+		}
+	}
 
-	var prev6 float32
+	var prev6, prev16 float32
 	if n.histCount == 0 {
 		prev6 = med
+		prev16 = med
 	} else {
-		prev6 = n.histRssi[0]
+		prev16 = n.histRssi[0]
+		idx6 := n.histCount - 6
+		if idx6 < 0 {
+			idx6 = 0
+		}
+		prev6 = n.histRssi[idx6]
 	}
 	if n.histCount < len(n.histRssi) {
 		n.histRssi[n.histCount] = med
@@ -126,9 +146,11 @@ func (n *FeatureNormalizer) Step(rawRssiDbm float32, reportedFloorDbm float32) (
 		n.histRssi[len(n.histRssi)-1] = med
 	}
 
+	slopeFast := (med - prev6) / 14.0
+	slopeMed := (med - prev16) / 18.0
 	ch0 := clamp32((med-n.floorDbm)/35.0, -0.25, 1.6)
-	ch1 := clamp32((med-prevSlow)/22.0, -1.2, 1.4)
-	ch2 := clamp32((med-prev6)/14.0, -1.5, 1.5)
+	ch1 := clamp32((med-prevSlow)/22.0, -1.2, 1.5)
+	ch2 := clamp32(0.55*slopeFast+0.45*slopeMed, -1.5, 1.5)
 	return [InputChannels]float32{ch0, ch1, ch2}, med, n.floorDbm
 }
 

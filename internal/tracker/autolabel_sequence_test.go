@@ -412,6 +412,15 @@ func TestAutoLabelRecordedSessionsRegression(t *testing.T) {
 			minFullF1:       89.0,
 			matchTolMs:      450.0,
 		},
+		{
+			name:            "25mW Verification (37 laps across 3 packs with straight-in approaches)",
+			prefix:          "autolabel_verification",
+			minCompleteLaps: 37,
+			minLapMatch:     98.5,
+			minFullRec:      97.5,
+			minFullF1:       97.5,
+			matchTolMs:      450.0,
+		},
 	}
 
 	tm := ml.NewTeacherManager(t.TempDir(), nil)
