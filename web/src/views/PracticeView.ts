@@ -274,7 +274,7 @@ export class PracticeView extends Component {
                   ${icons.chart(15)}<span>Analytics</span>
                 </button>
                 <button type="button" role="tab" aria-selected="false" class="rc-topleft-btn rc-mode-btn" data-practice-mobile-tab="ai">
-                  ${icons.ai(15)}<span>AI</span>
+                  ${icons.ai(15)}<span>AI Training</span>
                 </button>
               </div>
               <button type="button" class="sched-lineup-cue is-right" data-lineup-scroll="1" aria-label="Scroll tabs right" title="More tabs" hidden>${icons.chevronRight(14)}</button>

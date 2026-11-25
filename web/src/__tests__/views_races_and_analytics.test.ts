@@ -2652,18 +2652,25 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
         '[data-practice-mobile-tab="ai"]'
       )!;
       expect(aiTabBtn).not.toBeNull();
+      expect(aiTabBtn.textContent?.trim()).toBe("AI Training");
       aiTabBtn.click();
       await flushMicrotasks();
 
-      expect(host.textContent ?? "").toContain("AI Training");
-      expect(host.textContent ?? "").toContain("Pack 1 Model");
+      const aiPane = host.querySelector<HTMLElement>('[data-slot="mobile-ai"]')!;
+      expect(aiPane.textContent ?? "").not.toContain("AI Training");
+      expect(aiPane.textContent ?? "").toContain("Pack 1 Model");
 
-      // 4. Fine-Tune mode picks existing model -> calls startMLTraining with continueModelId
+      // 4. Fine-Tune mode picks existing model -> immediately shows progress & disables button synchronously!
       expect(host.querySelector('[data-ai-finetune-select]')).not.toBeNull();
       const trainMoreBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="train-more"]')!;
       expect(trainMoreBtn).not.toBeNull();
+      expect(trainMoreBtn.classList.contains("btn-primary")).toBe(false);
       expect(trainMoreBtn.textContent?.trim()).toBe("Fine-Tune");
       trainMoreBtn.click();
+      expect(host.querySelector("[data-ai-progress]")).not.toBeNull();
+      expect(
+        host.querySelector<HTMLButtonElement>('[data-ai-act="train-more"]')!.disabled
+      ).toBe(true);
       await flushMicrotasks();
       expect(
         mock.calls.some(
