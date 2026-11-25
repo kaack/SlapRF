@@ -111,6 +111,8 @@ type Engine struct {
 	rhDebugStreamTimers    map[uint8]bool
 	traceStore             tracestore.Store
 	activeTraceFirstTsUs   uint64
+	activeTraceLastPeakUs  uint64
+	activeTraceIdleGateUs  [256]uint64
 	packLoopGateObs        map[uint8]gateSignalObs
 	packLoopQuietSinceUs   uint64
 	packLoopLastTickSec    int

@@ -2929,4 +2929,72 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       view.destroy();
     }
   });
+
+  it("renders multi-timer .rfbin RSSI curves in active Practice sessions even after host restart", async () => {
+    const store = makeStore();
+    const p1 = makePilot(1, { callsign: "OneEye", band: 1, channel: 7, frequencyMhz: 5880 });
+    const g1 = makeGate(1, { name: "H1", timerLabel: "H1", role: "START_FINISH", trackOrder: 0 });
+    const g2 = makeGate(2, { name: "T1", timerLabel: "T1", role: "SECTOR_GATE", trackOrder: 1 });
+    // Reproduce 70-hour monotonic timestamps (`252,820s`) on an ACTIVE session (`active: true`)
+    const lapStartUs = 252_808_000_000;
+    const lapEndUs = 252_820_400_000;
+    const activeSess = makePracticeSession("active-pack", {
+      name: "Session 2",
+      active: true,
+      pilots: [{ slotIndex: 1, callsign: "OneEye", color: "#ef4444", band: 1, channel: 7, frequencyMhz: 5880 }],
+      trackInitialized: true,
+      trackSnapshot: [g1, g2],
+      laps: [{ ...makeLap(31, 1, 1, 12.4), completedAtUs: lapEndUs }],
+      crossings: [
+        makeCrossing(101, 1, 1, lapStartUs),
+        makeCrossing(102, 2, 1, lapStartUs + 6_100_000),
+        makeCrossing(103, 1, 1, lapEndUs),
+      ],
+    });
+    store.hydrate({
+      ...storeSnapshotFrom(store),
+      pilots: [p1],
+      gates: [g1, g2],
+      practiceState: {
+        initialized: true,
+        activeSessionId: "active-pack",
+        selectedSessionId: "active-pack",
+        sessions: [activeSess],
+      },
+    });
+    // Seed `.rfbin` trace at `252,808s .. 252,821s` AND post-restart frames (`2s`) to verify sorting + active lookup!
+    const traceFrames = [];
+    for (let step = 0; step < 30; step++) {
+      const ts = lapStartUs + step * 450_000;
+      traceFrames.push(
+        { timerId: 1, seqNum: step + 1, timestampUs: ts, rssi: [-54 - (step % 5), -127], batteryMv: 4100, noiseFloorDbm: -91 },
+        { timerId: 2, seqNum: step + 1, timestampUs: ts, rssi: [-61 - (step % 4), -127], batteryMv: 4100, noiseFloorDbm: -91 }
+      );
+    }
+    traceFrames.push({ timerId: 1, seqNum: 99, timestampUs: 2_000_000, rssi: [-91, -127], batteryMv: 4100, noiseFloorDbm: -91 });
+    store.setSessionTrace("active-pack", traceFrames);
+
+    replaceAppHash("#/practice/active-pack");
+    const root = mountHtml(`<div id="prac-active-host"></div>`);
+    const host = root.querySelector<HTMLElement>("#prac-active-host")!;
+    const mock = makeMockApiClient(store);
+    const view = new PracticeView(host, store, mock.api);
+    try {
+      await flushMicrotasks();
+      host.querySelector<HTMLButtonElement>('[data-practice-mobile-tab="review"]')!.click();
+      await flushMicrotasks();
+      host.querySelector<HTMLButtonElement>('[data-review-open-lap-rssi="31"]')!.click();
+      await flushMicrotasks();
+
+      const modal = document.body.querySelector<HTMLElement>(".lap-editor-modal")!;
+      expect(modal).not.toBeNull();
+      // Both H1 and T1 real SVG `<path class="lap-ed-rssi-line">` curves must render (zero synthetic fallback)!
+      const realPaths = modal.querySelectorAll("path.lap-ed-rssi-line");
+      expect(realPaths.length).toBe(2);
+      expect(modal.querySelector("line.lap-ed-rssi-line.is-synthetic")).toBeNull();
+      modal.querySelector<HTMLButtonElement>("[data-lap-ed-close]")!.click();
+    } finally {
+      view.destroy();
+    }
+  });
 });

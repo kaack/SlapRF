@@ -124,9 +124,6 @@ func (l *Qwen3GGUFLabeler) LabelCandidates(
 	classRawToks := []int{idCross, idBleed, idEcho, idNoise}
 	classNames := []string{"crossing", "bleed", "multipath", "noise"}
 
-	idCenter, hasCenter := tok.TokenID("\u0120center")
-	idPeak, hasPeak := tok.TokenID("\u0120peak")
-
 	// Group candidates per pilot slot so multi-pilot practice sessions maintain clean per-pilot gate order
 	bySlot := make(map[int][]CandidatePeak)
 	var slots []int
@@ -145,96 +142,151 @@ func (l *Qwen3GGUFLabeler) LabelCandidates(
 	}
 
 	kvSess := model.NewSession(2048)
+	// Prefill static System 1 instruction prefix ONCE and rewind `kvSess.SetPos(sysPos)` per batch!
+	sysToks := tok.Encode(system1StaticPromptPrefix)
+	if err := kvSess.ForwardTokensCtx(ctx, sysToks); err != nil {
+		return nil, fmt.Errorf("teacher system prefill: %w", err)
+	}
+	sysPos := kvSess.Pos()
+
 	decisionsByID := make(map[string]CandidateDecision, len(candidates))
 	doneCount := 0
 	totalCount := len(candidates)
+	enableFastTriage := totalCount > 4
 
 	const windowSize = 8
 	for _, slot := range slots {
 		pCands := bySlot[slot]
 		var prevCrossGate string
 		var prevCrossSec float64 = -999
+		lastSameGateSec := make(map[uint8]float64)
 
-		for start := 0; start < len(pCands); start += windowSize {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			default:
-			}
-			end := start + windowSize
-			if end > len(pCands) {
-				end = len(pCands)
-			}
-			batch := pCands[start:end]
-
-			prompt := buildSystem1BatchPrompt(trackSeq, minLapSec, prevCrossGate, prevCrossSec, batch)
-			promptToks := tok.Encode(prompt)
-			kvSess.Reset()
-			if err := kvSess.ForwardTokens(promptToks); err != nil {
-				return nil, fmt.Errorf("teacher prefill: %w", err)
-			}
-
-			for bi, cand := range batch {
-				var linePrefix string
-				if bi == 0 {
-					linePrefix = cand.ID + ":"
-				} else {
-					linePrefix = "\n" + cand.ID + ":"
+		var pendingBatch []CandidatePeak
+		flushPendingBatch := func() error {
+			for start := 0; start < len(pendingBatch); start += windowSize {
+				if err := ctx.Err(); err != nil {
+					return err
 				}
-				if err := kvSess.ForwardTokens(tok.Encode(linePrefix)); err != nil {
-					return nil, err
+				end := start + windowSize
+				if end > len(pendingBatch) {
+					end = len(pendingBatch)
+				}
+				batch := pendingBatch[start:end]
+
+				// Append `batch[0].ID + ":"` directly to user prompt so `batch[0]` needs 0 extra forward sweeps!
+				userDelta := buildSystem1UserPromptDelta(trackSeq, minLapSec, prevCrossGate, prevCrossSec, batch) + batch[0].ID + ":"
+				kvSess.SetPos(sysPos)
+				if err := kvSess.ForwardTokensCtx(ctx, tok.Encode(userDelta)); err != nil {
+					return fmt.Errorf("teacher prefill: %w", err)
 				}
 
-				probs, bestIdx := kvSess.ScoreSingleTokens(classTokIDs)
-				chosenLabel := classNames[bestIdx]
-				conf := probs[bestIdx]
-				chosenTok := classRawToks[bestIdx]
+				for bi, cand := range batch {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					probs, bestIdx := kvSess.ScoreSingleTokens(classTokIDs)
+					chosenLabel := classNames[bestIdx]
+					conf := probs[bestIdx]
+					chosenTok := classRawToks[bestIdx]
 
-				// Feed chosen class token into KV cache so subsequent candidates see the gate sequence!
-				if err := kvSess.ForwardTokens([]int{chosenTok}); err != nil {
-					return nil, err
-				}
-
-				deltaMs := 0
-				if chosenLabel == "crossing" && cand.MDipDb >= 1.5 && cand.MDipOffsetMs != 0 {
-					if hasCenter && hasPeak {
-						savedPos := kvSess.Pos()
-						if err := kvSess.ForwardTokens(tok.Encode(" | align:")); err == nil {
-							alignProbs, alignBest := kvSess.ScoreSingleTokens([]int{idCenter, idPeak})
-							if alignBest == 0 || alignProbs[0] >= 0.45 {
-								deltaMs = cand.MDipOffsetMs
-							}
+					// Fuse `[chosenTok] + "\n" + nextCand.ID + ":"` into a SINGLE forward sweep (and 0 sweeps on last item)!
+					if bi+1 < len(batch) {
+						nextTokens := append([]int{chosenTok}, tok.Encode("\n"+batch[bi+1].ID+":")...)
+						if err := kvSess.ForwardTokensCtx(ctx, nextTokens); err != nil {
+							return err
 						}
-						kvSess.SetPos(savedPos)
-					} else {
+					}
+
+					deltaMs := 0
+					if chosenLabel == "crossing" && cand.MDipDb >= 1.5 && cand.MDipOffsetMs != 0 {
 						deltaMs = cand.MDipOffsetMs
 					}
-				}
 
-				if chosenLabel == "crossing" {
-					prevCrossGate = cand.GateName
-					prevCrossSec = float64(cand.AnchorTsUs) / 1e6
-				}
+					tSec := float64(cand.AnchorTsUs) / 1e6
+					if chosenLabel == "crossing" {
+						prevCrossGate = cand.GateName
+						prevCrossSec = tSec
+						lastSameGateSec[cand.GateID] = tSec
+					}
 
-				finalInt := int64(cand.AnchorTsUs) + int64(deltaMs)*1000
-				if finalInt < 0 {
-					finalInt = 0
+					finalInt := int64(cand.AnchorTsUs) + int64(deltaMs)*1000
+					if finalInt < 0 {
+						finalInt = 0
+					}
+					decisionsByID[cand.ID] = CandidateDecision{
+						ID:         cand.ID,
+						GateID:     cand.GateID,
+						SlotIndex:  cand.SlotIndex,
+						Label:      chosenLabel,
+						AnchorTsUs: cand.AnchorTsUs,
+						DeltaMs:    deltaMs,
+						FinalTsUs:  uint64(finalInt),
+						PeakDbm:    cand.PeakRSSIDbm,
+						Confidence: float32(math.Round(float64(conf)*1000) / 1000),
+					}
+					doneCount++
+					if onProgress != nil {
+						onProgress(doneCount, totalCount)
+					}
 				}
-				decisionsByID[cand.ID] = CandidateDecision{
-					ID:         cand.ID,
-					GateID:     cand.GateID,
-					SlotIndex:  cand.SlotIndex,
-					Label:      chosenLabel,
-					AnchorTsUs: cand.AnchorTsUs,
-					DeltaMs:    deltaMs,
-					FinalTsUs:  uint64(finalInt),
-					PeakDbm:    cand.PeakRSSIDbm,
-					Confidence: float32(math.Round(float64(conf)*1000) / 1000),
+			}
+			pendingBatch = pendingBatch[:0]
+			return nil
+		}
+
+		for idx, cand := range pCands {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if enableFastTriage {
+				if fastLbl, fastConf, ok := triageUnambiguousCandidate(cand, idx, pCands, minLapSec, lastSameGateSec); ok {
+					if len(pendingBatch) > 0 {
+						if err := flushPendingBatch(); err != nil {
+							return nil, err
+						}
+					}
+					deltaMs := 0
+					if fastLbl == "crossing" && cand.MDipDb >= 1.5 && cand.MDipOffsetMs != 0 {
+						deltaMs = cand.MDipOffsetMs
+					}
+					tSec := float64(cand.AnchorTsUs) / 1e6
+					if fastLbl == "crossing" {
+						prevCrossGate = cand.GateName
+						prevCrossSec = tSec
+						lastSameGateSec[cand.GateID] = tSec
+					}
+					finalInt := int64(cand.AnchorTsUs) + int64(deltaMs)*1000
+					if finalInt < 0 {
+						finalInt = 0
+					}
+					decisionsByID[cand.ID] = CandidateDecision{
+						ID:         cand.ID,
+						GateID:     cand.GateID,
+						SlotIndex:  cand.SlotIndex,
+						Label:      fastLbl,
+						AnchorTsUs: cand.AnchorTsUs,
+						DeltaMs:    deltaMs,
+						FinalTsUs:  uint64(finalInt),
+						PeakDbm:    cand.PeakRSSIDbm,
+						Confidence: fastConf,
+					}
+					doneCount++
+					if onProgress != nil {
+						onProgress(doneCount, totalCount)
+					}
+					continue
 				}
-				doneCount++
-				if onProgress != nil {
-					onProgress(doneCount, totalCount)
+			}
+			pendingBatch = append(pendingBatch, cand)
+			if len(pendingBatch) >= windowSize {
+				if err := flushPendingBatch(); err != nil {
+					return nil, err
 				}
+			}
+		}
+		if len(pendingBatch) > 0 {
+			if err := flushPendingBatch(); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -268,31 +320,24 @@ func formatTrackTopology(gates []domain.TrackGate) string {
 	return strings.Join(parts, " -> ")
 }
 
-func buildSystem1BatchPrompt(trackSeq string, minLapSec float64, prevGate string, prevSec float64, batch []CandidatePeak) string {
-	var sb strings.Builder
-	sb.Grow(1200)
-	sb.WriteString("<|im_start|>system\n")
-	sb.WriteString("You classify 5.8GHz FPV drone gate RSSI peaks into one label per candidate:\n")
-	sb.WriteString("- crossing: real pass through that gate (strong bell or M-saddle curve, dominant over coincident gates, respects min gate lockout).\n")
-	sb.WriteString("- bleed: weaker simultaneous leakage while another gate has a much stronger peak (+8dB or more) at the same timestamp.\n")
-	sb.WriteString("- echo: secondary multipath reflection bump within 0.45s of a stronger crossing on the same gate.\n")
-	sb.WriteString("- noise: weak pit walk-by, wide flat hover shelf, or isolated tiny spike (<14dB prominence).\n")
-	sb.WriteString("Output strictly `ID: <label>` per line.\n")
-	sb.WriteString("Example:\nC1: crossing\nC2: bleed\nC3: echo\nC4: noise<|im_end|>\n")
+const system1StaticPromptPrefix = "<|im_start|>system\n" +
+	"You classify 5.8GHz FPV drone gate RSSI peaks into one label per candidate:\n" +
+	"- crossing: real pass through that gate (strong bell or M-saddle curve, dominant over coincident gates, respects min gate lockout).\n" +
+	"- bleed: weaker simultaneous leakage while another gate has a much stronger peak (+8dB or more) at the same timestamp.\n" +
+	"- echo: secondary multipath reflection bump within 0.45s of a stronger crossing on the same gate.\n" +
+	"- noise: weak pit walk-by, wide flat hover shelf, or isolated tiny spike (<14dB prominence).\n" +
+	"Output strictly `ID: <label>` per line.\n" +
+	"Example:\nC1: crossing\nC2: bleed\nC3: echo\nC4: noise<|im_end|>\n"
 
+func buildSystem1UserPromptDelta(trackSeq string, minLapSec float64, prevGate string, prevSec float64, batch []CandidatePeak) string {
+	var sb strings.Builder
+	sb.Grow(768)
 	sb.WriteString("<|im_start|>user\n")
 	fmt.Fprintf(&sb, "Track order: %s | Min same-gate interval: %.1fs\n", trackSeq, minLapSec)
 	if prevGate != "" && prevSec >= 0 {
 		fmt.Fprintf(&sb, "Prior accepted crossing: %s at %.2fs\n", prevGate, prevSec)
 	}
 	sb.WriteString("Candidates (shape40ms = dB above floor every 40ms from -240ms to +240ms):\n")
-	t0 := float64(batch[0].AnchorTsUs) / 1e6
-	if prevSec >= 0 && prevSec < t0 {
-		t0 = 0
-	} else {
-		t0 = 0
-	}
-	_ = t0
 	for _, c := range batch {
 		tSec := float64(c.AnchorTsUs) / 1e6
 		fmt.Fprintf(&sb, "%s t=%.2fs gate=%s prom=%.1fdB width=%dms",
@@ -321,6 +366,74 @@ func buildSystem1BatchPrompt(trackSeq string, minLapSec float64, prevGate string
 	}
 	sb.WriteString("<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n")
 	return sb.String()
+}
+
+func buildSystem1BatchPrompt(trackSeq string, minLapSec float64, prevGate string, prevSec float64, batch []CandidatePeak) string {
+	return system1StaticPromptPrefix + buildSystem1UserPromptDelta(trackSeq, minLapSec, prevGate, prevSec, batch)
+}
+
+// triageUnambiguousCandidate resolves textbook physical peaks (dominant >=22 dB gate passes,
+// >=+10 dB simultaneous cross-gate bleed, and <11.5 dB tiny spikes) in O(1) so only genuinely
+// borderline / contested peaks require full Qwen3 transformer evaluation.
+func triageUnambiguousCandidate(
+	cand CandidatePeak,
+	idx int,
+	pCands []CandidatePeak,
+	minLapSec float64,
+	lastSameGateSec map[uint8]float64,
+) (label string, conf float32, ok bool) {
+	maxCoincDiff := float32(-999)
+	for _, co := range cand.Coincident {
+		diff := co.ProminenceDb - cand.ProminenceDb
+		if diff > maxCoincDiff {
+			maxCoincDiff = diff
+		}
+	}
+
+	// 1. Unmistakable cross-gate bleed: another gate simultaneously peaked >= +10.0 dB stronger!
+	if maxCoincDiff >= 10.0 {
+		return "bleed", 0.96, true
+	}
+
+	// 2. Unmistakable tiny RF noise blip: < 11.5 dB prominence and narrow width
+	if cand.ProminenceDb < 11.5 && cand.WidthHalfPromMs < 110 {
+		return "noise", 0.94, true
+	}
+
+	// Check for a stronger peak on the same gate within +-480 ms (potential multipath echo)
+	for j := idx - 1; j >= 0; j-- {
+		dtUs := cand.AnchorTsUs - pCands[j].AnchorTsUs
+		if dtUs > 480_000 {
+			break
+		}
+		if pCands[j].GateID == cand.GateID && pCands[j].ProminenceDb >= cand.ProminenceDb+5.5 {
+			return "multipath", 0.92, true
+		}
+	}
+	for j := idx + 1; j < len(pCands); j++ {
+		dtUs := pCands[j].AnchorTsUs - cand.AnchorTsUs
+		if dtUs > 480_000 {
+			break
+		}
+		if pCands[j].GateID == cand.GateID && pCands[j].ProminenceDb >= cand.ProminenceDb+5.5 {
+			return "multipath", 0.92, true
+		}
+	}
+
+	// 3. Unmistakable clean gate crossing: >= 22 dB prominence, realistic pass width, clearly dominant
+	// over any coincident gate (>= 8 dB stronger), and respects minimum same-gate lockout!
+	tSec := float64(cand.AnchorTsUs) / 1e6
+	prevSame, hasPrevSame := lastSameGateSec[cand.GateID]
+	lockoutOK := !hasPrevSame || (tSec-prevSame) >= math.Max(1.2, minLapSec*0.75)
+	if cand.ProminenceDb >= 22.0 &&
+		cand.WidthHalfPromMs >= 80 &&
+		cand.WidthHalfPromMs <= 980 &&
+		maxCoincDiff <= -8.0 &&
+		lockoutOK {
+		return "crossing", 0.97, true
+	}
+
+	return "", 0, false
 }
 
 // ---------------------------------------------------------------------------

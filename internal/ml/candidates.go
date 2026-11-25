@@ -64,12 +64,90 @@ type rawSeqPeak struct {
 	shape   [13]int
 }
 
+// FlightStintSpan represents a contiguous active flight interval `[LoUs, HiUs]` for a pilot.
+type FlightStintSpan struct {
+	LoUs uint64
+	HiUs uint64
+}
+
+// BuildPilotFlightStints merges recorded lap intervals (`[lapStart - 2.2s .. lapEnd + 2.2s]`,
+// bridging gaps `<= 5.0s`) plus manual crossing edits so both candidate extraction and TCN training
+// ignore pre-flight, landing/pack-swap, and post-flight bench dead-air!
+func BuildPilotFlightStints(sess domain.PracticeSession) map[int][]FlightStintSpan {
+	stintsBySlot := make(map[int][]FlightStintSpan)
+	addSpan := func(slot int, lo, hi uint64) {
+		if slot <= 0 || hi <= lo {
+			return
+		}
+		stintsBySlot[slot] = append(stintsBySlot[slot], FlightStintSpan{LoUs: lo, HiUs: hi})
+	}
+	const stintPadUs = uint64(2_200_000)
+	for _, l := range sess.Laps {
+		if l.Invalidated || l.CompletedAtUs == 0 || l.LapTimeSec <= 0 {
+			continue
+		}
+		durUs := uint64(math.Round(l.LapTimeSec * 1e6))
+		startUs := uint64(0)
+		if l.CompletedAtUs > durUs+stintPadUs {
+			startUs = l.CompletedAtUs - durUs - stintPadUs
+		}
+		addSpan(l.SlotIndex, startUs, l.CompletedAtUs+stintPadUs)
+	}
+	for _, c := range sess.Crossings {
+		if c.Manual && c.TimestampUs > 0 {
+			lo := uint64(0)
+			if c.TimestampUs > stintPadUs {
+				lo = c.TimestampUs - stintPadUs
+			}
+			addSpan(c.SlotIndex, lo, c.TimestampUs+stintPadUs)
+		}
+	}
+	for _, del := range sess.ManualDeletedCrossings {
+		if del.TimestampUs > 0 {
+			lo := uint64(0)
+			if del.TimestampUs > stintPadUs {
+				lo = del.TimestampUs - stintPadUs
+			}
+			addSpan(del.SlotIndex, lo, del.TimestampUs+stintPadUs)
+		}
+	}
+	for slot, list := range stintsBySlot {
+		sort.Slice(list, func(i, j int) bool { return list[i].LoUs < list[j].LoUs })
+		merged := list[:1]
+		for _, s := range list[1:] {
+			last := &merged[len(merged)-1]
+			if s.LoUs <= last.HiUs+5_000_000 {
+				if s.HiUs > last.HiUs {
+					last.HiUs = s.HiUs
+				}
+			} else {
+				merged = append(merged, s)
+			}
+		}
+		stintsBySlot[slot] = merged
+	}
+	return stintsBySlot
+}
+
+// InPilotFlightStint reports whether `tsUs` falls inside one of `slot`'s active flight stints
+// (returning `true` when `slot` has no completed laps yet so raw pre-lap traces can still be labeled).
+func InPilotFlightStint(stintsBySlot map[int][]FlightStintSpan, slot int, tsUs uint64) bool {
+	stints := stintsBySlot[slot]
+	if len(stints) == 0 {
+		return true
+	}
+	i := sort.Search(len(stints), func(k int) bool { return stints[k].HiUs >= tsUs })
+	return i < len(stints) && tsUs >= stints[i].LoUs
+}
+
 // ExtractSessionCandidates extracts all candidate RSSI peaks (`>= 8.0 dB` above floor) across all
-// recorded gates and active pilots in `sess`, attaching cross-gate coincidence and 13-bin 40 ms shapes.
+// recorded gates and active pilots in `sess`, chopping bench dead-air outside active flight stints
+// and attaching cross-gate coincidence and 13-bin 40 ms shapes.
 func ExtractSessionCandidates(sess domain.PracticeSession, samples []tracestore.Sample) []CandidatePeak {
 	if len(samples) < 16 {
 		return nil
 	}
+	stintsBySlot := BuildPilotFlightStints(sess)
 	type gpKey struct {
 		gateID    uint8
 		slotIndex int
@@ -106,6 +184,9 @@ func ExtractSessionCandidates(sess domain.PracticeSession, samples []tracestore.
 				}
 			}
 			if k >= len(s.RSSIDbm) || s.RSSIDbm[k] <= -120.0 {
+				continue
+			}
+			if !InPilotFlightStint(stintsBySlot, slotIdx, s.TimestampUs) {
 				continue
 			}
 			key := gpKey{gateID: s.GateID, slotIndex: slotIdx}

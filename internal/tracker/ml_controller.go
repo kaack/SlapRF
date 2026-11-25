@@ -104,17 +104,152 @@ func (e *Engine) BroadcastMLStatus() {
 // SessionTraceFrames returns the saved raw telemetry frames for `sessionID` (decoded from `.rfbin`)
 // so past Practice sessions render interactive `Signals` curves even after app restarts.
 func (e *Engine) SessionTraceFrames(sessionID string) ([]domain.TimerTelemetryFrame, error) {
+	trimmedID := strings.TrimSpace(sessionID)
 	e.mu.RLock()
 	ts := e.traceStore
+	var sessSnap *domain.PracticeSession
+	if found := e.findPracticeSessionLocked(trimmedID); found != nil {
+		cp := clonePracticeSession(*found)
+		sessSnap = &cp
+	}
 	e.mu.RUnlock()
 	if ts == nil {
 		return nil, nil
 	}
-	samples, err := ts.ReadSession(strings.TrimSpace(sessionID))
+	samples, err := ts.ReadSession(trimmedID)
 	if err != nil || len(samples) == 0 {
 		return nil, err
 	}
+
+	// Keep 100% lossless 50-100 Hz samples inside all active flight spans (+-5s around laps, crossings,
+	// manual edits, filtered spikes, and the trailing 30s), while downsampling long idle bench lulls
+	// (`> 80,000` samples) to 2 Hz (500 ms peak-preserving buckets per gate) so hour-long sessions
+	// transfer in ~2 MB (<50 ms) instead of >100 MB!
+	if len(samples) > 80_000 && sessSnap != nil {
+		samples = compactIdleBenchSamples(*sessSnap, samples)
+	}
 	return tracestore.ToTelemetryFrames(samples), nil
+}
+
+func compactIdleBenchSamples(sess domain.PracticeSession, samples []tracestore.Sample) []tracestore.Sample {
+	type uSpan struct {
+		lo, hi uint64
+	}
+	var spans []uSpan
+	addSpan := func(lo, hi uint64) {
+		if hi > lo {
+			spans = append(spans, uSpan{lo: lo, hi: hi})
+		}
+	}
+	const padUs = uint64(5_000_000)
+	for _, l := range sess.Laps {
+		if l.CompletedAtUs == 0 {
+			continue
+		}
+		durUs := uint64(math.Round(math.Max(0, l.LapTimeSec) * 1e6))
+		lo := uint64(0)
+		if l.CompletedAtUs > durUs+padUs {
+			lo = l.CompletedAtUs - durUs - padUs
+		}
+		addSpan(lo, l.CompletedAtUs+padUs)
+	}
+	for _, c := range sess.Crossings {
+		if c.TimestampUs > 0 {
+			lo := uint64(0)
+			if c.TimestampUs > padUs {
+				lo = c.TimestampUs - padUs
+			}
+			addSpan(lo, c.TimestampUs+padUs)
+		}
+	}
+	for _, d := range sess.ManualDeletedCrossings {
+		if d.TimestampUs > 0 {
+			lo := uint64(0)
+			if d.TimestampUs > padUs {
+				lo = d.TimestampUs - padUs
+			}
+			addSpan(lo, d.TimestampUs+padUs)
+		}
+	}
+	for _, f := range sess.Filtered {
+		if f.TimestampUs > 0 {
+			lo := uint64(0)
+			if f.TimestampUs > padUs {
+				lo = f.TimestampUs - padUs
+			}
+			addSpan(lo, f.TimestampUs+padUs)
+		}
+	}
+	maxTs := samples[len(samples)-1].TimestampUs
+	tailWin := uint64(30_000_000)
+	if len(spans) == 0 {
+		tailWin = 120_000_000
+	}
+	if maxTs > tailWin {
+		addSpan(maxTs-tailWin, maxTs+1_000_000)
+	} else {
+		addSpan(0, maxTs+1_000_000)
+	}
+
+	sort.Slice(spans, func(i, j int) bool { return spans[i].lo < spans[j].lo })
+	merged := spans[:0]
+	for _, s := range spans {
+		if len(merged) > 0 && s.lo <= merged[len(merged)-1].hi+2_000_000 {
+			if s.hi > merged[len(merged)-1].hi {
+				merged[len(merged)-1].hi = s.hi
+			}
+		} else {
+			merged = append(merged, s)
+		}
+	}
+	inActive := func(ts uint64) bool {
+		i := sort.Search(len(merged), func(k int) bool { return merged[k].hi >= ts })
+		return i < len(merged) && ts >= merged[i].lo
+	}
+
+	out := make([]tracestore.Sample, 0, 65536)
+	type gateBucket struct {
+		valid    bool
+		bucketID uint64
+		sample   tracestore.Sample
+	}
+	var buckets [256]gateBucket
+	flushBucket := func(gid uint8) {
+		if buckets[gid].valid {
+			out = append(out, buckets[gid].sample)
+			buckets[gid].valid = false
+		}
+	}
+
+	const idleBucketUs = uint64(500_000) // 2 Hz peak-preserving during idle bench dead-air
+	for _, s := range samples {
+		if inActive(s.TimestampUs) {
+			flushBucket(s.GateID)
+			out = append(out, s)
+			continue
+		}
+		bid := s.TimestampUs / idleBucketUs
+		gb := &buckets[s.GateID]
+		if !gb.valid || gb.bucketID != bid {
+			flushBucket(s.GateID)
+			cp := s
+			cp.SlotIndices = append([]uint8(nil), s.SlotIndices...)
+			cp.RSSIDbm = append([]float32(nil), s.RSSIDbm...)
+			*gb = gateBucket{valid: true, bucketID: bid, sample: cp}
+		} else {
+			for k, r := range s.RSSIDbm {
+				if k < len(gb.sample.RSSIDbm) && r > gb.sample.RSSIDbm[k] {
+					gb.sample.RSSIDbm[k] = r
+					gb.sample.TimestampUs = s.TimestampUs
+				}
+			}
+		}
+	}
+	for gid := 0; gid < 256; gid++ {
+		flushBucket(uint8(gid))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].TimestampUs < out[j].TimestampUs })
+	return out
 }
 
 func (e *Engine) ensureMLInitializedLocked() {
@@ -504,15 +639,37 @@ func (e *Engine) recordPracticeTraceAndPackLoopLocked(
 	}
 
 	if len(slots) > 0 {
-		ts.Append(sess.SessionID, tracestore.Sample{
-			GateID:        gate.GateID,
-			SeqNum:        frame.SeqNum,
-			TimestampUs:   frame.TimestampUs,
-			NoiseFloorDbm: floor,
-			SlotIndices:   slots,
-			RSSIDbm:       rssis,
-		})
-		sess.TraceSampleCount++
+		if maxFrameExcess >= 5.0 {
+			e.activeTraceLastPeakUs = frame.TimestampUs
+		}
+		// Throttle pure bench dead-air (`< 5 dB` above noise floor for >8s across all gates) to 2 Hz
+		// so leaving powered timers on the bench for an hour never bloats `.rfbin` with 1.5M idle frames!
+		isDeepIdle := maxFrameExcess < 5.0 &&
+			(e.activeTraceLastPeakUs == 0 ||
+				(frame.TimestampUs > e.activeTraceLastPeakUs && frame.TimestampUs-e.activeTraceLastPeakUs > 8_000_000))
+		shouldWrite := true
+		if isDeepIdle {
+			prevWrite := e.activeTraceIdleGateUs[gate.GateID]
+			if prevWrite > 0 && frame.TimestampUs >= prevWrite && frame.TimestampUs-prevWrite < 500_000 {
+				shouldWrite = false
+			} else {
+				e.activeTraceIdleGateUs[gate.GateID] = frame.TimestampUs
+			}
+		} else {
+			e.activeTraceIdleGateUs[gate.GateID] = frame.TimestampUs
+		}
+
+		if shouldWrite {
+			ts.Append(sess.SessionID, tracestore.Sample{
+				GateID:        gate.GateID,
+				SeqNum:        frame.SeqNum,
+				TimestampUs:   frame.TimestampUs,
+				NoiseFloorDbm: floor,
+				SlotIndices:   slots,
+				RSSIDbm:       rssis,
+			})
+			sess.TraceSampleCount++
+		}
 		if e.activeTraceFirstTsUs == 0 || frame.TimestampUs < e.activeTraceFirstTsUs {
 			e.activeTraceFirstTsUs = frame.TimestampUs
 		}
@@ -1539,7 +1696,28 @@ func (e *Engine) runMLTrainingWorker(
 				if len(cands) == 0 {
 					continue
 				}
-				decs, dErr := labeler.LabelCandidates(ctx, s, cands, nil)
+				var lastProgEmit time.Time
+				decs, dErr := labeler.LabelCandidates(ctx, s, cands, func(done, total int) {
+					if ctx.Err() != nil || total <= 0 {
+						return
+					}
+					now := time.Now()
+					if done < total && !lastProgEmit.IsZero() && now.Sub(lastProgEmit) < 150*time.Millisecond {
+						return
+					}
+					lastProgEmit = now
+					pct := int(math.Round(float64(done) * 100.0 / float64(total)))
+					e.mu.Lock()
+					if ctx.Err() != nil || !e.mlTraining.Running {
+						e.mu.Unlock()
+						return
+					}
+					e.mlTraining.Message = fmt.Sprintf("Auto-labeling %s (%d/%d) · %d/%d peaks (%d%%)...", s.Name, stepIdx+1, len(toLabelIdx), done, total, pct)
+					pSt := e.buildMLStatusLocked()
+					pSubs := append([]EventSubscriber(nil), e.subscribers...)
+					e.mu.Unlock()
+					e.notifyMLUpdated(pSt, pSubs)
+				})
 				if ctx.Err() != nil {
 					return
 				}

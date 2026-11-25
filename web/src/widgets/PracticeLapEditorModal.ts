@@ -169,6 +169,10 @@ export function openPracticeLapEditorModal(
   let panAnimFrame = 0;
   let isSaving = false;
   let isAutoLabeling = false;
+  const needsFreshActiveTrace =
+    Boolean(initSess.active) &&
+    (initSess.laps ?? []).some((l) => l.completedAtUs > rootStore.sessionTraceMaxTsUs(sessionId));
+  let isLoadingTrace = !rootStore.hasSessionTrace(sessionId) || needsFreshActiveTrace;
   let nextDraftId = -1;
 
   // Map<gateId, DraftGateCrossing[]> for staged edits per timer
@@ -178,17 +182,28 @@ export function openPracticeLapEditorModal(
     { enterDb: number; exitDb: number; hwMode: TimingHardwareMode }
   >();
 
+  const getGateHistory = (sess: PracticeSession, gateId: number) =>
+    rootStore.sessionTraceHistoryFor(sess.sessionId, gateId, Boolean(sess.active));
+
   const computeSessionAnchorUs = (sess: PracticeSession): number => {
     let minUs = Number.POSITIVE_INFINITY;
-    for (const n of reviewStore.nodes) {
-      const hist = reviewStore.historyFor(n.gateId);
-      if (hist.length > 0 && hist[0].timestampUs > 0 && hist[0].timestampUs < minUs) {
-        minUs = hist[0].timestampUs;
+    for (const l of sess.laps ?? []) {
+      if (l.completedAtUs > 0) {
+        const startUs = Math.max(0, Math.round(l.completedAtUs - l.lapTimeSec * 1_000_000));
+        if (startUs > 0 && startUs < minUs) minUs = startUs;
       }
     }
     for (const c of sess.crossings ?? []) {
       if (c.timestampUs > 0 && c.timestampUs < minUs) {
         minUs = c.timestampUs;
+      }
+    }
+    if (!Number.isFinite(minUs)) {
+      for (const n of reviewStore.nodes) {
+        const hist = getGateHistory(sess, n.gateId);
+        if (hist.length > 0 && hist[0].timestampUs > 0 && hist[0].timestampUs < minUs) {
+          minUs = hist[0].timestampUs;
+        }
       }
     }
     if (!Number.isFinite(minUs)) return 1_000_000;
@@ -197,7 +212,7 @@ export function openPracticeLapEditorModal(
 
   const clampXDomain = (minMs: number, maxMs: number) => {
     const span = clamp(maxMs - minMs, MIN_X_SPAN_MS, MAX_X_SPAN_MS);
-    const lo = clamp(minMs, -30_000, 7_200_000);
+    const lo = clamp(minMs, -1_000_000_000, 1_000_000_000);
     return { minMs: Math.round(lo), maxMs: Math.round(lo + span) };
   };
 
@@ -312,10 +327,7 @@ export function openPracticeLapEditorModal(
     minMs?: number,
     maxMs?: number
   ): Array<{ t: number; r: number }> => {
-    let frames = reviewStore.historyFor(gateId);
-    if (frames.length === 0 && sess.active) {
-      frames = rootStore.historyFor(gateId);
-    }
+    const frames = getGateHistory(sess, gateId);
     if (frames.length === 0) return [];
     const slotZeroIdx = Math.max(0, slotIndex - 1);
 
@@ -323,7 +335,7 @@ export function openPracticeLapEditorModal(
     let hiIdx = frames.length;
     if (minMs !== undefined && maxMs !== undefined) {
       const minUs = Math.max(0, anchorUs + (minMs - 2000) * 1000);
-      const maxUs = anchorUs + (maxMs + 2000) * 1000;
+      const maxUs = Math.max(minUs, anchorUs + (maxMs + 2000) * 1000);
       let l = 0;
       let r = frames.length;
       while (l < r) {
@@ -631,7 +643,7 @@ export function openPracticeLapEditorModal(
     let maxMs = 20_000;
     let sawTrace = false;
     for (const g of nodesList()) {
-      const hist = reviewStore.historyFor(g.gateId);
+      const hist = getGateHistory(sess, g.gateId);
       if (hist.length > 0) {
         const firstT = Math.round((hist[0].timestampUs - anchorUs) / 1000);
         const lastT = Math.round((hist[hist.length - 1].timestampUs - anchorUs) / 1000);
@@ -691,22 +703,26 @@ export function openPracticeLapEditorModal(
         <text x="${PAD_L - 6}" y="${(yNum + 3.5).toFixed(1)}" class="lap-ed-axis-lbl" text-anchor="end">${db}</text>`);
     }
 
+    // Lap window boundary framing when a specific lap is selected
+    const lapBounds = computeLapBounds(sess, anchorUs, selectedLapId);
+    const axisZeroMs = lapBounds ? lapBounds.startMs : 0;
+
     const stepMs =
       spanMs <= 3000 ? 250 : spanMs <= 7000 ? 500 : spanMs <= 14_000 ? 1000 : spanMs <= 30_000 ? 2000 : spanMs <= 70_000 ? 5000 : 10_000;
-    const firstTick = Math.ceil(lastDomain.minMs / stepMs) * stepMs;
+    const firstTickRel = Math.ceil((lastDomain.minMs - axisZeroMs) / stepMs) * stepMs;
+    const lastTickRel = lastDomain.maxMs - axisZeroMs;
     const xTicks: string[] = [];
-    for (let t = firstTick; t <= lastDomain.maxMs; t += stepMs) {
+    for (let rel = firstTickRel; rel <= lastTickRel; rel += stepMs) {
+      const t = axisZeroMs + rel;
       const xNum = msToX(t);
       if (xNum < PAD_L || xNum > svgW - PAD_R) continue;
       const x = xNum.toFixed(1);
-      const dec = stepMs < 500 ? 2 : t % 1000 === 0 && stepMs >= 1000 ? 0 : 1;
+      const dec = stepMs < 500 ? 2 : rel % 1000 === 0 && stepMs >= 1000 ? 0 : 1;
       xTicks.push(`
         <line x1="${x}" y1="${PAD_T}" x2="${x}" y2="${svgH - PAD_B}" class="lap-ed-grid-line is-vert" />
-        <text x="${x}" y="${svgH - 8}" class="lap-ed-axis-lbl" text-anchor="middle">${(t / 1000).toFixed(dec)}s</text>`);
+        <text x="${x}" y="${svgH - 8}" class="lap-ed-axis-lbl" text-anchor="middle">${(rel / 1000).toFixed(dec)}s</text>`);
     }
 
-    // Lap window boundary framing when a specific lap is selected
-    const lapBounds = computeLapBounds(sess, anchorUs, selectedLapId);
     let lapFrameHtml = "";
     if (lapBounds) {
       const xStart = clamp(msToX(lapBounds.startMs), PAD_L, svgW - PAD_R);
@@ -824,9 +840,10 @@ export function openPracticeLapEditorModal(
     if (!anyRealWave) {
       const flatVal = isLapRFMode(hwMode) ? 360 : isRotorHazardMode(hwMode) ? 22 : -90;
       const flatY = clamp(dbmToY(flatVal), PAD_T + 8, svgH - PAD_B - 8).toFixed(1);
+      const emptyLabel = isLoadingTrace ? "Loading RSSI waveform…" : "No RSSI waveform recorded";
       waveParts.push(`
         <line x1="${PAD_L}" y1="${flatY}" x2="${svgW - PAD_R}" y2="${flatY}" class="lap-ed-rssi-line is-synthetic" />
-        <text x="${PAD_L + plotW / 2}" y="${PAD_T + plotH / 2}" class="lap-ed-empty-svg" text-anchor="middle">No RSSI waveform recorded</text>`);
+        <text x="${PAD_L + plotW / 2}" y="${PAD_T + plotH / 2}" class="lap-ed-empty-svg" text-anchor="middle">${emptyLabel}</text>`);
     }
 
     // Render crossing pins (background unfocused timers first, then focused / All timers with 2-lane pill stagger)
@@ -2042,8 +2059,9 @@ export function openPracticeLapEditorModal(
     resizeObserver.observe(backdrop);
   }
   void rootApi
-    .ensurePracticeSessionTrace(sessionId)
+    .ensurePracticeSessionTrace(sessionId, needsFreshActiveTrace)
     .then(() => {
+      isLoadingTrace = false;
       if (document.body.contains(backdrop) && !dragState && !threshDrag && !viewDrag) {
         const latestSess = getSession();
         if (latestSess && !userAdjustedX && selectedLapId !== "all") {
@@ -2052,5 +2070,10 @@ export function openPracticeLapEditorModal(
         renderModal();
       }
     })
-    .catch(() => undefined);
+    .catch(() => {
+      isLoadingTrace = false;
+      if (document.body.contains(backdrop) && !dragState && !threshDrag && !viewDrag) {
+        refreshSvgOnly();
+      }
+    });
 }

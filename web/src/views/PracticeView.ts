@@ -616,7 +616,7 @@ export class PracticeView extends Component {
       dirEl.style.display = "none";
       wsEl.style.display = "";
       const selSess = this.store.selectedPracticeSession;
-      if (selSess && (!selSess.active || !this.store.hasSessionTrace(selSess.sessionId))) {
+      if (selSess && !selSess.active && !this.store.hasSessionTrace(selSess.sessionId)) {
         void this.api.ensurePracticeSessionTrace(selSess.sessionId).catch(() => undefined);
       }
       wsEl.dataset.mobilePracticeView = this.mobilePracticeTab;

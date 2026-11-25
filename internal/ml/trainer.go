@@ -291,71 +291,9 @@ func BuildTracesFromSession(sess domain.PracticeSession, samples []tracestore.Sa
 		return nil
 	}
 
-	type timeSpan struct {
-		lo, hi uint64
-	}
-	// Build active flight stint spans per pilot slot from recorded laps + manual crossing edits!
-	stintsBySlot := make(map[int][]timeSpan)
-	addPilotSpan := func(slot int, lo, hi uint64) {
-		if slot <= 0 || hi <= lo {
-			return
-		}
-		stintsBySlot[slot] = append(stintsBySlot[slot], timeSpan{lo: lo, hi: hi})
-	}
-	const stintPadUs = uint64(2_200_000)
-	for _, l := range sess.Laps {
-		if l.Invalidated || l.CompletedAtUs == 0 || l.LapTimeSec <= 0 {
-			continue
-		}
-		durUs := uint64(math.Round(l.LapTimeSec * 1e6))
-		startUs := uint64(0)
-		if l.CompletedAtUs > durUs+stintPadUs {
-			startUs = l.CompletedAtUs - durUs - stintPadUs
-		}
-		addPilotSpan(l.SlotIndex, startUs, l.CompletedAtUs+stintPadUs)
-	}
-	for _, c := range sess.Crossings {
-		if c.Manual && c.TimestampUs > 0 {
-			lo := uint64(0)
-			if c.TimestampUs > stintPadUs {
-				lo = c.TimestampUs - stintPadUs
-			}
-			addPilotSpan(c.SlotIndex, lo, c.TimestampUs+stintPadUs)
-		}
-	}
-	for _, del := range sess.ManualDeletedCrossings {
-		if del.TimestampUs > 0 {
-			lo := uint64(0)
-			if del.TimestampUs > stintPadUs {
-				lo = del.TimestampUs - stintPadUs
-			}
-			addPilotSpan(del.SlotIndex, lo, del.TimestampUs+stintPadUs)
-		}
-	}
-	for slot, list := range stintsBySlot {
-		sort.Slice(list, func(i, j int) bool { return list[i].lo < list[j].lo })
-		merged := list[:1]
-		for _, s := range list[1:] {
-			last := &merged[len(merged)-1]
-			// Merge back-to-back laps (gap <= 5.0 s); keep landings / breaks (> 5.0 s) separated!
-			if s.lo <= last.hi+5_000_000 {
-				if s.hi > last.hi {
-					last.hi = s.hi
-				}
-			} else {
-				merged = append(merged, s)
-			}
-		}
-		stintsBySlot[slot] = merged
-	}
+	stintsBySlot := BuildPilotFlightStints(sess)
 	inPilotStint := func(slot int, ts uint64) bool {
-		stints := stintsBySlot[slot]
-		if len(stints) == 0 {
-			return true // Fallback when session has crossings/traces before a completed lap
-		}
-		// Binary search merged stints
-		i := sort.Search(len(stints), func(k int) bool { return stints[k].hi >= ts })
-		return i < len(stints) && ts >= stints[i].lo
+		return InPilotFlightStint(stintsBySlot, slot, ts)
 	}
 
 	type gpKey struct {

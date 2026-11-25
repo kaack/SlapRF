@@ -1,6 +1,7 @@
 package gguf
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"runtime"
@@ -234,11 +235,19 @@ type Session struct {
 }
 
 // NewSession allocates a KV-cache session up to `maxSeq` tokens (e.g. `1024` or `2048`).
+// Worker count is capped (`<= 4`, leaving >= 2 cores free on mobile big.LITTLE SoCs) so background
+// System 1 labeling stays on fast performance cores and never starves 60 FPS UI or live BLE telemetry.
 func (m *Qwen3Model) NewSession(maxSeq int) *Session {
 	if maxSeq < 64 {
 		maxSeq = 64
 	}
-	workers := runtime.GOMAXPROCS(0)
+	procs := runtime.GOMAXPROCS(0)
+	workers := procs
+	if procs >= 6 {
+		workers = 4
+	} else if procs >= 3 {
+		workers = procs - 1
+	}
 	if workers < 1 {
 		workers = 1
 	}
@@ -315,12 +324,21 @@ func applyHeadRMSNormAndNeoXRoPE(vec []float32, nHeads, headDim int, normWeight 
 }
 
 // ForwardTokens ingests `tokens` (`len >= 1`) starting at `s.pos`, updating the KV cache and `s.lastOut`.
-// When `len(tokens) > 1`, linear projections run as batched matrix-matrix products (`MatBatch`) so weights
-// are streamed from memory only once across the entire prompt or deterministic JSON template chunk!
 func (s *Session) ForwardTokens(tokens []int) error {
+	return s.ForwardTokensCtx(context.Background(), tokens)
+}
+
+// ForwardTokensCtx ingests `tokens` (`len >= 1`) starting at `s.pos`, checking `ctx.Err()` before each
+// transformer block so canceling an on-device Auto-Label job aborts in `< 50 ms` and frees RAM immediately.
+func (s *Session) ForwardTokensCtx(ctx context.Context, tokens []int) error {
 	T := len(tokens)
 	if T == 0 {
 		return nil
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
 	m := s.model
 	if s.pos+T > s.maxSeq {
@@ -368,6 +386,11 @@ func (s *Session) ForwardTokens(tokens []int) error {
 	layerKVStride := s.maxSeq * kvDim
 
 	for il := 0; il < m.NLayer; il++ {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		ly := &m.layers[il]
 		for t := 0; t < T; t++ {
 			rmsNorm(normed[t*nEmbd:(t+1)*nEmbd], x[t*nEmbd:(t+1)*nEmbd], ly.attnNorm, m.RMSNormEps)

@@ -546,6 +546,45 @@ export class AppStore {
     return this.sessionTraces.has(sessionId);
   }
 
+  public sessionTraceMaxTsUs(sessionId: string): number {
+    return this.sessionTraces.get(sessionId)?.maxTsUs ?? 0;
+  }
+
+  /**
+   * Returns full recorded `.rfbin` frames for `sessionId` and `gateId` (sorted ascending by `timestampUs`),
+   * merging any newer live WebSocket ring-buffer frames when `isSessionActive` is true so historical laps
+   * in an active Practice session always display their full RSSI waveforms!
+   */
+  public sessionTraceHistoryFor(
+    sessionId: string,
+    gateId: number,
+    isSessionActive = false
+  ): TimerTelemetryFrame[] {
+    const cached = this.sessionTraces.get(sessionId);
+    const cachedGate = cached?.byGate.get(gateId) ?? [];
+    if (!isSessionActive) {
+      return cachedGate;
+    }
+    const live = this.historyFor(gateId);
+    if (cachedGate.length === 0) {
+      return live;
+    }
+    if (live.length === 0) {
+      return cachedGate;
+    }
+    const lastCachedTs = cachedGate[cachedGate.length - 1].timestampUs;
+    if (live[live.length - 1].timestampUs <= lastCachedTs) {
+      return cachedGate;
+    }
+    const merged = cachedGate.slice();
+    for (let i = 0; i < live.length; i++) {
+      if (live[i].timestampUs > lastCachedTs) {
+        merged.push(live[i]);
+      }
+    }
+    return merged;
+  }
+
   public setSessionTrace(sessionId: string, frames: TimerTelemetryFrame[]): void {
     const byGate = new Map<number, TimerTelemetryFrame[]>();
     let maxTsUs = 0;
@@ -560,6 +599,15 @@ export class AppStore {
         byGate.set(fr.timerId, arr);
       }
       arr.push(fr);
+    }
+    // Guarantee ascending `timestampUs` per gate even if an active session spanned a host restart!
+    for (const arr of byGate.values()) {
+      for (let i = 1; i < arr.length; i++) {
+        if (arr[i].timestampUs < arr[i - 1].timestampUs) {
+          arr.sort((a, b) => a.timestampUs - b.timestampUs);
+          break;
+        }
+      }
     }
     this.sessionTraces.set(sessionId, { byGate, maxTsUs });
     // Evict oldest cached traces beyond 16 sessions in browser RAM
