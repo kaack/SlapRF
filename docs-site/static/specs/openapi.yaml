@@ -6370,6 +6370,10 @@ paths:
                   type: string
                 liveTuneEnabled:
                   type: boolean
+                teacherPackId:
+                  type: string
+                autoLabelOnTrain:
+                  type: boolean
                 resetLiveTunes:
                   type: boolean
       responses:
@@ -6398,6 +6402,8 @@ paths:
                   example: 28
                 includeUnverified:
                   type: boolean
+                autoLabel:
+                  type: boolean
                 sessionIds:
                   type: array
                   items:
@@ -6420,6 +6426,86 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/ml/teacher:
+    get:
+      tags: [AI Detector & Traces]
+      summary: Read on-device System 1 Qwen3 GGUF teacher pack catalog, installation status, and download progress
+      operationId: getMLTeacherStatus
+      responses:
+        "200":
+          description: Current on-device teacher model status
+
+  /v1/ml/teacher:download:
+    post:
+      tags: [AI Detector & Traces]
+      summary: Start or resume downloading an on-device System 1 GGUF teacher model pack
+      operationId: downloadMLTeacherPack
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                packId:
+                  type: string
+                  example: qwen3-1.7b-q4_k_m
+      responses:
+        "202":
+          description: Download started or pack already installed
+
+  /v1/ml/teacher:cancel:
+    post:
+      tags: [AI Detector & Traces]
+      summary: Cancel an active teacher GGUF download while keeping partial bytes for resume
+      operationId: cancelMLTeacherDownload
+      responses:
+        "200":
+          description: Download canceled
+
+  /v1/ml/teacher/{packId}:
+    delete:
+      tags: [AI Detector & Traces]
+      summary: Remove a downloaded teacher GGUF pack from device storage
+      operationId: deleteMLTeacherPack
+      parameters:
+        - name: packId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated ML status
+
+  /v1/ml/sessions/{sessionId}:label:
+    post:
+      tags: [AI Detector & Traces]
+      summary: Run the on-device System 1 Qwen3 teacher on a Practice session's .rfbin RSSI trace
+      operationId: labelPracticeSessionWithTeacher
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dryRun:
+                  type: boolean
+                slotIndex:
+                  type: integer
+                packId:
+                  type: string
+      responses:
+        "200":
+          description: Candidate classification decisions and (when dryRun=false) updated Practice & ML state
 
   /v1/ml/models:
     post:
