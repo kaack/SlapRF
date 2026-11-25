@@ -300,6 +300,20 @@ func (e *Engine) ensureMLInitializedLocked() {
 	if e.mlState.Config.TeacherPackID == "" {
 		e.mlState.Config.TeacherPackID = ml.DefaultTeacherPackID
 	}
+	builtinCreatedAt := ml.PretrainedBaseSummary().CreatedAt
+	if len(e.mlState.Models) > 0 {
+		kept := e.mlState.Models[:0]
+		for _, m := range e.mlState.Models {
+			if m.ModelID == "ai-base-v0" && m.CreatedAt < builtinCreatedAt {
+				if e.mlActiveModelID == "ai-base-v0" {
+					e.mlActiveTCN = nil
+				}
+				continue
+			}
+			kept = append(kept, m)
+		}
+		e.mlState.Models = kept
+	}
 }
 
 func (e *Engine) resolveActiveTCNLocked() *ml.TCN {

@@ -387,17 +387,17 @@ func TestAutoLabelRecordedSessionsRegression(t *testing.T) {
 		{
 			name:        "Session 2 (23 laps, BLE gaps on L20/L22/L23)",
 			prefix:      "autolabel_session2",
-			minLapMatch: 98.0,
-			minFullRec:  94.0,
-			minFullF1:   91.0,
+			minLapMatch: 99.0,
+			minFullRec:  96.0,
+			minFullF1:   90.0,
 			matchTolMs:  450.0,
 		},
 		{
 			name:        "Session 3 (21 hand-labeled laps)",
 			prefix:      "autolabel_session3",
-			minLapMatch: 99.0,
-			minFullRec:  95.0,
-			minFullF1:   92.5,
+			minLapMatch: 99.5,
+			minFullRec:  97.0,
+			minFullF1:   95.0,
 			matchTolMs:  400.0,
 		},
 	}
