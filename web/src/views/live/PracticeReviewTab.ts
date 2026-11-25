@@ -217,9 +217,11 @@ export class PracticeReviewTab extends Component {
     const rssiBtn = target.closest<HTMLButtonElement>("[data-review-open-lap-rssi]");
     if (rssiBtn) {
       e.stopPropagation();
+      const lapId = Number(rssiBtn.dataset.reviewOpenLapRssi || "0") || undefined;
       const startUs = Number(rssiBtn.dataset.lapStartUs || "0");
       const endUs = Number(rssiBtn.dataset.lapEndUs || "0");
       openPracticeLapEditorModal(this.store, this.api, sess.sessionId, this.selectedSlot, {
+        initialLapId: lapId,
         focusStartUs: startUs,
         focusEndUs: endUs,
       });
