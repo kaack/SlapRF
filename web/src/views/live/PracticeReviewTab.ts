@@ -1,7 +1,6 @@
 import { Component } from "../../core/component";
 import { esc, fmtDelta, fmtTime, LAP_BREAK_GAP_THRESHOLD_SEC, lapBreakGapSec, renderLapBreakRowHtml } from "../../core/format";
 import { icons } from "../../core/icons";
-import { formatBandChannelShort } from "../../core/vtx_channels";
 import { ApiClient } from "../../services/api_client";
 import { AppStore } from "../../state/store";
 import { LapRecord, PracticeSession } from "../../types/models";
@@ -91,7 +90,6 @@ export class PracticeReviewTab extends Component {
     const slot = this.resolveActivePilotSlot(sess);
     const pilot = sess.pilots.find((p) => p.slotIndex === slot);
     const callsign = pilot?.callsign || `Pilot ${slot}`;
-    const chLabel = pilot?.channel ? formatBandChannelShort(pilot.band, pilot.channel) : "";
     const pilotLaps: LapRecord[] = (sess.laps ?? [])
       .filter((l) => l.slotIndex === slot)
       .sort(
@@ -103,24 +101,6 @@ export class PracticeReviewTab extends Component {
       (b, l) => (l.lapTimeSec > 0 && (b === 0 || l.lapTimeSec < b) ? l.lapTimeSec : b),
       0
     );
-    const passCount = (sess.crossings ?? []).filter((c) => c.slotIndex === slot).length;
-
-    const pilotTabsHtml =
-      sess.pilots.length > 1
-        ? `<div class="practice-review-pilots">
-            ${sess.pilots
-              .map((p) => {
-                const isAct = p.slotIndex === slot;
-                const ch = p.channel ? formatBandChannelShort(p.band, p.channel) : "";
-                return `<button type="button" class="pilot-chip ${isAct ? "is-active" : ""}" style="--c:${esc(p.color || "#38bdf8")}" data-review-pilot="${p.slotIndex}">
-                  <span class="dot" style="--c:${esc(p.color || "#38bdf8")}"></span>
-                  <span class="pilot-chip-name">${esc(p.callsign)}</span>
-                  ${ch ? `<span class="pilot-chip-chan">${esc(ch)}</span>` : ""}
-                </button>`;
-              })
-              .join("")}
-          </div>`
-        : "";
 
     const orderedNodes = this.store.practiceSessionNodes(sess).nodes;
     const expectedSectors = orderedNodes.length >= 2 ? orderedNodes.length : 0;
@@ -211,14 +191,7 @@ export class PracticeReviewTab extends Component {
 
     this.el.innerHTML = `
       <div class="practice-review-pane">
-        ${pilotTabsHtml}
         <section class="card card-flush practice-review-card">
-          <header class="rc-panel-header">
-            <div class="rc-panel-title-wrap">
-              <span class="dot" style="background:${esc(pilot?.color || "#38bdf8")}"></span>
-              <strong>${esc(callsign)}${chLabel ? ` (${esc(chLabel)})` : ""}</strong>
-            </div>
-          </header>
           <div class="table-scroll practice-review-table-scroll">
             <table class="table table-compact practice-review-table">
               <thead>
@@ -242,15 +215,6 @@ export class PracticeReviewTab extends Component {
     if (!(target instanceof Element)) return;
     const sess = this.store.selectedPracticeSession;
     if (!sess) return;
-
-    const pilotBtn = target.closest<HTMLButtonElement>("[data-review-pilot]");
-    if (pilotBtn) {
-      const nextSlot = Number(pilotBtn.dataset.reviewPilot || "1");
-      this.selectedSlot = nextSlot;
-      this.store.setLiveFocus(nextSlot);
-      this.render(true);
-      return;
-    }
 
     if (target.closest("[data-review-open-editor]")) {
       openPracticeLapEditorModal(this.store, this.api, sess.sessionId, this.selectedSlot);

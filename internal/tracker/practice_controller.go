@@ -336,7 +336,18 @@ func (e *Engine) disambiguateDuplicatePracticeNamesLocked() {
 // recomputePracticeSessionLapsLocked ensures wall-clock CompletedAtMs timestamps exist on all laps
 // and recomputes personal bests, deltas, and sector split badges across valid (non-invalidated) laps.
 func (e *Engine) recomputePracticeSessionLapsLocked(sess *domain.PracticeSession) {
-	if sess == nil || len(sess.Laps) == 0 {
+	if sess == nil {
+		return
+	}
+	if len(sess.Crossings) > 1 {
+		sortCrossingsChronological(sess.Crossings)
+	}
+	if len(sess.Filtered) > 1 {
+		sort.SliceStable(sess.Filtered, func(a, b int) bool {
+			return sess.Filtered[a].TimestampUs < sess.Filtered[b].TimestampUs
+		})
+	}
+	if len(sess.Laps) == 0 {
 		return
 	}
 	sort.SliceStable(sess.Laps, func(a, b int) bool {

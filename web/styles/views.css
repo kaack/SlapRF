@@ -23111,11 +23111,12 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
     display: none !important;
   }
 
-  .practice-workspace-page:not([data-mobile-practice-view="laps"]):not([data-mobile-practice-view="trends"]):not([data-mobile-practice-view="signals"]) .practice-picker-row {
+  .practice-workspace-page:not([data-mobile-practice-view="laps"]):not([data-mobile-practice-view="review"]):not([data-mobile-practice-view="trends"]):not([data-mobile-practice-view="signals"]) .practice-picker-row {
     display: none !important;
   }
 
   .practice-workspace-page[data-mobile-practice-view="laps"] .practice-picker-row .pilot-chip-all,
+  .practice-workspace-page[data-mobile-practice-view="review"] .practice-picker-row .pilot-chip-all,
   .practice-workspace-page[data-mobile-practice-view="signals"] .practice-picker-row .pilot-chip-all,
   .practice-workspace-page .practice-mobile-signals-panel .rc-signals-pilot-wrap {
     display: none !important;
@@ -26016,11 +26017,12 @@ html[data-theme="light"] .mre-sheet-check-toggle input[type="checkbox"]:checked:
     display: none !important;
   }
 
-  .practice-workspace-page:not([data-mobile-practice-view="laps"]):not([data-mobile-practice-view="trends"]) .practice-picker-row {
+  .practice-workspace-page:not([data-mobile-practice-view="laps"]):not([data-mobile-practice-view="review"]):not([data-mobile-practice-view="trends"]) .practice-picker-row {
     display: none !important;
   }
 
-  .practice-workspace-page[data-mobile-practice-view="laps"] .practice-picker-row .pilot-chip-all {
+  .practice-workspace-page[data-mobile-practice-view="laps"] .practice-picker-row .pilot-chip-all,
+  .practice-workspace-page[data-mobile-practice-view="review"] .practice-picker-row .pilot-chip-all {
     display: none !important;
   }
 
@@ -26137,6 +26139,7 @@ html[data-theme="light"] .mre-sheet-check-toggle input[type="checkbox"]:checked:
   .practice-workspace-page .practice-trends-card .canvas-host-lg,
   .practice-workspace-page .practice-sections-card,
   .practice-workspace-page .practice-laps-card,
+  .practice-workspace-page .practice-review-card,
   .practice-workspace-page .stat-row {
     border-color: var(--border-strong);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
@@ -26159,6 +26162,7 @@ html[data-theme="light"] .mre-sheet-check-toggle input[type="checkbox"]:checked:
   html[data-theme="light"] .practice-workspace-page .practice-trends-card .canvas-host-lg,
   html[data-theme="light"] .practice-workspace-page .practice-sections-card,
   html[data-theme="light"] .practice-workspace-page .practice-laps-card,
+  html[data-theme="light"] .practice-workspace-page .practice-review-card,
   html[data-theme="light"] .practice-workspace-page .stat-row {
     background: var(--node-surface);
     --laps-sticky-bg: var(--node-surface);

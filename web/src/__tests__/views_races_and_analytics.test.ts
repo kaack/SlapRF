@@ -2694,7 +2694,9 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       await flushMicrotasks();
 
       const reviewPane = host.querySelector<HTMLElement>('[data-slot="mobile-review"]')!;
-      expect(reviewPane.textContent ?? "").toContain("OneEye (R7)");
+      const pickerRow = host.querySelector<HTMLElement>(".practice-picker-row")!;
+      expect(pickerRow.textContent ?? "").toContain("OneEye");
+      expect(reviewPane.querySelector(".rc-panel-header")).toBeNull();
       expect(reviewPane.textContent ?? "").toContain("L1");
       // L1 & L2 missed T1 (`sectors.length < 2`), so Review highlights them in red with `[data-missed-timers]`!
       expect(

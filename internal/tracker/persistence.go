@@ -464,6 +464,7 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 			e.lastAcceptedUs[ckey] = ev.TimestampUs
 		}
 	}
+	sortCrossingsChronological(e.crossings)
 	if len(e.crossings) > maxStoredCrossings {
 		e.crossings = e.crossings[len(e.crossings)-maxStoredCrossings:]
 	}

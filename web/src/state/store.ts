@@ -318,6 +318,63 @@ const DEFAULT_PRACTICE_STATE: PracticeManagerState = {
   sessions: [],
 };
 
+function sortLapsChronological(laps: LapRecord[]): LapRecord[] {
+  if (laps.length <= 1) return laps;
+  let sorted = true;
+  for (let i = 1; i < laps.length; i++) {
+    const prev = laps[i - 1];
+    const cur = laps[i];
+    if (
+      prev.completedAtUs > cur.completedAtUs ||
+      (prev.completedAtUs === cur.completedAtUs &&
+        (prev.lapNumber > cur.lapNumber ||
+          (prev.lapNumber === cur.lapNumber && prev.lapId > cur.lapId)))
+    ) {
+      sorted = false;
+      break;
+    }
+  }
+  if (sorted) return laps;
+  return laps
+    .slice()
+    .sort(
+      (a, b) =>
+        a.completedAtUs - b.completedAtUs || a.lapNumber - b.lapNumber || a.lapId - b.lapId
+    );
+}
+
+function sortCrossingsChronological(crossings: GateCrossingEvent[]): GateCrossingEvent[] {
+  if (crossings.length <= 1) return crossings;
+  let sorted = true;
+  for (let i = 1; i < crossings.length; i++) {
+    const prev = crossings[i - 1];
+    const cur = crossings[i];
+    if (
+      prev.timestampUs > cur.timestampUs ||
+      (prev.timestampUs === cur.timestampUs && (prev.eventId ?? 0) > (cur.eventId ?? 0))
+    ) {
+      sorted = false;
+      break;
+    }
+  }
+  if (sorted) return crossings;
+  return crossings
+    .slice()
+    .sort((a, b) => a.timestampUs - b.timestampUs || (a.eventId ?? 0) - (b.eventId ?? 0));
+}
+
+function sortFilteredChronological(filtered: FilteredDetection[]): FilteredDetection[] {
+  if (filtered.length <= 1) return filtered;
+  let sorted = true;
+  for (let i = 1; i < filtered.length; i++) {
+    if (filtered[i - 1].timestampUs > filtered[i].timestampUs) {
+      sorted = false;
+      break;
+    }
+  }
+  return sorted ? filtered : filtered.slice().sort((a, b) => a.timestampUs - b.timestampUs);
+}
+
 function normalizePracticeSession(raw: PracticeSession): PracticeSession {
   return {
     ...raw,
@@ -327,10 +384,12 @@ function normalizePracticeSession(raw: PracticeSession): PracticeSession {
     trackSnapshot: normalizeTrackSnapshot(raw.trackSnapshot, raw.trackInitialized),
     rules: raw.rules ? { ...DEFAULT_RULES, ...raw.rules } : undefined,
     laps: Array.isArray(raw.laps)
-      ? raw.laps.map((l) => (Array.isArray(l.sectors) ? l : { ...l, sectors: [] }))
+      ? sortLapsChronological(
+          raw.laps.map((l) => (Array.isArray(l.sectors) ? l : { ...l, sectors: [] }))
+        )
       : [],
-    crossings: Array.isArray(raw.crossings) ? raw.crossings : [],
-    filtered: Array.isArray(raw.filtered) ? raw.filtered : [],
+    crossings: Array.isArray(raw.crossings) ? sortCrossingsChronological(raw.crossings) : [],
+    filtered: Array.isArray(raw.filtered) ? sortFilteredChronological(raw.filtered) : [],
     summaries: Array.isArray(raw.summaries) ? raw.summaries : [],
   };
 }
@@ -1958,9 +2017,11 @@ export class AppStore {
     this._pilots = state.pilots ?? [];
     this.setNodes(state.gates ?? []);
     this._detectedTimers = state.timers ?? [];
-    this._laps = (state.laps ?? []).map((l) => (Array.isArray(l.sectors) ? l : { ...l, sectors: [] }));
-    this._crossings = state.crossings ?? [];
-    this._filtered = state.filtered ?? [];
+    this._laps = sortLapsChronological(
+      (state.laps ?? []).map((l) => (Array.isArray(l.sectors) ? l : { ...l, sectors: [] }))
+    );
+    this._crossings = sortCrossingsChronological(state.crossings ?? []);
+    this._filtered = sortFilteredChronological(state.filtered ?? []);
     this._summaries = state.summaries ?? [];
     this._rules = normalizeTimingRules(state.rules);
     this._timingHardwareMode = normalizeTimingHardwareMode(state.timingHardwareMode);

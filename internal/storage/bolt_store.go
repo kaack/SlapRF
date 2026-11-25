@@ -623,6 +623,15 @@ func (s *BoltStore) LoadEngineState(isSim bool) (tracker.PersistedEngineState, i
 					hasAny = true
 				}
 			}
+			sort.SliceStable(state.Laps, func(i, j int) bool {
+				if state.Laps[i].CompletedAtUs != state.Laps[j].CompletedAtUs {
+					return state.Laps[i].CompletedAtUs < state.Laps[j].CompletedAtUs
+				}
+				if state.Laps[i].LapNumber != state.Laps[j].LapNumber {
+					return state.Laps[i].LapNumber < state.Laps[j].LapNumber
+				}
+				return state.Laps[i].LapID < state.Laps[j].LapID
+			})
 		}
 		if cb := tx.Bucket(crossName); cb != nil {
 			c := cb.Cursor()
@@ -633,6 +642,12 @@ func (s *BoltStore) LoadEngineState(isSim bool) (tracker.PersistedEngineState, i
 					hasAny = true
 				}
 			}
+			sort.SliceStable(state.Crossings, func(i, j int) bool {
+				if state.Crossings[i].TimestampUs != state.Crossings[j].TimestampUs {
+					return state.Crossings[i].TimestampUs < state.Crossings[j].TimestampUs
+				}
+				return state.Crossings[i].EventID < state.Crossings[j].EventID
+			})
 		}
 		if fb := tx.Bucket(filtName); fb != nil {
 			c := fb.Cursor()
@@ -643,6 +658,9 @@ func (s *BoltStore) LoadEngineState(isSim bool) (tracker.PersistedEngineState, i
 					hasAny = true
 				}
 			}
+			sort.SliceStable(state.Filtered, func(i, j int) bool {
+				return state.Filtered[i].TimestampUs < state.Filtered[j].TimestampUs
+			})
 		}
 		return nil
 	})
@@ -676,7 +694,15 @@ func syncActivePracticeSessionEvents(state *tracker.PersistedEngineState) {
 			for _, l := range byID {
 				merged = append(merged, l)
 			}
-			sort.Slice(merged, func(i, j int) bool { return merged[i].LapID < merged[j].LapID })
+			sort.SliceStable(merged, func(i, j int) bool {
+				if merged[i].CompletedAtUs != merged[j].CompletedAtUs {
+					return merged[i].CompletedAtUs < merged[j].CompletedAtUs
+				}
+				if merged[i].LapNumber != merged[j].LapNumber {
+					return merged[i].LapNumber < merged[j].LapNumber
+				}
+				return merged[i].LapID < merged[j].LapID
+			})
 			sess.Laps = merged
 		}
 		if len(state.Crossings) > 0 {
@@ -691,7 +717,12 @@ func syncActivePracticeSessionEvents(state *tracker.PersistedEngineState) {
 			for _, c := range byID {
 				merged = append(merged, c)
 			}
-			sort.Slice(merged, func(i, j int) bool { return merged[i].EventID < merged[j].EventID })
+			sort.SliceStable(merged, func(i, j int) bool {
+				if merged[i].TimestampUs != merged[j].TimestampUs {
+					return merged[i].TimestampUs < merged[j].TimestampUs
+				}
+				return merged[i].EventID < merged[j].EventID
+			})
 			sess.Crossings = merged
 		}
 		if len(state.Filtered) > len(sess.Filtered) {

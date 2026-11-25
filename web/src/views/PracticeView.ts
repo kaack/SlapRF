@@ -718,6 +718,7 @@ export class PracticeView extends Component {
     }
     if (
       tab !== "laps" &&
+      tab !== "review" &&
       tab !== "trends" &&
       tab !== "signals" &&
       tab !== "analytics"
