@@ -83,7 +83,7 @@ export class CrossingDetectorCard extends Component {
   }
 
   private trainedModels(): MLModelSummary[] {
-    return (this.store.mlStatus?.models ?? []).filter((m) => !m.builtIn);
+    return this.store.mlStatus?.models ?? [];
   }
 
   private render(): void {
@@ -113,7 +113,8 @@ export class CrossingDetectorCard extends Component {
     const optionsHtml = trained
       .map((m) => {
         const sel = m.modelId === selectedId ? "selected" : "";
-        return `<option value="${esc(m.modelId)}" ${sel}>${esc(m.name)}</option>`;
+        const lbl = m.builtIn ? `${m.name} (1P)` : m.name;
+        return `<option value="${esc(m.modelId)}" ${sel}>${esc(lbl)}</option>`;
       })
       .join("");
 

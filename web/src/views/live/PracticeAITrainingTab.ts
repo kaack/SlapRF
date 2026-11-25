@@ -89,13 +89,13 @@ export class PracticeAITrainingTab extends Component {
     );
   }
 
-  private customModels(): MLModelSummary[] {
-    return (this.store.mlStatus.models ?? []).filter((m) => !m.builtIn);
+  private allModels(): MLModelSummary[] {
+    return this.store.mlStatus.models ?? [];
   }
 
   private defaultNewModelName(sess: PracticeSession | undefined): string {
     const base = sess?.name?.trim() || "Practice";
-    const models = this.customModels();
+    const models = this.allModels();
     if (!models.some((m) => m.name.toLowerCase() === base.toLowerCase())) {
       return base;
     }
@@ -107,7 +107,7 @@ export class PracticeAITrainingTab extends Component {
   }
 
   private resolveSelectedModel(sess: PracticeSession | undefined): MLModelSummary | null {
-    const models = this.customModels();
+    const models = this.allModels();
     if (models.length === 0) return null;
     if (this.selectedModelId) {
       const m = models.find((x) => x.modelId === this.selectedModelId);
@@ -131,7 +131,7 @@ export class PracticeAITrainingTab extends Component {
   }
 
   private resolveTrainMode(sess: PracticeSession | undefined): AITrainMode {
-    const models = this.customModels();
+    const models = this.allModels();
     if (models.length === 0) return "new";
     if (this.trainMode) return this.trainMode;
     if (
@@ -144,7 +144,7 @@ export class PracticeAITrainingTab extends Component {
     ) {
       return "finetune";
     }
-    return "new";
+    return "finetune";
   }
 
   private computeSig(): string {
@@ -152,10 +152,10 @@ export class PracticeAITrainingTab extends Component {
     const ml = this.store.mlStatus;
     const others = this.otherRecordedSessions(sess?.sessionId ?? "");
     const mode = this.resolveTrainMode(sess);
-    const modelsSig = this.customModels()
+    const modelsSig = this.allModels()
       .map(
         (m) =>
-          `${m.modelId}:${m.name}:${m.ready ? 1 : 0}:${m.epochsTrained ?? 0}:${m.aiMetrics?.f1 ?? 0}:${m.finalLoss}`
+          `${m.modelId}:${m.name}:${m.builtIn ? 1 : 0}:${m.epochsTrained ?? 0}:${m.aiMetrics?.f1 ?? 0}:${m.finalLoss}`
       )
       .join("|");
     return [
@@ -194,7 +194,7 @@ export class PracticeAITrainingTab extends Component {
     const completedId = this.store.mlStatus.training.completedModelId || "";
     if (completedId && completedId !== this.lastCompletedId) {
       this.lastCompletedId = completedId;
-      if (this.customModels().some((m) => m.modelId === completedId)) {
+      if (this.allModels().some((m) => m.modelId === completedId)) {
         this.selectedModelId = completedId;
         this.trainMode = "finetune";
       }
@@ -223,7 +223,7 @@ export class PracticeAITrainingTab extends Component {
     }
 
     const ml = this.store.mlStatus;
-    const customModels = this.customModels();
+    const models = this.allModels();
     const mode = this.resolveTrainMode(sess);
     const curLaps = countValidLaps(sess);
     const curPasses = countValidPasses(sess);
@@ -254,7 +254,7 @@ export class PracticeAITrainingTab extends Component {
       ${this.statusMsg ? `<div class="ai-train-banner is-ok" role="status">${esc(this.statusMsg)}</div>` : ""}`;
 
     const modeTabsHtml =
-      customModels.length > 0
+      models.length > 0
         ? `<div class="segmented ai-mode-seg" role="tablist" aria-label="Training mode">
              <button
                type="button"
@@ -275,12 +275,12 @@ export class PracticeAITrainingTab extends Component {
            </div>`
         : "";
 
-    const targetFineTuneModel = selectedModel ?? customModels[0] ?? null;
+    const targetFineTuneModel = selectedModel ?? models[0] ?? null;
     const controlsRowHtml =
       mode === "finetune" && targetFineTuneModel
         ? `<div class="ai-train-controls-row">
              ${
-               this.editingModelName
+               this.editingModelName && !targetFineTuneModel.builtIn
                  ? `<input
                       type="text"
                       class="input ai-name-input"
@@ -292,15 +292,19 @@ export class PracticeAITrainingTab extends Component {
                     />`
                  : `<div class="ai-name-readonly-field" data-ai-readonly-field>
                       <span class="ai-name-readonly-text">${esc(targetFineTuneModel.name)}</span>
-                      <button
-                        type="button"
-                        class="ai-name-pencil-btn"
-                        data-ai-act="edit-model-name"
-                        data-model-id="${esc(targetFineTuneModel.modelId)}"
-                        title="Rename model"
-                        aria-label="Rename model"
-                        ${isBusy ? "disabled" : ""}
-                      >${icons.pencil(13)}</button>
+                      ${
+                        targetFineTuneModel.builtIn
+                          ? `<span class="ai-1p-badge" title="Shipped 1P model">1P</span>`
+                          : `<button
+                               type="button"
+                               class="ai-name-pencil-btn"
+                               data-ai-act="edit-model-name"
+                               data-model-id="${esc(targetFineTuneModel.modelId)}"
+                               title="Rename model"
+                               aria-label="Rename model"
+                               ${isBusy ? "disabled" : ""}
+                             >${icons.pencil(13)}</button>`
+                      }
                     </div>`
              }
              <button
@@ -341,7 +345,8 @@ export class PracticeAITrainingTab extends Component {
           <div class="ai-scorecard-head">
             <div class="ai-scorecard-title-wrap">
               <strong class="ai-model-name">${esc(shownScorecardModel.name)}</strong>
-              <span class="note mono">${shownScorecardModel.epochsTrained ?? 28}ep</span>
+              ${shownScorecardModel.builtIn ? `<span class="ai-1p-badge">1P</span>` : ""}
+              <span class="note mono">${shownScorecardModel.epochsTrained || 18}ep</span>
             </div>
             ${
               isScorecardActive
@@ -386,7 +391,7 @@ export class PracticeAITrainingTab extends Component {
       : "";
 
     const savedModelsHtml =
-      customModels.length > 0
+      models.length > 0
         ? `
         <div class="card ai-train-card">
           <div class="ai-scorecard-head">
@@ -400,7 +405,7 @@ export class PracticeAITrainingTab extends Component {
             </div>
           </div>
           <div class="ai-model-list">
-            ${customModels
+            ${models
               .map((m) => {
                 const isActive =
                   ml.config.detectorMode === "ai" && ml.config.activeModelId === m.modelId;
@@ -414,7 +419,8 @@ export class PracticeAITrainingTab extends Component {
                       data-model-id="${esc(m.modelId)}"
                     >
                       <span class="ai-model-name">${esc(m.name)}</span>
-                      <span class="ai-model-stats mono">${(m.aiMetrics.f1 * 100).toFixed(0)}% · ${m.epochsTrained ?? 28}ep</span>
+                      ${m.builtIn ? `<span class="ai-1p-badge" title="Shipped 1P model">1P</span>` : ""}
+                      <span class="ai-model-stats mono">${(m.aiMetrics.f1 * 100).toFixed(0)}% · ${m.epochsTrained || 18}ep</span>
                     </button>
                     <div class="ai-model-row-actions">
                       ${
@@ -427,14 +433,18 @@ export class PracticeAITrainingTab extends Component {
                                data-model-id="${esc(m.modelId)}"
                              >Use</button>`
                       }
-                      <button
-                        type="button"
-                        class="btn btn-ghost btn-xs ai-model-del-btn"
-                        data-ai-act="delete-model"
-                        data-model-id="${esc(m.modelId)}"
-                        title="Delete ${esc(m.name)}"
-                        aria-label="Delete ${esc(m.name)}"
-                      >${icons.trash(13)}</button>
+                      ${
+                        m.builtIn
+                          ? ""
+                          : `<button
+                               type="button"
+                               class="btn btn-ghost btn-xs ai-model-del-btn"
+                               data-ai-act="delete-model"
+                               data-model-id="${esc(m.modelId)}"
+                               title="Delete ${esc(m.name)}"
+                               aria-label="Delete ${esc(m.name)}"
+                             >${icons.trash(13)}</button>`
+                      }
                     </div>
                   </div>`;
               })
@@ -546,9 +556,9 @@ export class PracticeAITrainingTab extends Component {
 
   private commitModelRename(modelId: string, rawName: string): void {
     this.editingModelName = false;
-    const mod = this.customModels().find((m) => m.modelId === modelId);
+    const mod = this.allModels().find((m) => m.modelId === modelId);
     const trimmed = rawName.trim();
-    if (!mod || !trimmed || trimmed === mod.name) {
+    if (!mod || mod.builtIn || !trimmed || trimmed === mod.name) {
       this.render(true);
       return;
     }
@@ -636,8 +646,8 @@ export class PracticeAITrainingTab extends Component {
 
       case "edit-model-name": {
         const id = btn.dataset.modelId || "";
-        const mod = this.customModels().find((m) => m.modelId === id);
-        if (!mod) return;
+        const mod = this.allModels().find((m) => m.modelId === id);
+        if (!mod || mod.builtIn) return;
         this.selectedModelId = mod.modelId;
         this.editingModelName = true;
         this.renameDraft = mod.name;
@@ -648,7 +658,7 @@ export class PracticeAITrainingTab extends Component {
 
       case "focus-model": {
         const id = btn.dataset.modelId || "";
-        const mod = this.customModels().find((m) => m.modelId === id);
+        const mod = this.allModels().find((m) => m.modelId === id);
         if (mod) {
           this.selectedModelId = mod.modelId;
           this.trainMode = "finetune";
@@ -721,7 +731,7 @@ export class PracticeAITrainingTab extends Component {
 
       case "use-model": {
         const modelId = btn.dataset.modelId || "";
-        const mod = this.customModels().find((m) => m.modelId === modelId);
+        const mod = this.allModels().find((m) => m.modelId === modelId);
         if (!mod) return;
         this.selectedModelId = mod.modelId;
         void this.api
@@ -736,7 +746,8 @@ export class PracticeAITrainingTab extends Component {
 
       case "delete-model": {
         const modelId = btn.dataset.modelId || "";
-        if (!modelId) return;
+        const mod = this.allModels().find((m) => m.modelId === modelId);
+        if (!modelId || mod?.builtIn) return;
         if (this.selectedModelId === modelId) {
           this.selectedModelId = "";
         }

@@ -171,11 +171,16 @@ func (e *Engine) buildMLStatusLocked() domain.MLStatus {
 	builtinSum := ml.PretrainedBaseSummary()
 	models := make([]domain.MLModelSummary, 0, 1+len(e.mlState.Models))
 	hasBuiltin := false
-	for _, m := range e.mlState.Models {
-		if m.ModelID == builtinSum.ModelID {
+	for i := range e.mlState.Models {
+		if e.mlState.Models[i].ModelID == builtinSum.ModelID {
 			hasBuiltin = true
+			e.mlState.Models[i].BuiltIn = true
+			e.mlState.Models[i].Ready = true
+			if e.mlState.Models[i].Name == "" || strings.HasPrefix(e.mlState.Models[i].Name, "AI Base v0") {
+				e.mlState.Models[i].Name = builtinSum.Name
+			}
 		}
-		models = append(models, m.MLModelSummary)
+		models = append(models, e.mlState.Models[i].MLModelSummary)
 	}
 	if !hasBuiltin {
 		models = append(models, builtinSum)
@@ -752,10 +757,20 @@ func (e *Engine) UpdateMLModel(modelID string, req MLModelUpdatePayload) (domain
 			break
 		}
 	}
+	if id == "ai-base-v0" {
+		st := e.buildMLStatusLocked()
+		e.mu.Unlock()
+		return st, fmt.Errorf("1P built-in model %q cannot be renamed", id)
+	}
 	if idx < 0 {
 		st := e.buildMLStatusLocked()
 		e.mu.Unlock()
 		return st, fmt.Errorf("unknown modelId %q", id)
+	}
+	if e.mlState.Models[idx].BuiltIn && req.Name != nil {
+		st := e.buildMLStatusLocked()
+		e.mu.Unlock()
+		return st, fmt.Errorf("1P built-in model %q cannot be renamed", id)
 	}
 
 	if req.Name != nil {
@@ -785,6 +800,12 @@ func (e *Engine) DeleteMLModel(modelID string) (domain.MLStatus, error) {
 	e.mu.Lock()
 	e.ensureMLInitializedLocked()
 
+	if id == "ai-base-v0" {
+		st := e.buildMLStatusLocked()
+		e.mu.Unlock()
+		return st, fmt.Errorf("1P built-in model %q cannot be deleted", id)
+	}
+
 	idx := -1
 	for i := range e.mlState.Models {
 		if e.mlState.Models[i].ModelID == id {
@@ -796,6 +817,11 @@ func (e *Engine) DeleteMLModel(modelID string) (domain.MLStatus, error) {
 		st := e.buildMLStatusLocked()
 		e.mu.Unlock()
 		return st, fmt.Errorf("unknown modelId %q", id)
+	}
+	if e.mlState.Models[idx].BuiltIn {
+		st := e.buildMLStatusLocked()
+		e.mu.Unlock()
+		return st, fmt.Errorf("1P built-in model %q cannot be deleted", id)
 	}
 
 	e.mlState.Models = append(e.mlState.Models[:idx], e.mlState.Models[idx+1:]...)
@@ -813,7 +839,7 @@ func (e *Engine) DeleteMLModel(modelID string) (domain.MLStatus, error) {
 
 func (e *Engine) fallbackActiveReadyModelLocked() {
 	for i := len(e.mlState.Models) - 1; i >= 0; i-- {
-		if e.mlState.Models[i].Ready {
+		if !e.mlState.Models[i].BuiltIn {
 			e.mlState.Config.ActiveModelID = e.mlState.Models[i].ModelID
 			e.mlActiveTCN = nil
 			tcn := e.resolveActiveTCNLocked()
@@ -825,9 +851,12 @@ func (e *Engine) fallbackActiveReadyModelLocked() {
 			return
 		}
 	}
-	e.mlState.Config.DetectorMode = domain.DetectorModeClassic
 	e.mlState.Config.ActiveModelID = "ai-base-v0"
 	e.mlActiveTCN = nil
+	tcn := e.resolveActiveTCNLocked()
+	for _, det := range e.mlDetectors {
+		det.SetModel(tcn)
+	}
 	e.mlLiveTunes = make(map[detKey]domain.MLLiveGateTune)
 	e.syncLiveTuneSliceLocked()
 }
@@ -877,11 +906,13 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 	initTCN := basePretrained
 	lr := float32(0.0035)
 	updateInPlaceID := ""
+	preserveBuiltIn := false
 	prevEpochs := 0
 	prevDurMs := int64(0)
 	baseName := strings.TrimSpace(req.ModelName)
 
 	if cid := strings.TrimSpace(req.ContinueModelID); cid != "" {
+		foundExisting := false
 		for _, m := range e.mlState.Models {
 			if m.ModelID == cid && len(m.Weights) == ml.TotalParams {
 				cloned := &ml.TCN{}
@@ -889,14 +920,25 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 					initTCN = cloned
 					lr = 0.0018
 					updateInPlaceID = m.ModelID
+					preserveBuiltIn = m.BuiltIn
 					prevEpochs = m.EpochsTrained
 					prevDurMs = m.TrainDurationMs
-					if baseName == "" {
+					if m.BuiltIn || baseName == "" {
 						baseName = m.Name
 					}
+					foundExisting = true
 				}
 				break
 			}
+		}
+		if !foundExisting && cid == "ai-base-v0" {
+			baseSum := ml.PretrainedBaseSummary()
+			initTCN = basePretrained
+			lr = 0.0018
+			updateInPlaceID = "ai-base-v0"
+			preserveBuiltIn = true
+			prevEpochs = baseSum.EpochsTrained
+			baseName = baseSum.Name
 		}
 	}
 
@@ -940,6 +982,7 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 		req.IncludeUnverified,
 		append([]string(nil), req.SessionIDs...),
 		updateInPlaceID,
+		preserveBuiltIn,
 		prevEpochs,
 		prevDurMs,
 		baseName,
@@ -958,6 +1001,7 @@ func (e *Engine) runMLTrainingWorker(
 	includeUnverified bool,
 	requestedSessionIDs []string,
 	updateInPlaceID string,
+	preserveBuiltIn bool,
 	prevEpochs int,
 	prevDurMs int64,
 	customName string,
@@ -1156,13 +1200,17 @@ func (e *Engine) runMLTrainingWorker(
 		}
 	}
 	if !updatedExisting {
+		ver := nextVer
+		if preserveBuiltIn && modelID == "ai-base-v0" {
+			ver = 0
+		}
 		snap := domain.MLModelSnapshot{
 			MLModelSummary: domain.MLModelSummary{
 				ModelID:          modelID,
 				Name:             modelName,
-				Version:          nextVer,
+				Version:          ver,
 				CreatedAt:        nowISO(),
-				BuiltIn:          false,
+				BuiltIn:          preserveBuiltIn,
 				Ready:            true,
 				EpochsTrained:    totalEpochsTrained,
 				SourceSessionIDs: usedSessionIDs,
@@ -1177,8 +1225,23 @@ func (e *Engine) runMLTrainingWorker(
 			Weights: trained.ExportWeights(),
 		}
 		e.mlState.Models = append(e.mlState.Models, snap)
-		if len(e.mlState.Models) > 8 {
-			e.mlState.Models = e.mlState.Models[len(e.mlState.Models)-8:]
+		if e.mlState.Config.ActiveModelID == modelID {
+			e.mlActiveTCN = trained
+			e.mlActiveModelID = modelID
+			e.resetMLSessionDetectorsLocked()
+		}
+		for len(e.mlState.Models) > 9 {
+			evictIdx := -1
+			for i := range e.mlState.Models {
+				if !e.mlState.Models[i].BuiltIn {
+					evictIdx = i
+					break
+				}
+			}
+			if evictIdx < 0 {
+				break
+			}
+			e.mlState.Models = append(e.mlState.Models[:evictIdx], e.mlState.Models[evictIdx+1:]...)
 		}
 	}
 	e.mlTraining = domain.MLTrainingProgress{

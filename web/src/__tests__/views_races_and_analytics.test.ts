@@ -2570,6 +2570,40 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
               meanJitterMs: 18,
             },
           },
+          {
+            modelId: "ai-base-v0",
+            name: "SlapRF Base",
+            version: 0,
+            createdAt: "2026-11-24T00:00:00Z",
+            builtIn: true,
+            ready: true,
+            epochsTrained: 18,
+            trainPacks: 10,
+            valPacks: 4,
+            trainPasses: 48,
+            trainDurationMs: 60,
+            finalLoss: 0.024,
+            aiMetrics: {
+              totalPasses: 16,
+              detectedPasses: 16,
+              missedPasses: 0,
+              falseTriggers: 0,
+              precision: 1,
+              recall: 1,
+              f1: 1,
+              meanJitterMs: 11.5,
+            },
+            classicMetrics: {
+              totalPasses: 16,
+              detectedPasses: 15,
+              missedPasses: 1,
+              falseTriggers: 1,
+              precision: 0.9375,
+              recall: 0.9375,
+              f1: 0.9375,
+              meanJitterMs: 18.2,
+            },
+          },
         ],
         verifiedPacks: 0,
         unverifiedPacks: 1,
@@ -2701,9 +2735,33 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       host.querySelector<HTMLButtonElement>('[data-ai-train-mode="finetune"]')!.click();
       await flushMicrotasks();
 
-      // 5. Every trained model is immediately ready — tap Use (or AI in Track) to activate it!
+      // 5. Shipped 1P model (`ai-base-v0` / "SlapRF Base") cannot be deleted or renamed, but CAN be fine-tuned!
+      expect(
+        host.querySelector('[data-ai-act="delete-model"][data-model-id="ai-base-v0"]')
+      ).toBeNull();
+      expect(
+        host.querySelector('[data-ai-act="delete-model"][data-model-id="ai-base-v1"]')
+      ).not.toBeNull();
+
+      host
+        .querySelector<HTMLButtonElement>('[data-ai-act="focus-model"][data-model-id="ai-base-v0"]')!
+        .click();
+      await flushMicrotasks();
+      expect(host.querySelector('[data-ai-act="edit-model-name"]')).toBeNull();
+      expect(host.querySelector("[data-ai-readonly-field]")?.textContent ?? "").toContain("1P");
+      host.querySelector<HTMLButtonElement>('[data-ai-act="train-more"]')!.click();
+      await flushMicrotasks();
+      expect(
+        mock.calls.some(
+          (c) =>
+            c.method === "startMLTraining" &&
+            (c.args[0] as { continueModelId?: string })?.continueModelId === "ai-base-v0"
+        )
+      ).toBe(true);
+
+      // 6. Tap Use on custom model -> activates AI mode in Track!
       const useBtn = host.querySelector<HTMLButtonElement>(
-        '.ai-model-list [data-ai-act="use-model"]'
+        '.ai-model-list [data-ai-act="use-model"][data-model-id="ai-base-v1"]'
       )!;
       expect(useBtn).not.toBeNull();
       useBtn.click();

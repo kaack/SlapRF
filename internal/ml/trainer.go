@@ -637,15 +637,17 @@ func PretrainedBaseSummary() domain.MLModelSummary {
 		return pretrainedSnapshot.MLModelSummary
 	}
 	return domain.MLModelSummary{
-		ModelID:     "ai-base-v0",
-		Name:        "AI Base v0 (Built-in Physics Pretrain)",
-		Version:     0,
-		CreatedAt:   "2026-11-24T00:00:00Z",
-		BuiltIn:     true,
-		TrainPacks:  10,
-		ValPacks:    4,
-		TrainPasses: 48,
-		FinalLoss:   0.024,
+		ModelID:       "ai-base-v0",
+		Name:          "SlapRF Base",
+		Version:       0,
+		CreatedAt:     "2026-11-24T00:00:00Z",
+		BuiltIn:       true,
+		Ready:         true,
+		EpochsTrained: 18,
+		TrainPacks:    10,
+		ValPacks:      4,
+		TrainPasses:   48,
+		FinalLoss:     0.024,
 		AIMetrics: domain.MLMetrics{
 			TotalPasses:    16,
 			DetectedPasses: 16,
@@ -687,10 +689,12 @@ func PretrainedBaseModel() (*TCN, domain.MLModelSnapshot) {
 		pretrainedSnapshot = domain.MLModelSnapshot{
 			MLModelSummary: domain.MLModelSummary{
 				ModelID:         "ai-base-v0",
-				Name:            "AI Base v0 (Built-in Physics Pretrain)",
+				Name:            "SlapRF Base",
 				Version:         0,
 				CreatedAt:       "2026-11-24T00:00:00Z",
 				BuiltIn:         true,
+				Ready:           true,
+				EpochsTrained:   18,
 				TrainPacks:      10,
 				ValPacks:        4,
 				TrainPasses:     aiM.TotalPasses * 3,
