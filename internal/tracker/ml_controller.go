@@ -1163,7 +1163,7 @@ func (e *Engine) runMLTrainingWorker(
 				Version:          nextVer,
 				CreatedAt:        nowISO(),
 				BuiltIn:          false,
-				Ready:            false,
+				Ready:            true,
 				EpochsTrained:    totalEpochsTrained,
 				SourceSessionIDs: usedSessionIDs,
 				TrainPacks:       trainPackCount,

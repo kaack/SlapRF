@@ -47,12 +47,12 @@ export class CrossingDetectorCard extends Component {
 
       const nextMode = modeBtn.dataset.mlDetectorMode === "ai" ? "ai" : "classic";
       if (nextMode === "ai") {
-        const ready = this.readyTrainedModels();
-        if (ready.length === 0) return;
+        const trained = this.trainedModels();
+        if (trained.length === 0) return;
         const curActive = this.store.mlStatus?.config?.activeModelId || "";
-        const chosenId = ready.some((m) => m.modelId === curActive)
+        const chosenId = trained.some((m) => m.modelId === curActive)
           ? curActive
-          : ready[0].modelId;
+          : trained[0].modelId;
         void this.api.updateMLConfig({ detectorMode: "ai", activeModelId: chosenId });
       } else {
         void this.api.updateMLConfig({ detectorMode: "classic" });
@@ -82,8 +82,8 @@ export class CrossingDetectorCard extends Component {
     this.render();
   }
 
-  private readyTrainedModels(): MLModelSummary[] {
-    return (this.store.mlStatus?.models ?? []).filter((m) => !m.builtIn && Boolean(m.ready));
+  private trainedModels(): MLModelSummary[] {
+    return (this.store.mlStatus?.models ?? []).filter((m) => !m.builtIn);
   }
 
   private render(): void {
@@ -96,30 +96,30 @@ export class CrossingDetectorCard extends Component {
     const readOnly = this.isReadOnlyFn();
     const disAttr = readOnly ? "disabled" : "";
     const ml = this.store.mlStatus;
-    const ready = this.readyTrainedModels();
-    const hasReady = ready.length > 0;
-    const isAi = hasReady && ml?.config?.detectorMode === "ai";
+    const trained = this.trainedModels();
+    const hasTrained = trained.length > 0;
+    const isAi = hasTrained && ml?.config?.detectorMode === "ai";
     const liveTuneOn = ml?.config?.liveTuneEnabled ?? true;
-    const aiBtnDis = disAttr || (!hasReady ? "disabled" : "");
+    const aiBtnDis = disAttr || (!hasTrained ? "disabled" : "");
 
-    const activeId = ml?.config?.activeModelId || (hasReady ? ready[0].modelId : "");
+    const activeId = ml?.config?.activeModelId || (hasTrained ? trained[0].modelId : "");
     const selectedId =
-      hasReady && ready.some((m) => m.modelId === activeId)
+      hasTrained && trained.some((m) => m.modelId === activeId)
         ? activeId
-        : hasReady
-          ? ready[0].modelId
+        : hasTrained
+          ? trained[0].modelId
           : "";
 
-    const optionsHtml = ready
+    const optionsHtml = trained
       .map((m) => {
         const sel = m.modelId === selectedId ? "selected" : "";
         return `<option value="${esc(m.modelId)}" ${sel}>${esc(m.name)}</option>`;
       })
       .join("");
 
-    const aiTitle = hasReady
-      ? "Use a Ready trained crossing model"
-      : "Train a model in Practice → AI Training and mark it Ready first";
+    const aiTitle = hasTrained
+      ? "Use a trained AI crossing model"
+      : "Train a model in Practice → AI first";
 
     const nextHtml = `
       <div class="track-detector-bar ${isAi ? "is-ai-active" : ""}">

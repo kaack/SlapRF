@@ -28262,20 +28262,39 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
   font-weight: 600;
 }
 
+.ai-scorecard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.ai-scorecard-title-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .ai-model-list {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 6px;
 }
 
 .ai-model-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 7px 10px;
+  gap: 8px;
+  min-height: 36px;
+  padding: 5px 8px 5px 10px;
   border-radius: 7px;
   border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  flex-wrap: nowrap;
 }
 
 .ai-model-row.is-active {
@@ -28283,11 +28302,62 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
   background: color-mix(in srgb, var(--accent, #38bdf8) 8%, transparent);
 }
 
-.ai-model-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+.ai-model-main {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  margin: 0;
+  flex: 1 1 auto;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.ai-model-name {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.ai-model-stats {
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.ai-model-row-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: nowrap;
+}
+
+.ai-model-use-btn {
+  height: 24px !important;
+  min-height: 24px !important;
+  padding: 0 8px !important;
+  font-size: 11.5px !important;
+  white-space: nowrap;
+}
+
+.ai-model-del-btn {
+  width: 25px;
+  height: 24px !important;
+  min-height: 24px !important;
+  padding: 0 !important;
+  justify-content: center;
 }
 
 .ai-export-actions {

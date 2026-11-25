@@ -2606,7 +2606,7 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
         '[data-ml-detector-mode="ai"]'
       )!;
       expect(rulesAiBtnBefore).not.toBeNull();
-      expect(rulesAiBtnBefore.disabled).toBe(true);
+      expect(rulesAiBtnBefore.disabled).toBe(false);
 
       // 2. Switch to Practice Review tab -> inspect recorded laps & open on-demand RSSI Editor modal
       const reviewTabBtn = host.querySelector<HTMLButtonElement>(
@@ -2680,18 +2680,12 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       host.querySelector<HTMLButtonElement>('[data-ai-train-mode="finetune"]')!.click();
       await flushMicrotasks();
 
-      // 5. Mark Model as Ready -> unlocks AI selection in the top-level Track Crossing Detector card!
-      const readyBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="toggle-model-ready"]')!;
-      expect(readyBtn).not.toBeNull();
-      readyBtn.click();
-      await flushMicrotasks();
-      expect(store.mlStatus.models[0].ready).toBe(true);
-
-      const rulesAiBtnAfter = detectorSlot.querySelector<HTMLButtonElement>(
-        '[data-ml-detector-mode="ai"]'
+      // 5. Every trained model is immediately ready — tap Use (or AI in Track) to activate it!
+      const useBtn = host.querySelector<HTMLButtonElement>(
+        '.ai-model-list [data-ai-act="use-model"]'
       )!;
-      expect(rulesAiBtnAfter.disabled).toBe(false);
-      rulesAiBtnAfter.click();
+      expect(useBtn).not.toBeNull();
+      useBtn.click();
       await flushMicrotasks();
       expect(store.mlStatus.config.detectorMode).toBe("ai");
       expect(store.mlStatus.config.activeModelId).toBe("ai-base-v1");

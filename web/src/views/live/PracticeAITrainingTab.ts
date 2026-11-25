@@ -289,30 +289,29 @@ export class PracticeAITrainingTab extends Component {
            </div>`;
 
     const shownScorecardModel = mode === "finetune" ? selectedModel : null;
+    const isScorecardActive = Boolean(
+      shownScorecardModel &&
+        ml.config.detectorMode === "ai" &&
+        ml.config.activeModelId === shownScorecardModel.modelId
+    );
     const scorecardHtml = shownScorecardModel
       ? `
         <div class="ai-scorecard-box">
-          <div class="ai-card-head">
-            <div class="ai-model-title-line">
-              <strong>${esc(shownScorecardModel.name)}</strong>
-              <span class="race-state-pill ${shownScorecardModel.ready ? "is-live" : "is-paused"}">
-                ${shownScorecardModel.ready ? "Ready ✓" : "Draft"}
-              </span>
-              <span class="note">${shownScorecardModel.epochsTrained ?? 28} epochs</span>
+          <div class="ai-scorecard-head">
+            <div class="ai-scorecard-title-wrap">
+              <strong class="ai-model-name">${esc(shownScorecardModel.name)}</strong>
+              <span class="note mono">${shownScorecardModel.epochsTrained ?? 28}ep</span>
             </div>
-            <div class="ai-card-actions">
-              <button
-                type="button"
-                class="btn btn-xs ${shownScorecardModel.ready ? "btn-ghost" : "btn-primary"}"
-                data-ai-act="toggle-model-ready"
-                data-model-id="${esc(shownScorecardModel.modelId)}"
-              >${shownScorecardModel.ready ? "Unmark Ready" : "✓ Mark Ready"}</button>
-              ${
-                shownScorecardModel.ready
-                  ? `<button type="button" class="btn btn-ghost btn-xs" data-ai-act="open-track">Track →</button>`
-                  : ""
-              }
-            </div>
+            ${
+              isScorecardActive
+                ? `<span class="scope-ai-chip">Active</span>`
+                : `<button
+                     type="button"
+                     class="btn btn-ghost btn-xs ai-model-use-btn"
+                     data-ai-act="use-model"
+                     data-model-id="${esc(shownScorecardModel.modelId)}"
+                   >Use</button>`
+            }
           </div>
           <div class="table-scroll">
             <table class="table rc-compact-table ai-scorecard-table">
@@ -349,11 +348,11 @@ export class PracticeAITrainingTab extends Component {
       customModels.length > 0
         ? `
         <div class="card ai-train-card">
-          <div class="ai-card-head">
+          <div class="ai-scorecard-head">
             <h3 class="ai-card-title">Models</h3>
-            <div class="ai-card-actions">
-              <button type="button" class="btn btn-ghost btn-xs" data-ai-act="export-dataset">Export</button>
-              <label class="btn btn-ghost btn-xs ai-import-label">
+            <div class="ai-model-row-actions">
+              <button type="button" class="btn btn-ghost btn-xs ai-model-use-btn" data-ai-act="export-dataset">Export</button>
+              <label class="btn btn-ghost btn-xs ai-model-use-btn ai-import-label">
                 <span>Import</span>
                 <input type="file" accept=".gz,.tgz,application/gzip" data-ai-import-file hidden />
               </label>
@@ -366,24 +365,29 @@ export class PracticeAITrainingTab extends Component {
                   ml.config.detectorMode === "ai" && ml.config.activeModelId === m.modelId;
                 return `
                   <div class="ai-model-row ${isActive ? "is-active" : ""}">
-                    <div class="ai-model-meta" data-ai-act="focus-model" data-model-id="${esc(m.modelId)}" style="cursor:pointer">
-                      <div class="ai-model-title-line">
-                        <strong>${esc(m.name)}</strong>
-                        <span class="race-state-pill ${m.ready ? "is-live" : "is-paused"}">${m.ready ? "Ready ✓" : "Draft"}</span>
-                        ${isActive ? `<span class="scope-ai-chip">Active</span>` : ""}
-                      </div>
-                      <span class="note">${(m.aiMetrics.f1 * 100).toFixed(1)}% accuracy · ${m.epochsTrained ?? 28} epochs</span>
-                    </div>
-                    <div class="ai-card-actions">
+                    <button
+                      type="button"
+                      class="ai-model-main"
+                      data-ai-act="focus-model"
+                      data-model-id="${esc(m.modelId)}"
+                    >
+                      <span class="ai-model-name">${esc(m.name)}</span>
+                      <span class="ai-model-stats mono">${(m.aiMetrics.f1 * 100).toFixed(0)}% · ${m.epochsTrained ?? 28}ep</span>
+                    </button>
+                    <div class="ai-model-row-actions">
+                      ${
+                        isActive
+                          ? `<span class="scope-ai-chip">Active</span>`
+                          : `<button
+                               type="button"
+                               class="btn btn-ghost btn-xs ai-model-use-btn"
+                               data-ai-act="use-model"
+                               data-model-id="${esc(m.modelId)}"
+                             >Use</button>`
+                      }
                       <button
                         type="button"
-                        class="btn btn-xs ${m.ready ? "btn-ghost" : "btn-primary"}"
-                        data-ai-act="toggle-model-ready"
-                        data-model-id="${esc(m.modelId)}"
-                      >${m.ready ? "Unmark" : "Mark Ready"}</button>
-                      <button
-                        type="button"
-                        class="btn btn-ghost btn-xs"
+                        class="btn btn-ghost btn-xs ai-model-del-btn"
                         data-ai-act="delete-model"
                         data-model-id="${esc(m.modelId)}"
                         title="Delete ${esc(m.name)}"
@@ -593,17 +597,15 @@ export class PracticeAITrainingTab extends Component {
         break;
       }
 
-      case "toggle-model-ready": {
+      case "use-model": {
         const modelId = btn.dataset.modelId || "";
         const mod = this.customModels().find((m) => m.modelId === modelId);
         if (!mod) return;
-        const nextReady = !mod.ready;
+        this.selectedModelId = mod.modelId;
         void this.api
-          .updateMLModel(modelId, { ready: nextReady })
+          .updateMLConfig({ detectorMode: "ai", activeModelId: mod.modelId })
           .then(() => {
-            this.statusMsg = nextReady
-              ? `"${mod.name}" is Ready ✓ — select it in Track.`
-              : `"${mod.name}" moved back to Draft.`;
+            this.statusMsg = "";
             this.render(true);
           })
           .catch((err: unknown) => this.setErr(err));
