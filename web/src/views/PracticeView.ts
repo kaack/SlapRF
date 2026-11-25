@@ -3214,7 +3214,7 @@ export class PracticeView extends Component {
                         const older = reversedHistory[idx + 1];
                         if (older) {
                           const gapSec = lapBreakGapSec(lap, older);
-                          if (gapSec >= LAP_BREAK_GAP_THRESHOLD_SEC) {
+                          if (gapSec >= LAP_BREAK_GAP_THRESHOLD_SEC || lap.lapNumber > older.lapNumber + 1) {
                             return rowHtml + renderLapBreakRowHtml(gapSec, totalCols);
                           }
                         }

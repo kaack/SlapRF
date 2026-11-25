@@ -1380,6 +1380,7 @@ func (e *Engine) PracticeAction(req PracticeActionPayload) (domain.PracticeManag
 		}
 		target.Laps = []domain.LapRecord{}
 		target.Crossings = []domain.GateCrossingEvent{}
+		target.Breaks = nil
 		target.Filtered = []domain.FilteredDetection{}
 		target.UpdatedAt = now
 		if target.Active && e.practiceState.ActiveSessionID == target.SessionID && !e.isLiveRaceHeatActiveLocked() {
@@ -1420,11 +1421,9 @@ func (e *Engine) PracticeAction(req PracticeActionPayload) (domain.PracticeManag
 			return snap, fmt.Errorf("practice session not found")
 		}
 		delIdx := -1
-		var deletedSlot int
 		for i := range target.Laps {
 			if target.Laps[i].LapID == req.LapID {
 				delIdx = i
-				deletedSlot = target.Laps[i].SlotIndex
 				break
 			}
 		}
@@ -1433,15 +1432,51 @@ func (e *Engine) PracticeAction(req PracticeActionPayload) (domain.PracticeManag
 			e.mu.Unlock()
 			return snap, fmt.Errorf("lap %d not found in session", req.LapID)
 		}
+		delLap := target.Laps[delIdx]
+		deletedSlot := delLap.SlotIndex
+		tEnd := delLap.CompletedAtUs
+		durUs := uint64(math.Round(delLap.LapTimeSec * 1e6))
+		tStart := uint64(0)
+		if tEnd > durUs {
+			tStart = tEnd - durUs
+		}
+
+		// Remove the deleted lap from `target.Laps` WITHOUT renumbering surviving laps so mental lap
+		// numbers (`L4 -> Break -> L6`) stay stable across edits.
 		target.Laps = append(target.Laps[:delIdx], target.Laps[delIdx+1:]...)
-		lapSeq := 0
-		for i := range target.Laps {
-			if target.Laps[i].SlotIndex == deletedSlot {
-				lapSeq++
-				target.Laps[i].LapNumber = lapSeq
+
+		remainingPilotLaps := 0
+		hasPrevAdjacentLap := false
+		hasNextAdjacentLap := false
+		for _, l := range target.Laps {
+			if l.SlotIndex != deletedSlot {
+				continue
+			}
+			remainingPilotLaps++
+			if tStart > 0 && absDiffUs(l.CompletedAtUs, tStart) <= 60_000 {
+				hasPrevAdjacentLap = true
+			}
+			lDurUs := uint64(math.Round(l.LapTimeSec * 1e6))
+			lStartUs := uint64(0)
+			if l.CompletedAtUs > lDurUs {
+				lStartUs = l.CompletedAtUs - lDurUs
+			}
+			if tEnd > 0 && absDiffUs(lStartUs, tEnd) <= 60_000 {
+				hasNextAdjacentLap = true
 			}
 		}
-		if lapSeq == 0 {
+
+		isActive := target.Active && e.practiceState.ActiveSessionID == target.SessionID && !e.isLiveRaceHeatActiveLocked()
+		if isActive && !hasNextAdjacentLap && tEnd > 0 {
+			for _, c := range target.Crossings {
+				if c.SlotIndex == deletedSlot && c.InvalidReason == "" && c.TimestampUs > tEnd+60_000 {
+					hasNextAdjacentLap = true
+					break
+				}
+			}
+		}
+
+		if remainingPilotLaps == 0 {
 			keptCrossings := make([]domain.GateCrossingEvent, 0, len(target.Crossings))
 			for _, c := range target.Crossings {
 				if c.SlotIndex != deletedSlot {
@@ -1449,6 +1484,13 @@ func (e *Engine) PracticeAction(req PracticeActionPayload) (domain.PracticeManag
 				}
 			}
 			target.Crossings = keptCrossings
+			keptBreaks := target.Breaks[:0]
+			for _, b := range target.Breaks {
+				if b.SlotIndex != deletedSlot {
+					keptBreaks = append(keptBreaks, b)
+				}
+			}
+			target.Breaks = keptBreaks
 			keptFiltered := make([]domain.FilteredDetection, 0, len(target.Filtered))
 			for _, f := range target.Filtered {
 				if f.SlotIndex != deletedSlot {
@@ -1456,8 +1498,90 @@ func (e *Engine) PracticeAction(req PracticeActionPayload) (domain.PracticeManag
 				}
 			}
 			target.Filtered = keptFiltered
-			if target.Active && e.practiceState.ActiveSessionID == target.SessionID && !e.isLiveRaceHeatActiveLocked() {
+			if isActive {
 				e.clearActivePilotLapBuffersLocked(deletedSlot)
+			}
+		} else if len(target.Crossings) > 0 && tEnd > tStart {
+			// Preserve shared Start/Finish boundary crossings belonging to adjacent consecutive laps,
+			// strip only crossings strictly inside `(tStart, tEnd)`, and insert a Break across the gap!
+			keptCrossings := make([]domain.GateCrossingEvent, 0, len(target.Crossings))
+			for _, c := range target.Crossings {
+				if c.SlotIndex != deletedSlot {
+					keptCrossings = append(keptCrossings, c)
+					continue
+				}
+				if tStart > 0 && absDiffUs(c.TimestampUs, tStart) <= 50_000 {
+					if hasPrevAdjacentLap {
+						keptCrossings = append(keptCrossings, c)
+					}
+					continue
+				}
+				if absDiffUs(c.TimestampUs, tEnd) <= 50_000 {
+					if hasNextAdjacentLap {
+						keptCrossings = append(keptCrossings, c)
+					}
+					continue
+				}
+				if c.TimestampUs > tStart+50_000 && c.TimestampUs+50_000 < tEnd {
+					continue
+				}
+				keptCrossings = append(keptCrossings, c)
+			}
+			target.Crossings = keptCrossings
+
+			midUs := tStart + (tEnd-tStart)/2
+			if midUs > 0 {
+				hasExistingBreak := false
+				for _, b := range target.Breaks {
+					if b.SlotIndex == deletedSlot && b.TimestampUs >= tStart && b.TimestampUs <= tEnd {
+						hasExistingBreak = true
+						break
+					}
+				}
+				if !hasExistingBreak {
+					e.nextEventID++
+					bid := e.nextEventID
+					for _, b := range target.Breaks {
+						if b.BreakID >= bid {
+							bid = b.BreakID + 1
+							e.nextEventID = bid
+						}
+					}
+					for _, c := range target.Crossings {
+						if c.EventID >= bid {
+							bid = c.EventID + 1
+							e.nextEventID = bid
+						}
+					}
+					target.Breaks = append(target.Breaks, domain.PracticeBreakMark{
+						BreakID:     bid,
+						SlotIndex:   deletedSlot,
+						TimestampUs: midUs,
+					})
+					sort.Slice(target.Breaks, func(a, b int) bool {
+						return target.Breaks[a].TimestampUs < target.Breaks[b].TimestampUs
+					})
+				}
+			}
+
+			orderedGates := e.orderedGatesForPracticeSessionLocked(target)
+			sessionRules := e.rules
+			if target.Rules != nil {
+				sessionRules = target.Rules.Normalized()
+			}
+			target.Crossings, target.Laps = e.replayPilotCrossingsWithBreaksLocked(
+				target.Crossings,
+				target.Laps,
+				orderedGates,
+				e.detected,
+				sessionRules,
+				deletedSlot,
+				delLap.Callsign,
+				target.Breaks,
+			)
+			if isActive {
+				e.crossings = append([]domain.GateCrossingEvent(nil), target.Crossings...)
+				e.rebuildPilotLiveProgressFromCrossingsLocked(deletedSlot, orderedGates)
 			}
 		}
 		e.recomputePracticeSessionLapsLocked(target)
@@ -1491,6 +1615,13 @@ func (e *Engine) PracticeAction(req PracticeActionPayload) (domain.PracticeManag
 			}
 		}
 		target.Crossings = keptCrossings
+		keptBreaks := target.Breaks[:0]
+		for _, b := range target.Breaks {
+			if b.SlotIndex != req.SlotIndex {
+				keptBreaks = append(keptBreaks, b)
+			}
+		}
+		target.Breaks = keptBreaks
 		keptFiltered := make([]domain.FilteredDetection, 0, len(target.Filtered))
 		for _, f := range target.Filtered {
 			if f.SlotIndex != req.SlotIndex {

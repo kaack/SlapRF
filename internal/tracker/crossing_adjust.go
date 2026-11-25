@@ -177,6 +177,7 @@ func (e *Engine) replayPilotCrossingsWithBreaksLocked(
 	lastAcceptedGateUs := make(map[uint8]uint64, len(orderedGates))
 	var prog pilotProgress
 	rebuiltPilotLaps := make([]domain.LapRecord, 0, len(prevPilotLaps)+1)
+	lastAssignedLapNum := 0
 
 	for i := range pilotCrossings {
 		c := &pilotCrossings[i]
@@ -288,20 +289,25 @@ func (e *Engine) replayPilotCrossingsWithBreaksLocked(
 					var lapID uint64
 					var completedMs int64
 					var invalidated bool
+					lapNum := lastAssignedLapNum + 1
 					if prevMatch != nil {
 						lapID = prevMatch.LapID
 						completedMs = prevMatch.CompletedAtMs
 						invalidated = prevMatch.Invalidated
+						if prevMatch.LapNumber > lastAssignedLapNum {
+							lapNum = prevMatch.LapNumber
+						}
 					} else {
 						e.nextLapID++
 						lapID = e.nextLapID
 						completedMs = e.wallClockMsForTimestampLocked(c.TimestampUs)
 					}
+					lastAssignedLapNum = lapNum
 					rebuiltPilotLaps = append(rebuiltPilotLaps, domain.LapRecord{
 						LapID:         lapID,
 						SlotIndex:     slotIndex,
 						Callsign:      defaultCallsign,
-						LapNumber:     len(rebuiltPilotLaps) + 1,
+						LapNumber:     lapNum,
 						LapTimeSec:    round3(lapSec),
 						Sectors:       append([]domain.SectorSplit(nil), prog.currentSectors...),
 						CompletedAtUs: c.TimestampUs,

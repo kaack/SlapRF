@@ -519,7 +519,11 @@ func (e *Engine) buildLapLocked(pilot domain.PilotSlot, prog *pilotProgress, lap
 	bestLap := 0.0
 	for _, l := range e.laps {
 		if l.SlotIndex == pilot.SlotIndex {
-			lapNum++
+			if l.LapNumber >= lapNum {
+				lapNum = l.LapNumber + 1
+			} else {
+				lapNum++
+			}
 			if !l.Invalidated && (bestLap == 0 || l.LapTimeSec < bestLap) {
 				bestLap = l.LapTimeSec
 			}

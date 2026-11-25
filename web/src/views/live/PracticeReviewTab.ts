@@ -192,7 +192,11 @@ export class PracticeReviewTab extends Component {
                     b.timestampUs >= older.completedAtUs &&
                     b.timestampUs <= startUs
                 );
-                if (gapSec >= LAP_BREAK_GAP_THRESHOLD_SEC || manualBreak) {
+                if (
+                  gapSec >= LAP_BREAK_GAP_THRESHOLD_SEC ||
+                  manualBreak ||
+                  lap.lapNumber > older.lapNumber + 1
+                ) {
                   return rowHtml + renderLapBreakRowHtml(gapSec, 5, manualBreak?.breakId);
                 }
               }

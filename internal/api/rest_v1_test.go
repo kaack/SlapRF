@@ -204,8 +204,8 @@ func TestRESTv1CRUDSemanticsSingletonsCustomActionsAndSymmetry(t *testing.T) {
 	}
 	firstLapID := lapsSnap[0].LapID
 	afterDelLap := decodeState(t, reqJSON(t, h, http.MethodDelete, fmt.Sprintf("%s/laps/%d", pLoc, firstLapID), nil))
-	if len(afterDelLap.Laps) != 2 || afterDelLap.Laps[0].SlotIndex != 1 || afterDelLap.Laps[0].LapNumber != 1 {
-		t.Fatalf("expected 2 laps and Pilot 1 remaining lap renumbered to 1 after DELETE lap, got %+v", afterDelLap.Laps)
+	if len(afterDelLap.Laps) != 2 || afterDelLap.Laps[0].SlotIndex != 1 || afterDelLap.Laps[0].LapNumber != 2 {
+		t.Fatalf("expected 2 laps and Pilot 1 remaining lap preserving LapNumber 2 after DELETE lap, got %+v", afterDelLap.Laps)
 	}
 	if delMissingLap := reqJSON(t, h, http.MethodDelete, fmt.Sprintf("%s/laps/%d", pLoc, firstLapID), nil); delMissingLap.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 deleting already-deleted practice lap %d, got %d", firstLapID, delMissingLap.Code)

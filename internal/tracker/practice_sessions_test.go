@@ -337,8 +337,8 @@ func TestPracticeSessionDeleteLapAndClearPilotLaps(t *testing.T) {
 	}
 	pilot1FastestLapID := ps.Sessions[0].Laps[1].LapID
 
-	// Delete Pilot 1's 11.2s PB lap -> remaining Pilot 1 laps renumber 1..2, 13.6s becomes PB,
-	// and Pilot 2's 12.0s lap sectors become OVERALL_BEST.
+	// Delete Pilot 1's 11.2s PB lap (L2) -> surviving laps preserve their original lap numbers (L1, L3)
+	// with a Break inserted across L2's span so adjacent shared H1 crossings stay intact!
 	ps, err := e.PracticeAction(PracticeActionPayload{
 		Action:    "delete_session_lap",
 		SessionID: sid,
@@ -350,6 +350,9 @@ func TestPracticeSessionDeleteLapAndClearPilotLaps(t *testing.T) {
 	if len(ps.Sessions[0].Laps) != 4 {
 		t.Fatalf("expected 4 laps after deleting 1 lap, got %d", len(ps.Sessions[0].Laps))
 	}
+	if len(ps.Sessions[0].Breaks) != 1 {
+		t.Fatalf("expected 1 manual break inserted across deleted lap L2, got %d", len(ps.Sessions[0].Breaks))
+	}
 	var p1Laps []domain.LapRecord
 	var p2Laps []domain.LapRecord
 	for _, l := range ps.Sessions[0].Laps {
@@ -359,11 +362,14 @@ func TestPracticeSessionDeleteLapAndClearPilotLaps(t *testing.T) {
 			p2Laps = append(p2Laps, l)
 		}
 	}
-	if len(p1Laps) != 2 || p1Laps[0].LapNumber != 1 || p1Laps[1].LapNumber != 2 {
-		t.Fatalf("expected Pilot 1 laps sequentially renumbered 1..2, got %+v", p1Laps)
+	if len(p1Laps) != 2 || p1Laps[0].LapNumber != 1 || p1Laps[1].LapNumber != 3 {
+		t.Fatalf("expected Pilot 1 surviving laps to preserve LapNumber 1 and 3, got %+v", p1Laps)
+	}
+	if len(p1Laps[0].Sectors) != 4 || len(p1Laps[1].Sectors) != 4 {
+		t.Fatalf("expected adjacent L1 and L3 sectors preserved intact, got L1=%+v L3=%+v", p1Laps[0].Sectors, p1Laps[1].Sectors)
 	}
 	if !p1Laps[1].IsBestLap || p1Laps[0].IsBestLap {
-		t.Fatalf("expected Pilot 1's second remaining lap (13.6s) to become PB, got %+v", p1Laps)
+		t.Fatalf("expected Pilot 1's second remaining lap (13.6s, L3) to become PB, got %+v", p1Laps)
 	}
 	if len(p2Laps) != 2 || len(p2Laps[0].Sectors) == 0 || p2Laps[0].Sectors[0].Badge != domain.BadgeOverallBest {
 		t.Fatalf("expected Pilot 2's 12.0s lap sectors promoted to OVERALL_BEST, got %+v", p2Laps)
