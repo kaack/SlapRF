@@ -1,5 +1,12 @@
 import { Component } from "../core/component";
-import { esc, fmtDelta, fmtTime } from "../core/format";
+import {
+  esc,
+  fmtDelta,
+  fmtTime,
+  LAP_BREAK_GAP_THRESHOLD_SEC,
+  lapBreakGapSec,
+  renderLapBreakRowHtml,
+} from "../core/format";
 import { icons } from "../core/icons";
 import { bindLapsInnerScroll, renderLapsInnerScrollShell } from "../core/laps_inner_scroll";
 import { CurrentLap, currentLap, resolveLiveLapTableState, sectionKey } from "../state/analysis";
@@ -153,11 +160,39 @@ export class PilotLaps extends Component {
       display.heldLap && !display.excludeHeldFromHistory ? [...laps, display.heldLap] : laps;
     const bestMetrics = computePilotBestMetrics(metricsSource);
     const liveRow = live ? this.renderLiveLap(live, cols, bestMetrics, display.heldLap) : "";
+    const totalColSpan = (isAllMode ? 1 : 0) + cols.length + 4;
+    const singlePilotTimeline =
+      !isAllMode || new Set(historyLaps.map((l) => l.slotIndex)).size <= 1;
+    const reversedHistory = [...historyLaps].reverse();
+    let liveBreakRow = "";
+    if (
+      singlePilotTimeline &&
+      live &&
+      !display.heldLap &&
+      reversedHistory.length > 0 &&
+      live.startTimestampUs > reversedHistory[0].completedAtUs &&
+      reversedHistory[0].completedAtUs > 0
+    ) {
+      const liveGapSec = (live.startTimestampUs - reversedHistory[0].completedAtUs) / 1_000_000;
+      if (liveGapSec >= LAP_BREAK_GAP_THRESHOLD_SEC) {
+        liveBreakRow = renderLapBreakRowHtml(liveGapSec, totalColSpan);
+      }
+    }
     const rows =
       liveRow +
-      [...historyLaps]
-        .reverse()
-        .map((lap) => this.renderLap(lap, cols, bestMetrics, isAllMode))
+      liveBreakRow +
+      reversedHistory
+        .map((lap, idx) => {
+          const rowHtml = this.renderLap(lap, cols, bestMetrics, isAllMode);
+          const older = reversedHistory[idx + 1];
+          if (singlePilotTimeline && older && older.slotIndex === lap.slotIndex) {
+            const gapSec = lapBreakGapSec(lap, older);
+            if (gapSec >= LAP_BREAK_GAP_THRESHOLD_SEC) {
+              return rowHtml + renderLapBreakRowHtml(gapSec, totalColSpan);
+            }
+          }
+          return rowHtml;
+        })
         .join("");
 
     const pilotTh = isAllMode ? `<th class="col-pilot is-sticky-col">Pilot</th>` : "";

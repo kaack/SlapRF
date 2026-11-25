@@ -51,3 +51,47 @@ export function fmtRaceClock(sec: number): string {
   const rest = s - minutes * 60;
   return `${String(minutes).padStart(2, "0")}:${rest.toFixed(1).padStart(4, "0")}`;
 }
+
+/** Minimum uncounted gap (seconds) between consecutive laps of the same pilot to render a break separator. */
+export const LAP_BREAK_GAP_THRESHOLD_SEC = 5;
+
+/** Compact human duration for inter-lap landing / pack-swap breaks, e.g. `18s`, `2m 14s`, `1h 05m`. */
+export function fmtBreakDuration(sec: number): string {
+  if (!Number.isFinite(sec) || sec <= 0) return "0s";
+  const rounded = Math.max(1, Math.round(sec));
+  if (rounded < 60) return `${rounded}s`;
+  if (rounded < 3600) {
+    const m = Math.floor(rounded / 60);
+    const s = rounded % 60;
+    return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  }
+  const h = Math.floor(rounded / 3600);
+  const m = Math.floor((rounded % 3600) / 60);
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+/** Computes the uncounted idle gap in seconds between an older completed lap and a newer completed lap. */
+export function lapBreakGapSec(
+  newerLap: { completedAtUs: number; lapTimeSec: number },
+  olderLap: { completedAtUs: number }
+): number {
+  if (!(newerLap.completedAtUs > 0) || !(olderLap.completedAtUs > 0)) return 0;
+  const newerStartUs = newerLap.completedAtUs - Math.max(0, Math.round((newerLap.lapTimeSec || 0) * 1_000_000));
+  if (newerStartUs <= olderLap.completedAtUs) return 0;
+  return (newerStartUs - olderLap.completedAtUs) / 1_000_000;
+}
+
+/** Renders a horizontal zigzag separator `<tr>` indicating a landing / pack-swap time break between laps. */
+export function renderLapBreakRowHtml(gapSec: number, colSpan: number): string {
+  const label = `Break · ${fmtBreakDuration(gapSec)}`;
+  const span = Math.max(1, Math.round(colSpan));
+  return `<tr class="lap-break-row" data-lap-break-row data-break-sec="${Math.round(gapSec)}" aria-label="${esc(label)}">
+    <td colspan="${span}" class="lap-break-cell">
+      <div class="lap-break-inner" title="Idle / landing gap (${esc(fmtBreakDuration(gapSec))}) with no lap counting">
+        <span class="lap-break-zigzag" aria-hidden="true"></span>
+        <span class="lap-break-pill">${esc(label)}</span>
+        <span class="lap-break-zigzag" aria-hidden="true"></span>
+      </div>
+    </td>
+  </tr>`;
+}

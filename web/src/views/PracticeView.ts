@@ -1,6 +1,14 @@
 import { Component } from "../core/component";
 import { isCustomSelectOpenWithin } from "../core/custom_select";
-import { esc, fmtDelta, fmtRaceClock, fmtTime } from "../core/format";
+import {
+  esc,
+  fmtDelta,
+  fmtRaceClock,
+  fmtTime,
+  LAP_BREAK_GAP_THRESHOLD_SEC,
+  lapBreakGapSec,
+  renderLapBreakRowHtml,
+} from "../core/format";
 import { icons } from "../core/icons";
 import {
   bindLapsInnerScroll,
@@ -3010,7 +3018,7 @@ export class PracticeView extends Component {
     const lapsSig = historyLaps
       .map(
         (l) =>
-          `${l.lapId}:${l.lapNumber}:${l.lapTimeSec}:${l.invalidated ? 1 : 0}:${l.isBestLap ? 1 : 0}:${l.deltaToBest}:${(l.sectors ?? []).map((s) => `${s.fromGateId}>${s.toGateId}=${s.splitSeconds}:${s.badge}`).join(",")}`
+          `${l.lapId}:${l.lapNumber}:${l.completedAtUs}:${l.lapTimeSec}:${l.invalidated ? 1 : 0}:${l.isBestLap ? 1 : 0}:${l.deltaToBest}:${(l.sectors ?? []).map((s) => `${s.fromGateId}>${s.toGateId}=${s.splitSeconds}:${s.badge}`).join(",")}`
       )
       .join("|");
     const gatesMetaSig = cols
@@ -3113,80 +3121,108 @@ export class PracticeView extends Component {
                 </tr>
               </thead>
               <tbody>
-                ${liveRowMarkup}${[...historyLaps]
-                  .reverse()
-                  .map((lap) => {
-                    const isInvalid = Boolean(lap.invalidated);
-                    const bestLapSec = bestMetrics.bestLapBySlot.get(lap.slotIndex) ?? 0;
-                    const isBestLap =
-                      !isInvalid && bestLapSec > 0 && Math.abs(lap.lapTimeSec - bestLapSec) <= 0.0005;
-                    const deltaToBest =
-                      !isInvalid && bestLapSec > 0 && !isBestLap ? lap.lapTimeSec - bestLapSec : 0;
-                    const byKey = new Map(
-                      (lap.sectors ?? []).map((s) => [sectionKey(s.fromGateId, s.toGateId), s])
-                    );
-                    const cells = checkedCols
-                      .map((c) => {
-                        const s = byKey.get(c.key);
-                        if (!s) return `<td class="num muted col-mobile-sector" title="Timer missed">—</td>`;
-                        const splitCls = isInvalid
-                          ? ""
-                          : resolveSectorSplitClass(
-                              bestMetrics,
-                              lap.slotIndex,
-                              c.from,
-                              c.to,
-                              s.splitSeconds
-                            );
-                        return `<td class="num col-mobile-sector"><span class="split ${splitCls}">${s.splitSeconds.toFixed(3)}</span></td>`;
+                ${liveRowMarkup}${(() => {
+                  const totalCols = checkedCols.length + 3;
+                  const reversedHistory = [...historyLaps].reverse();
+                  let liveBreakMarkup = "";
+                  if (
+                    tableLiveLap &&
+                    !heldLap &&
+                    reversedHistory.length > 0 &&
+                    tableLiveLap.startTimestampUs > reversedHistory[0].completedAtUs &&
+                    reversedHistory[0].completedAtUs > 0
+                  ) {
+                    const liveGapSec =
+                      (tableLiveLap.startTimestampUs - reversedHistory[0].completedAtUs) / 1_000_000;
+                    if (liveGapSec >= LAP_BREAK_GAP_THRESHOLD_SEC) {
+                      liveBreakMarkup = renderLapBreakRowHtml(liveGapSec, totalCols);
+                    }
+                  }
+                  return (
+                    liveBreakMarkup +
+                    reversedHistory
+                      .map((lap, idx) => {
+                        const isInvalid = Boolean(lap.invalidated);
+                        const bestLapSec = bestMetrics.bestLapBySlot.get(lap.slotIndex) ?? 0;
+                        const isBestLap =
+                          !isInvalid && bestLapSec > 0 && Math.abs(lap.lapTimeSec - bestLapSec) <= 0.0005;
+                        const deltaToBest =
+                          !isInvalid && bestLapSec > 0 && !isBestLap ? lap.lapTimeSec - bestLapSec : 0;
+                        const byKey = new Map(
+                          (lap.sectors ?? []).map((s) => [sectionKey(s.fromGateId, s.toGateId), s])
+                        );
+                        const cells = checkedCols
+                          .map((c) => {
+                            const s = byKey.get(c.key);
+                            if (!s) return `<td class="num muted col-mobile-sector" title="Timer missed">—</td>`;
+                            const splitCls = isInvalid
+                              ? ""
+                              : resolveSectorSplitClass(
+                                  bestMetrics,
+                                  lap.slotIndex,
+                                  c.from,
+                                  c.to,
+                                  s.splitSeconds
+                                );
+                            return `<td class="num col-mobile-sector"><span class="split ${splitCls}">${s.splitSeconds.toFixed(3)}</span></td>`;
+                          })
+                          .join("");
+                        const vs = isInvalid
+                          ? "—"
+                          : isBestLap && lap.lapNumber > 1
+                            ? `<span class="badge badge-accent">PB</span>`
+                            : deltaToBest > 0.0005
+                              ? fmtDelta(deltaToBest)
+                              : "best";
+                        const toggleTitle = isInvalid
+                          ? `Restore Lap ${lap.lapNumber}`
+                          : `Scratch Lap ${lap.lapNumber} (click again to restore or delete)`;
+                        const lapNumContent = isInvalid
+                          ? `<span class="lap-num-cell"><button
+                              type="button"
+                              role="checkbox"
+                              aria-checked="false"
+                              class="lap-num-toggle"
+                              data-practice-toggle-lap="${lap.lapId}"
+                              title="${esc(toggleTitle)}"
+                              aria-label="${esc(toggleTitle)}"
+                            >${lap.lapNumber}</button><button
+                              type="button"
+                              class="lap-delete-btn"
+                              data-practice-delete-lap="${lap.lapId}"
+                              title="Delete Lap ${lap.lapNumber}"
+                              aria-label="Delete Lap ${lap.lapNumber}"
+                            >${icons.trash(13)}</button></span>`
+                          : `<button
+                              type="button"
+                              role="checkbox"
+                              aria-checked="true"
+                              class="lap-num-toggle"
+                              data-practice-toggle-lap="${lap.lapId}"
+                              title="${esc(toggleTitle)}"
+                              aria-label="${esc(toggleTitle)}"
+                            >${lap.lapNumber}</button>`;
+                        const lapTimeSplitCls = isInvalid ? "" : isBestLap ? "split-best" : "split-neutral";
+                        const rowHtml = `<tr class="${isInvalid ? "is-invalidated" : ""}" data-lap-row="${lap.lapId}" data-practice-toggle-lap="${lap.lapId}" title="${esc(toggleTitle)}">
+                          <td class="mono col-mobile-lap-num is-sticky-col">
+                            ${lapNumContent}
+                          </td>
+                          ${cells}
+                          <td class="num mono strong col-lap-time is-sticky-col"><span class="lap-sticky-inner"><span class="split ${lapTimeSplitCls}">${fmtTime(lap.lapTimeSec)}</span></span></td>
+                          <td class="num mono muted col-vs-best is-sticky-col"><span class="lap-sticky-inner">${vs}</span></td>
+                        </tr>`;
+                        const older = reversedHistory[idx + 1];
+                        if (older) {
+                          const gapSec = lapBreakGapSec(lap, older);
+                          if (gapSec >= LAP_BREAK_GAP_THRESHOLD_SEC) {
+                            return rowHtml + renderLapBreakRowHtml(gapSec, totalCols);
+                          }
+                        }
+                        return rowHtml;
                       })
-                      .join("");
-                    const vs = isInvalid
-                      ? "—"
-                      : isBestLap && lap.lapNumber > 1
-                        ? `<span class="badge badge-accent">PB</span>`
-                        : deltaToBest > 0.0005
-                          ? fmtDelta(deltaToBest)
-                          : "best";
-                    const toggleTitle = isInvalid
-                      ? `Restore Lap ${lap.lapNumber}`
-                      : `Scratch Lap ${lap.lapNumber} (click again to restore or delete)`;
-                    const lapNumContent = isInvalid
-                      ? `<span class="lap-num-cell"><button
-                          type="button"
-                          role="checkbox"
-                          aria-checked="false"
-                          class="lap-num-toggle"
-                          data-practice-toggle-lap="${lap.lapId}"
-                          title="${esc(toggleTitle)}"
-                          aria-label="${esc(toggleTitle)}"
-                        >${lap.lapNumber}</button><button
-                          type="button"
-                          class="lap-delete-btn"
-                          data-practice-delete-lap="${lap.lapId}"
-                          title="Delete Lap ${lap.lapNumber}"
-                          aria-label="Delete Lap ${lap.lapNumber}"
-                        >${icons.trash(13)}</button></span>`
-                      : `<button
-                          type="button"
-                          role="checkbox"
-                          aria-checked="true"
-                          class="lap-num-toggle"
-                          data-practice-toggle-lap="${lap.lapId}"
-                          title="${esc(toggleTitle)}"
-                          aria-label="${esc(toggleTitle)}"
-                        >${lap.lapNumber}</button>`;
-                    const lapTimeSplitCls = isInvalid ? "" : isBestLap ? "split-best" : "split-neutral";
-                    return `<tr class="${isInvalid ? "is-invalidated" : ""}" data-lap-row="${lap.lapId}" data-practice-toggle-lap="${lap.lapId}" title="${esc(toggleTitle)}">
-                      <td class="mono col-mobile-lap-num is-sticky-col">
-                        ${lapNumContent}
-                      </td>
-                      ${cells}
-                      <td class="num mono strong col-lap-time is-sticky-col"><span class="lap-sticky-inner"><span class="split ${lapTimeSplitCls}">${fmtTime(lap.lapTimeSec)}</span></span></td>
-                      <td class="num mono muted col-vs-best is-sticky-col"><span class="lap-sticky-inner">${vs}</span></td>
-                    </tr>`;
-                  })
-                  .join("")}
+                      .join("")
+                  );
+                })()}
               </tbody>
             </table>`,
             62,

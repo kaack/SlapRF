@@ -2504,8 +2504,16 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       ],
       trackInitialized: true,
       trackSnapshot: [g1, g2],
-      laps: [makeLap(1, 1, 1, 12.4)],
-      crossings: [makeCrossing(10, 1, 1, 10_000_000), makeCrossing(11, 1, 1, 22_400_000)],
+      laps: [
+        { ...makeLap(1, 1, 1, 12.4), completedAtUs: 22_400_000 },
+        { ...makeLap(2, 1, 2, 11.8), completedAtUs: 129_200_000 }, // Started at 117.4s -> 95s (1m 35s) landing break after L1!
+      ],
+      crossings: [
+        makeCrossing(10, 1, 1, 10_000_000),
+        makeCrossing(11, 1, 1, 22_400_000),
+        makeCrossing(12, 1, 1, 117_400_000),
+        makeCrossing(13, 1, 1, 129_200_000),
+      ],
       filtered: [
         {
           timestampUs: 15_800_000,
@@ -2669,6 +2677,20 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       expect(rulesAiBtnBefore).not.toBeNull();
       expect(rulesAiBtnBefore.disabled).toBe(false);
 
+      // Verify zigzag break separator row appears between L2 and L1 in BOTH desktop & mobile Practice Laps tables (95s = 1m 35s gap)
+      host.querySelector<HTMLButtonElement>('[data-practice-mobile-tab="laps"]')!.click();
+      await flushMicrotasks();
+      const desktopBreakRow = host.querySelector<HTMLElement>(
+        ".practice-laps-table [data-lap-break-row]"
+      )!;
+      expect(desktopBreakRow).not.toBeNull();
+      expect(desktopBreakRow.textContent ?? "").toContain("Break · 1m 35s");
+      const mobileBreakRow = host.querySelector<HTMLElement>(
+        ".practice-sectors-table [data-lap-break-row]"
+      )!;
+      expect(mobileBreakRow).not.toBeNull();
+      expect(mobileBreakRow.textContent ?? "").toContain("Break · 1m 35s");
+
       // 2. Switch to Practice Review tab -> inspect recorded laps & open on-demand RSSI Editor modal
       const reviewTabBtn = host.querySelector<HTMLButtonElement>(
         '[data-practice-mobile-tab="review"]'
@@ -2680,6 +2702,9 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       const reviewPane = host.querySelector<HTMLElement>('[data-slot="mobile-review"]')!;
       expect(reviewPane.textContent ?? "").toContain("OneEye (R7)");
       expect(reviewPane.textContent ?? "").toContain("L1");
+      const reviewBreakRow = reviewPane.querySelector<HTMLElement>("[data-lap-break-row]")!;
+      expect(reviewBreakRow).not.toBeNull();
+      expect(reviewBreakRow.textContent ?? "").toContain("Break · 1m 35s");
 
       const fakeBackBtn = document.createElement("button");
       fakeBackBtn.className = "topbar-back-btn";

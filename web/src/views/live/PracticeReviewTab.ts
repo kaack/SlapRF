@@ -1,5 +1,5 @@
 import { Component } from "../../core/component";
-import { esc, fmtDelta, fmtTime } from "../../core/format";
+import { esc, fmtDelta, fmtTime, LAP_BREAK_GAP_THRESHOLD_SEC, lapBreakGapSec, renderLapBreakRowHtml } from "../../core/format";
 import { icons } from "../../core/icons";
 import { formatBandChannelShort } from "../../core/vtx_channels";
 import { ApiClient } from "../../services/api_client";
@@ -109,13 +109,12 @@ export class PracticeReviewTab extends Component {
           </div>`
         : "";
 
+    const reversedPilotLaps = pilotLaps.slice().reverse();
     const rowsHtml =
-      pilotLaps.length === 0
+      reversedPilotLaps.length === 0
         ? `<tr><td colspan="5" class="muted" style="text-align:center; padding: 22px 12px;">No laps recorded yet for ${esc(callsign)}. <button type="button" class="btn btn-ghost btn-xs" data-review-open-editor style="margin-left:6px">${icons.rssiBadge(13)}<span>Open RSSI</span></button></td></tr>`
-        : pilotLaps
-            .slice()
-            .reverse()
-            .map((lap) => {
+        : reversedPilotLaps
+            .map((lap, idx) => {
               const inv = Boolean(lap.invalidated);
               const startUs = Math.max(0, Math.round(lap.completedAtUs - lap.lapTimeSec * 1_000_000));
               const deltaHtml = inv
@@ -129,7 +128,7 @@ export class PracticeReviewTab extends Component {
                 (lap.sectors ?? []).length > 0
                   ? lap.sectors.map((s) => s.splitSeconds.toFixed(2)).join(" · ")
                   : "—";
-              return `
+              const rowHtml = `
                 <tr class="practice-review-row ${inv ? "is-invalidated" : ""}" data-review-lap-row="${lap.lapId}" data-lap-start-us="${startUs}" data-lap-end-us="${lap.completedAtUs}">
                   <td class="mono"><strong>L${lap.lapNumber}</strong></td>
                   <td class="mono">${lap.isBestLap && !inv ? `<span class="split-best">${fmtTime(lap.lapTimeSec)}</span>` : fmtTime(lap.lapTimeSec)}</td>
@@ -156,6 +155,14 @@ export class PracticeReviewTab extends Component {
                     </div>
                   </td>
                 </tr>`;
+              const older = reversedPilotLaps[idx + 1];
+              if (older) {
+                const gapSec = lapBreakGapSec(lap, older);
+                if (gapSec >= LAP_BREAK_GAP_THRESHOLD_SEC) {
+                  return rowHtml + renderLapBreakRowHtml(gapSec, 5);
+                }
+              }
+              return rowHtml;
             })
             .join("");
 
