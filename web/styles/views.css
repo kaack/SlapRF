@@ -3711,6 +3711,11 @@ html[data-theme="light"] .scope-tune-head {
   .is-signals-panel > .scope-tune-drawer {
     margin-top: 0;
   }
+  .rc-signals-card-box:not(.lap-ed-signals-card) > .rc-panel-body.is-signals-body,
+  .is-signals-panel .rc-panel-body.is-signals-body {
+    overflow: visible !important;
+    overscroll-behavior: auto !important;
+  }
   .scope-calib-tune-btn {
     display: none !important;
   }

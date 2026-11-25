@@ -214,8 +214,8 @@ export class PilotLaps extends Component {
         fixedLeftPx,
         fixedRightPx,
         sectorCount: cols.length,
-        maxVisibleSectors: 3,
-        minSectorWidthPx: 88,
+        maxVisibleSectors: "auto",
+        minSectorWidthPx: 68,
         initialScrollLeft: this.savedScrollLeft,
         onScrollLeftChange: (left) => {
           this.savedScrollLeft = left;
@@ -246,8 +246,8 @@ export class PilotLaps extends Component {
         fixedLeftPx,
         fixedRightPx,
         sectorCount: cols.length,
-        maxVisibleSectors: 3,
-        minSectorWidthPx: 88,
+        maxVisibleSectors: "auto",
+        minSectorWidthPx: 68,
         initialScrollLeft: this.savedScrollLeft,
         onScrollLeftChange: (left) => {
           this.savedScrollLeft = left;

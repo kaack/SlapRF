@@ -4045,6 +4045,12 @@ export class PilotRssiChart extends Component {
 
   /** The calibration row: what the tags mean, Auto-calibrate, Reset, and the last result with Undo. */
   private renderCalib(): void {
+    const calibEl = this.slot("calib");
+    if (this.lapWindow !== null) {
+      calibEl.hidden = true;
+      return;
+    }
+    calibEl.hidden = false;
     if (this.isMultiPilotMode) {
       const count = (this.multiPilotSlots ?? []).length;
       const multiHtml = `<span class="scope-calib-text">Showing all ${count} seated pilots simultaneously - select an individual pilot above to tune thresholds.</span>`;
@@ -4158,7 +4164,7 @@ export class PilotRssiChart extends Component {
 
     const legendEl = this.slot("legend");
     const activeSlot = this.activePilotSlot;
-    const canTune = !this.isMultiPilotMode && !this.store.isHistoricalTrack;
+    const canTune = !this.isMultiPilotMode && !this.store.isHistoricalTrack && this.lapWindow === null;
     const isLapRF = this.isLapRF;
     const isRH = this.isRH;
     const canAutoCalib = !isLapRF && !isRH;
@@ -4539,7 +4545,7 @@ export class PilotRssiChart extends Component {
     if (this.tuneDrawerClosing) {
       return;
     }
-    if (this.isMultiPilotMode || this.store.isHistoricalTrack) {
+    if (this.isMultiPilotMode || this.store.isHistoricalTrack || this.lapWindow !== null) {
       drawerEl.hidden = true;
       drawerEl.classList.add("is-mobile-closed");
       if (this.lastTuneDrawerHtml !== "") {

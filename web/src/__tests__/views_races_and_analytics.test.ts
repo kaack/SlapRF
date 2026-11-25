@@ -2077,14 +2077,12 @@ describe("PracticeView two-step lap deletion and per-pilot lap clearing", () => 
         window.requestAnimationFrame(() => window.requestAnimationFrame(() => r(null)))
       );
 
-      // 1. Desktop PilotLaps: all 5 sections rendered inside sideways-scrollable inner shell (>3 sections)
+      // 1. Desktop PilotLaps: fits all 5 sections inline on wide viewports without forced horizontal scroll
       const desktopShell = host.querySelector<HTMLElement>(
         ".practice-laps-card .laps-inner-scroll-shell"
       )!;
       expect(desktopShell).not.toBeNull();
-      expect(desktopShell.classList.contains("has-sector-overflow")).toBe(true);
-      const desktopVp = desktopShell.querySelector<HTMLElement>(".laps-inner-scroll-viewport")!;
-      expect(window.getComputedStyle(desktopVp).scrollbarWidth).toBe("none");
+      expect(desktopShell.classList.contains("has-sector-overflow")).toBe(false);
       expect(desktopShell.querySelectorAll("th.col-sector").length).toBe(5);
       expect(
         window.getComputedStyle(desktopShell.querySelector<HTMLElement>("th.col-lap-num")!).position
@@ -2096,13 +2094,7 @@ describe("PracticeView two-step lap deletion and per-pilot lap clearing", () => 
       const desktopLeftCue = desktopShell.querySelector<HTMLButtonElement>(".laps-sec-cue.is-left")!;
       const desktopRightCue = desktopShell.querySelector<HTMLButtonElement>(".laps-sec-cue.is-right")!;
       expect(desktopLeftCue.hidden).toBe(true);
-      expect(desktopRightCue.hidden).toBe(false);
-
-      // Clicking the right chevron scrolls the sections sideways without scratching Lap 1
-      desktopRightCue.click();
-      await flushMicrotasks();
-      expect(desktopVp.scrollLeft).toBeGreaterThan(0);
-      expect(desktopLeftCue.hidden).toBe(false);
+      expect(desktopRightCue.hidden).toBe(true);
       expect(
         desktopShell.querySelector("tr[data-lap-row='301']")!.classList.contains("is-invalidated")
       ).toBe(false);
@@ -2766,9 +2758,11 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       expect(editorModal.querySelector('[data-focus="1"]')).not.toBeNull();
       expect(editorModal.querySelector('[data-focus="2"]')).not.toBeNull();
 
-      // Select timer T1 (`[data-focus="2"]`) -> reveals Signals `[ + ]` + `[ lock ]` overlay actions!
+      // Select timer T1 (`[data-focus="2"]`) -> reveals Signals `[ + ]` + `[ lock ]` overlay actions without opening Fine-Tune drawer!
       editorModal.querySelector<HTMLButtonElement>('[data-focus="2"]')!.click();
       await flushMicrotasks();
+      expect(editorModal.querySelector<HTMLElement>('[data-slot="tune-drawer"]')?.hidden).toBe(true);
+      expect(editorModal.querySelector('[data-tune-gate]')).toBeNull();
       const overlayActions = editorModal.querySelector<HTMLElement>('[data-slot="chart-actions"]')!;
       expect(overlayActions.hidden).toBe(false);
       expect(

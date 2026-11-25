@@ -168,10 +168,9 @@ func (l *Qwen3GGUFLabeler) LabelCandidates(
 		minLapSec = sess.Rules.MinLapSec
 	}
 
-	// System 1 prompt + up to 6 contested candidates scored in a SINGLE L1-row-tiled transformer pass
-	// (~350 tokens, ~80 MB KV-cache) guarantees at most 1 sequential pass over the mmap'd GGUF weights
-	// per pilot (zero multi-pass LRU page-cache thrashing on memory-constrained phones).
-	const maxQwenSweepCandidates = 6
+	// System 1 prompt + up to 10 contested candidates scored per L1-row-tiled transformer pass
+	// on Desktop (Apple Silicon / x86_64) ensures every genuinely ambiguous peak is evaluated by Qwen3.
+	const maxQwenSweepCandidates = 10
 	var kvSess *gguf.Session
 	kvCap := 0
 	qwenScoredCount := 0
@@ -300,50 +299,7 @@ func (l *Qwen3GGUFLabeler) LabelCandidates(
 		if len(unresolvedIdx) == 0 {
 			continue
 		}
-
-		// If > maxQwenSweepCandidates remain on a real 28-layer GGUF model, prioritize the highest-prominence
-		// genuinely contested peaks for the single Qwen3 sweep and classify weak tail bumps via fast physics
-		// so mobile labeling NEVER exceeds 1 sequential pass through the 1.03 GB weights!
-		var qwenIndices []int
-		if enableFastTriage && len(unresolvedIdx) > maxQwenSweepCandidates {
-			ranked := append([]int(nil), unresolvedIdx...)
-			sort.Slice(ranked, func(i, j int) bool {
-				return pCands[ranked[i]].ProminenceDb > pCands[ranked[j]].ProminenceDb
-			})
-			keepSet := make(map[int]bool, maxQwenSweepCandidates)
-			for _, rIdx := range ranked[:maxQwenSweepCandidates] {
-				keepSet[rIdx] = true
-			}
-			for _, idx := range unresolvedIdx {
-				if keepSet[idx] {
-					qwenIndices = append(qwenIndices, idx)
-				} else {
-					cand := pCands[idx]
-					maxDiff := float32(-999)
-					for _, co := range cand.Coincident {
-						if diff := co.ProminenceDb - cand.ProminenceDb; diff > maxDiff {
-							maxDiff = diff
-						}
-					}
-					lbl := "noise"
-					conf := float32(0.82)
-					if maxDiff >= 1.5 {
-						lbl = "bleed"
-						conf = 0.84
-					} else if cand.ProminenceDb >= 15.0 && maxDiff <= -3.0 && cand.WidthHalfPromMs >= 70 && cand.WidthHalfPromMs <= 1050 {
-						lbl = "crossing"
-						conf = 0.80
-					}
-					recordFastDecision(decisionsByID, cand, lbl, conf)
-					doneCount++
-				}
-			}
-			if onProgress != nil {
-				onProgress(doneCount, totalCount)
-			}
-		} else {
-			qwenIndices = unresolvedIdx
-		}
+		qwenIndices := unresolvedIdx
 
 		if err := ensureModelLoaded(); err != nil {
 			return nil, err
