@@ -2731,10 +2731,13 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       // 4. Add a new untrained model via the top Search / + Add bar -> Training Box switches to Untrained (`Train` only!)
       const searchInput = host.querySelector<HTMLInputElement>("[data-ai-search-input]")!;
       const addModelBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="create-model"]')!;
+      const listHostEl = host.querySelector<HTMLElement>("[data-ai-models-list-host]")!;
+      const listHeightUnfiltered = Math.round(listHostEl.getBoundingClientRect().height);
       expect(searchInput).not.toBeNull();
       expect(addModelBtn.disabled).toBe(true);
       searchInput.value = "Outdoor Gate";
       searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(Math.round(listHostEl.getBoundingClientRect().height)).toBe(listHeightUnfiltered);
       expect(addModelBtn.disabled).toBe(false);
       addModelBtn.click();
       await flushMicrotasks();

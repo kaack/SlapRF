@@ -28402,12 +28402,37 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
 
 .ai-model-list.is-top-scrollable {
   padding: 10px 12px;
+  height: 234px;
+  min-height: 234px;
   max-height: 234px;
   box-sizing: border-box;
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: contain;
+}
+
+@media (max-width: 860px) {
+  .rc-pilots-search-row .rc-pilots-search-input,
+  .bkt-pilots-search {
+    height: 36px;
+    min-height: 36px;
+    padding-left: 31px;
+    font-size: 13.5px;
+  }
+
+  .rc-pilots-search-row > svg,
+  .bkt-pilots-search-icon {
+    left: 10px;
+  }
+
+  .bkt-pilots-add-btn {
+    height: 36px !important;
+    min-height: 36px !important;
+    padding: 0 12px !important;
+    font-size: 13px !important;
+    gap: 5px;
+  }
 }
 
 .ai-model-empty {
@@ -28434,6 +28459,7 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
 }
 
 .ai-model-row {
+  flex: 0 0 38px;
   display: flex;
   align-items: center;
   justify-content: space-between;
