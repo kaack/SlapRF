@@ -137,7 +137,7 @@ export function openPracticeLapEditorModal(
       const startUs = Math.max(0, Math.round(liveLap.completedAtUs - liveLap.lapTimeSec * 1_000_000));
       const endUs = liveLap.completedAtUs;
       const spanUs = Math.max(1_000_000, endUs - startUs);
-      const padUs = clamp(Math.round(spanUs * 0.1), 800_000, 1_600_000);
+      const padUs = clamp(Math.round(spanUs * 0.12), 1_000_000, 2_000_000);
       return {
         lapNumber: liveLap.lapNumber,
         lapTimeSec: liveLap.lapTimeSec,
@@ -157,7 +157,7 @@ export function openPracticeLapEditorModal(
       fallbackEndUs > 0
     ) {
       const spanUs = Math.max(1_000_000, fallbackEndUs - fallbackStartUs);
-      const padUs = clamp(Math.round(spanUs * 0.1), 800_000, 1_600_000);
+      const padUs = clamp(Math.round(spanUs * 0.12), 1_000_000, 2_000_000);
       return {
         lapNumber: null,
         lapTimeSec: Math.max(0, (fallbackEndUs - fallbackStartUs) / 1_000_000),

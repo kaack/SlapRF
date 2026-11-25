@@ -218,6 +218,8 @@ interface PassMarker {
   counted: boolean;
   isFiltered?: boolean;
   title: string;
+  leftTitle?: string;
+  rightTitle?: string;
   detail: string;
   color?: string;
   slotIndex?: number;
@@ -259,6 +261,8 @@ interface LiveCrossingEval {
   invalidReason: FilterReason | null;
   invalidDetail: string;
   suffix: string;
+  leftSuffix?: string;
+  rightSuffix?: string;
   detailPrefix: string;
 }
 
@@ -406,7 +410,10 @@ export class PilotRssiChart extends Component {
   private cachedLabelSig = "";
   private cachedLabelRows = new Map<string, number>();
   private crossingLapCacheRev = -1;
-  private readonly crossingLapMeta = new Map<string, { suffix: string; detailPrefix: string }>();
+  private readonly crossingLapMeta = new Map<
+    string,
+    { suffix: string; leftSuffix?: string; rightSuffix?: string; detailPrefix: string }
+  >();
 
   private get hwMode(): TimingHardwareMode {
     return this.store.timingHardwareMode;
@@ -2924,10 +2931,13 @@ export class PilotRssiChart extends Component {
 
     crossingsBySlot.forEach((slotCrossings, slotIndex) => {
       const slotLaps = lapsBySlot.get(slotIndex) ?? [];
+      const slotBreaks = this.store.breaks
+        .filter((b) => b.slotIndex === slotIndex && !this.pendingDeletedBreaks.has(b.breakId))
+        .sort((a, b) => a.timestampUs - b.timestampUs);
       const sfTimestamps: number[] = [];
       for (let i = 0; i < slotCrossings.length; i++) {
         const c = slotCrossings[i];
-        if (c.isStartFinish || sfGateIds.has(c.gateId)) {
+        if (!c.invalidReason && (c.isStartFinish || sfGateIds.has(c.gateId))) {
           sfTimestamps.push(c.timestampUs);
         }
       }
@@ -2939,9 +2949,11 @@ export class PilotRssiChart extends Component {
         const ts = c.timestampUs;
         const isSF = Boolean(c.isStartFinish || sfGateIds.has(c.gateId));
         let suffix = "";
+        let leftSuffix = "";
+        let rightSuffix = "";
         let detailPrefix = "Timed";
 
-        while (lapCursor < slotLaps.length && slotLaps[lapCursor].completedAtUs + 10_000 < ts) {
+        while (lapCursor < slotLaps.length && slotLaps[lapCursor].completedAtUs + 15_000 < ts) {
           lapCursor++;
         }
         while (sfCursor + 1 < sfTimestamps.length && sfTimestamps[sfCursor + 1] <= ts) {
@@ -2949,31 +2961,78 @@ export class PilotRssiChart extends Component {
         }
 
         if (isSF) {
-          const matchedLap =
+          const matchedFinishLap =
             lapCursor < slotLaps.length &&
-            Math.abs(slotLaps[lapCursor].completedAtUs - ts) <= 10_000
+            Math.abs(slotLaps[lapCursor].completedAtUs - ts) <= 15_000
               ? slotLaps[lapCursor]
               : undefined;
-          if (matchedLap) {
-            suffix = `Lap ${matchedLap.lapNumber}`;
-            detailPrefix = matchedLap.invalidated
-              ? `Lap ${matchedLap.lapNumber} (scratched)`
-              : `Lap ${matchedLap.lapNumber} (${matchedLap.lapTimeSec.toFixed(2)}s)`;
-          } else if (c.startedLap || slotLaps.length === 0) {
-            suffix = "Start";
-            detailPrefix = "Start";
+          if (matchedFinishLap) {
+            leftSuffix = `L${matchedFinishLap.lapNumber}`;
+            detailPrefix = matchedFinishLap.invalidated
+              ? `L${matchedFinishLap.lapNumber} (scratched)`
+              : `L${matchedFinishLap.lapNumber} (${matchedFinishLap.lapTimeSec.toFixed(2)}s)`;
           }
+
+          let matchedStartLap: (typeof slotLaps)[number] | undefined;
+          for (let li = 0; li < slotLaps.length; li++) {
+            if (Math.abs(slotLaps[li].startAtUs - ts) <= 50_000) {
+              matchedStartLap = slotLaps[li];
+              break;
+            }
+          }
+          if (matchedStartLap) {
+            rightSuffix = `L${matchedStartLap.lapNumber}`;
+            if (!matchedFinishLap) {
+              detailPrefix = `L${matchedStartLap.lapNumber} start`;
+            }
+          } else {
+            let nextValidCrossTs: number | undefined;
+            for (let j = i + 1; j < slotCrossings.length; j++) {
+              if (!slotCrossings[j].invalidReason) {
+                nextValidCrossTs = slotCrossings[j].timestampUs;
+                break;
+              }
+            }
+            const hasBreakAfter = slotBreaks.some(
+              (b) =>
+                b.timestampUs > ts &&
+                (nextValidCrossTs === undefined || b.timestampUs <= nextValidCrossTs)
+            );
+            if (!hasBreakAfter) {
+              let prevLapNum = matchedFinishLap?.lapNumber ?? 0;
+              if (prevLapNum === 0) {
+                for (let li = slotLaps.length - 1; li >= 0; li--) {
+                  if (slotLaps[li].completedAtUs <= ts + 15_000) {
+                    prevLapNum = slotLaps[li].lapNumber;
+                    break;
+                  }
+                }
+              }
+              const continuesAfter =
+                !matchedFinishLap ||
+                (nextValidCrossTs !== undefined && nextValidCrossTs - ts <= maxLapUs) ||
+                this.store.isScopeLive;
+              if (continuesAfter) {
+                rightSuffix = `L${prevLapNum + 1}`;
+                if (!matchedFinishLap) {
+                  detailPrefix = `L${prevLapNum + 1} start`;
+                }
+              }
+            }
+          }
+          suffix = rightSuffix || leftSuffix;
         } else {
           const candidateLap = lapCursor < slotLaps.length ? slotLaps[lapCursor] : undefined;
           if (
             candidateLap &&
             ts >= candidateLap.startAtUs - 50_000 &&
-            ts <= candidateLap.completedAtUs + 10_000
+            ts <= candidateLap.completedAtUs + 15_000
           ) {
-            suffix = `Lap ${candidateLap.lapNumber}`;
+            suffix = `L${candidateLap.lapNumber}`;
+            rightSuffix = suffix;
             detailPrefix = candidateLap.invalidated
-              ? `Lap ${candidateLap.lapNumber} (scratched)`
-              : `Lap ${candidateLap.lapNumber}`;
+              ? `L${candidateLap.lapNumber} (scratched)`
+              : `L${candidateLap.lapNumber}`;
           } else {
             const lastSfTs =
               sfTimestamps.length > 0 && sfTimestamps[sfCursor] <= ts
@@ -2985,20 +3044,23 @@ export class PilotRssiChart extends Component {
             if (lastSfTs !== undefined && !hasLaterSf && ts - prevCrossTs <= maxLapUs) {
               let prevLapNum = 0;
               for (let li = slotLaps.length - 1; li >= 0; li--) {
-                if (slotLaps[li].completedAtUs <= lastSfTs + 10_000) {
+                if (slotLaps[li].completedAtUs <= lastSfTs + 15_000) {
                   prevLapNum = slotLaps[li].lapNumber;
                   break;
                 }
               }
               const nextLapNum = prevLapNum + 1;
-              suffix = `Lap ${nextLapNum}`;
-              detailPrefix = `Lap ${nextLapNum} (in progress)`;
+              suffix = `L${nextLapNum}`;
+              rightSuffix = suffix;
+              detailPrefix = `L${nextLapNum} (in progress)`;
             }
           }
         }
 
         this.crossingLapMeta.set(PilotRssiChart.crossingMetaKey(c), {
           suffix,
+          leftSuffix: leftSuffix || undefined,
+          rightSuffix: rightSuffix || undefined,
           detailPrefix,
         });
       }
@@ -3177,22 +3239,30 @@ export class PilotRssiChart extends Component {
       // Valid crossing
       lastAcceptedGateUs.set(ev.gateId, effTs);
       let suffix = "";
+      let leftSuffix = "";
+      let rightSuffix = "";
       let detailPrefix = "Timed";
       if (isSF) {
         if (lapStartUs > 0) {
           const lapSec = (effTs - lapStartUs) / 1e6;
-          if (lapSec > effRules.maxLapSec) {
-            suffix = "Start";
-            detailPrefix = "Start";
-          } else {
+          if (lapSec <= effRules.maxLapSec) {
             completedLaps++;
-            suffix = `Lap ${completedLaps}`;
-            detailPrefix = `Lap ${completedLaps} (${lapSec.toFixed(2)}s)`;
+            leftSuffix = `L${completedLaps}`;
+            detailPrefix = `L${completedLaps} (${lapSec.toFixed(2)}s)`;
           }
-        } else {
-          suffix = "Start";
-          detailPrefix = "Start";
         }
+        const nextItem = i + 1 < list.length ? list[i + 1] : undefined;
+        const continuesAfter =
+          leftSuffix === "" ||
+          (nextItem !== undefined && (nextItem.effTs - effTs) / 1e6 <= effRules.maxLapSec) ||
+          this.store.isScopeLive;
+        if (continuesAfter) {
+          rightSuffix = `L${completedLaps + 1}`;
+          if (!leftSuffix) {
+            detailPrefix = `L${completedLaps + 1} start`;
+          }
+        }
+        suffix = rightSuffix || leftSuffix;
         lapStartUs = effTs;
       } else {
         const curLapNum = completedLaps + 1;
@@ -3204,10 +3274,11 @@ export class PilotRssiChart extends Component {
           }
         }
         const splitSec = lastGateTimeUs > 0 ? Math.max(0, (effTs - lastGateTimeUs) / 1e6) : 0;
-        suffix = `Lap ${curLapNum}`;
+        suffix = `L${curLapNum}`;
+        rightSuffix = suffix;
         detailPrefix = hasClosingSf
-          ? `Lap ${curLapNum}${splitSec > 0 ? ` · +${splitSec.toFixed(2)}s` : ""}`
-          : `Lap ${curLapNum} (in progress)`;
+          ? `L${curLapNum}${splitSec > 0 ? ` · +${splitSec.toFixed(2)}s` : ""}`
+          : `L${curLapNum} (in progress)`;
       }
       lastGateId = ev.gateId;
       lastGateTimeUs = effTs;
@@ -3218,6 +3289,8 @@ export class PilotRssiChart extends Component {
         invalidReason: null,
         invalidDetail: "",
         suffix,
+        leftSuffix: leftSuffix || undefined,
+        rightSuffix: rightSuffix || undefined,
         detailPrefix,
       });
     }
@@ -3266,15 +3339,21 @@ export class PilotRssiChart extends Component {
         const gateLbl = this.labelOfGate(c.gateId);
         const counted = !c.invalidReason;
         const meta = this.crossingLapMeta.get(PilotRssiChart.crossingMetaKey(c));
+        const leftTitle =
+          counted && meta?.leftSuffix ? `${who} · ${gateLbl} · ${meta.leftSuffix}` : undefined;
+        const rightTitle =
+          counted && meta?.rightSuffix ? `${who} · ${gateLbl} · ${meta.rightSuffix}` : undefined;
         out.push({
           ts: c.timestampUs,
           gateId: c.gateId,
           counted,
+          leftTitle,
+          rightTitle,
           title: !counted && c.invalidReason
             ? `${who} · ${gateLbl}-${FILTER_SHORT_CODES[c.invalidReason] ?? c.invalidReason}`
-            : meta?.suffix
-              ? `${who} · ${gateLbl} · ${meta.suffix}`
-              : `${who} · ${gateLbl}`,
+            : rightTitle ||
+              leftTitle ||
+              (meta?.suffix ? `${who} · ${gateLbl} · ${meta.suffix}` : `${who} · ${gateLbl}`),
           detail: !counted && c.invalidDetail
             ? c.invalidDetail
             : `${meta?.detailPrefix ?? "Timed"} · peak ${c.peakRssiDbm.toFixed(0)}${this.unitSuffix}`,
@@ -3333,7 +3412,11 @@ export class PilotRssiChart extends Component {
       const invDetail = evRes ? evRes.invalidDetail : (c.invalidDetail ?? "");
       const meta = !evRes ? this.crossingLapMeta.get(PilotRssiChart.crossingMetaKey(c)) : undefined;
       const suffix = evRes ? evRes.suffix : (meta?.suffix ?? "");
+      const leftSuffix = evRes ? evRes.leftSuffix : meta?.leftSuffix;
+      const rightSuffix = evRes ? evRes.rightSuffix : meta?.rightSuffix;
       const detailPrefix = evRes ? evRes.detailPrefix : (meta?.detailPrefix ?? "Timed");
+      const leftTitle = counted && leftSuffix ? `${gateLbl} · ${leftSuffix}` : undefined;
+      const rightTitle = counted && rightSuffix ? `${gateLbl} · ${rightSuffix}` : undefined;
 
       out.push({
         ts: effTs,
@@ -3341,11 +3424,11 @@ export class PilotRssiChart extends Component {
         eventId: c.eventId,
         gateId: c.gateId,
         counted,
+        leftTitle,
+        rightTitle,
         title: !counted && invReason
           ? `${gateLbl}-${FILTER_SHORT_CODES[invReason] ?? invReason}`
-          : suffix
-            ? `${gateLbl} · ${suffix}`
-            : gateLbl,
+          : rightTitle || leftTitle || (suffix ? `${gateLbl} · ${suffix}` : gateLbl),
         detail: !counted && invDetail
           ? invDetail
           : `${detailPrefix} · peak ${c.peakRssiDbm.toFixed(0)}${this.unitSuffix}`,
@@ -3633,19 +3716,29 @@ export class PilotRssiChart extends Component {
       ctx.restore();
 
       const lbl = this.labelOf(p);
+      const hasLeft = Boolean(p.counted && p.leftTitle);
+      const hasRight = Boolean(p.counted && p.rightTitle);
       const row = rows.get(PilotRssiChart.keyOf(p)) ?? 0;
       if (editable) {
         ctx.font = font(700, 10.5);
         const delW = 16;
-        const textW = ctx.measureText(lbl).width;
+        const pillSide: "left" | "right" =
+          hasLeft && (!hasRight || x > padL + plotW * 0.65) ? "left" : "right";
+        const pillText =
+          pillSide === "left" && p.leftTitle
+            ? p.leftTitle
+            : pillSide === "right" && p.rightTitle
+              ? p.rightTitle
+              : lbl;
+        const textW = ctx.measureText(pillText).width;
         const pillW = textW + 12 + delW;
         const pillY = p.counted
           ? padT + 2 + row * (TAG_H + 3)
           : Math.max(padT + 2, padT + plotH - TAG_H - 3 - row * (TAG_H + 3));
-        const pillX = Math.max(
-          padL + 2,
-          Math.min(Math.max(padL + 2, padL + plotW - pillW - 2), x + 4)
-        );
+        const pillX =
+          pillSide === "left"
+            ? Math.max(padL + 2, Math.min(Math.max(padL + 2, padL + plotW - pillW - 2), x - pillW - 4))
+            : Math.max(padL + 2, Math.min(Math.max(padL + 2, padL + plotW - pillW - 2), x + 4));
         const delX = pillX + pillW - delW;
         ctx.beginPath();
         ctx.roundRect(pillX, pillY, pillW, TAG_H, 5);
@@ -3667,7 +3760,29 @@ export class PilotRssiChart extends Component {
         const fg = isDraggingThis ? inkOnColor(color) : color;
         ctx.fillStyle = fg;
         ctx.textAlign = "left";
-        ctx.fillText(lbl, pillX + 7, pillY + 12.5);
+        ctx.fillText(pillText, pillX + 7, pillY + 12.5);
+
+        // Companion side label across the Start/Finish line (`H1 · L3 | [ H1 · L4 | × ]` or `[ H1 · L4 | × ] | H1 · L5`)
+        if (hasLeft && hasRight) {
+          const compText = pillSide === "right" ? p.leftTitle! : p.rightTitle!;
+          ctx.save();
+          ctx.font = font(600, 10.5);
+          ctx.fillStyle = withAlpha(color, 0.88);
+          ctx.textAlign = "left";
+          const cw = ctx.measureText(compText).width;
+          if (pillSide === "right") {
+            const cxText = x - cw - 5;
+            if (cxText >= padL + 2 && cxText + cw + 3 <= pillX) {
+              ctx.fillText(compText, cxText, pillY + 12.5);
+            }
+          } else {
+            const cxText = x + 5;
+            if (cxText + cw <= padL + plotW - 2 && cxText >= pillX + pillW + 3) {
+              ctx.fillText(compText, cxText, pillY + 12.5);
+            }
+          }
+          ctx.restore();
+        }
 
         // Separator and `×` delete icon inside right end of handle
         ctx.save();
@@ -3704,7 +3819,7 @@ export class PilotRssiChart extends Component {
           slotIndex: p.slotIndex ?? this.activePilotSlot,
           origTsUs: p.origTs ?? p.ts,
           tsUs: p.ts,
-          title: p.title,
+          title: pillText,
           counted: p.counted,
           isFiltered: p.isFiltered,
           lineX: x,
@@ -3718,12 +3833,30 @@ export class PilotRssiChart extends Component {
       } else {
         ctx.fillStyle = color;
         ctx.font = font(600, 10.5);
-        const tw = ctx.measureText(lbl).width;
-        const tx = Math.max(padL + 2, Math.min(Math.max(padL + 2, padL + plotW - tw - 2), x + 4));
+        ctx.textAlign = "left";
         const ty = p.counted
           ? padT + 11 + row * 12
           : Math.max(padT + 11, padT + plotH - 5 - row * 12);
-        ctx.fillText(lbl, tx, ty);
+        if (hasLeft && hasRight) {
+          const lw = ctx.measureText(p.leftTitle!).width;
+          const lx = x - lw - 5;
+          if (lx >= padL + 1) {
+            ctx.fillText(p.leftTitle!, lx, ty);
+          }
+          const rw = ctx.measureText(p.rightTitle!).width;
+          const rx = x + 5;
+          if (rx + rw <= padL + plotW - 1) {
+            ctx.fillText(p.rightTitle!, rx, ty);
+          }
+        } else if (hasLeft && !hasRight) {
+          const lw = ctx.measureText(p.leftTitle!).width;
+          const lx = Math.max(padL + 2, Math.min(Math.max(padL + 2, padL + plotW - lw - 2), x - lw - 5));
+          ctx.fillText(p.leftTitle!, lx, ty);
+        } else {
+          const tw = ctx.measureText(lbl).width;
+          const tx = Math.max(padL + 2, Math.min(Math.max(padL + 2, padL + plotW - tw - 2), x + 4));
+          ctx.fillText(lbl, tx, ty);
+        }
       }
 
       if (isActiveCrossing) {
@@ -4098,20 +4231,26 @@ export class PilotRssiChart extends Component {
     const botRowEnd = [-Infinity, -Infinity];
     const pxPerUs = Math.max(1e-9, this.plot.w / this.windowUs);
     const baseTs = firstTs;
+    const measureCached = (txt: string): number => {
+      let w = this.labelWidthCache.get(txt);
+      if (w === undefined) {
+        w = ctx.measureText(txt).width;
+        if (this.labelWidthCache.size > 512) this.labelWidthCache.clear();
+        this.labelWidthCache.set(txt, w);
+      }
+      return w;
+    };
     for (let i = 0; i < windowPasses.length; i++) {
       const p = windowPasses[i];
       const lbl = this.labelOf(p);
-      let width = this.labelWidthCache.get(lbl);
-      if (width === undefined) {
-        width = ctx.measureText(lbl).width;
-        if (this.labelWidthCache.size > 512) this.labelWidthCache.clear();
-        this.labelWidthCache.set(lbl, width);
-      }
+      const rightW = p.rightTitle ? measureCached(p.rightTitle) : !p.leftTitle ? measureCached(lbl) : 0;
+      const leftW = p.leftTitle ? measureCached(p.leftTitle) : 0;
       const x = (p.ts - baseTs) * pxPerUs;
       const targetRowEnd = p.counted ? topRowEnd : botRowEnd;
       const padExtra = editMode && ((p.eventId ?? 0) > 0 || p.isFiltered) ? 32 : 4;
-      const row = x > targetRowEnd[0] + 6 ? 0 : x > targetRowEnd[1] + 6 ? 1 : 0;
-      targetRowEnd[row] = x + width + padExtra;
+      const leftEdge = leftW > 0 ? x - leftW - (editMode ? padExtra : 6) : x;
+      const row = leftEdge > targetRowEnd[0] + 6 ? 0 : leftEdge > targetRowEnd[1] + 6 ? 1 : 0;
+      targetRowEnd[row] = rightW > 0 ? x + rightW + padExtra : x + 4;
       rows.set(PilotRssiChart.keyOf(p), row);
     }
     this.cachedLabelSig = sig;

@@ -813,24 +813,27 @@ describe("widgets/Toast & TimingRulesEditor", () => {
         makeCrossing(6, 2, 1, 13_200_000, { isStartFinish: false, estimatedSpeedMph: 44 })
       );
 
-      // Select timer H1: shows H1 · Start, H1 · Lap 1, H1 · Lap 2 (never mph)
+      // Select timer H1: shows dual-sided Start/Finish L-number labels (H1 · L1, H1 · L2, H1 · L3, never mph)
       drawnTexts.length = 0;
       root.querySelector<HTMLButtonElement>('[data-gate-chip="1"]')!.click();
       await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
       await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
-      expect(drawnTexts).toContain("H1 · Start");
-      expect(drawnTexts).toContain("H1 · Lap 1");
-      expect(drawnTexts).toContain("H1 · Lap 2");
+      expect(drawnTexts).toContain("H1 · L1");
+      expect(drawnTexts).toContain("H1 · L2");
+      expect(drawnTexts).toContain("H1 · L3");
+      expect(drawnTexts.filter((s) => s === "H1 · L1").length).toBe(
+        drawnTexts.filter((s) => s === "H1 · L3").length * 2
+      ); // right of 1.0s start + left of 6.5s finish!
       expect(drawnTexts.some((s) => s.includes("mph"))).toBe(false);
 
-      // Select timer T1: shows T1 · Lap 1, T1 · Lap 2, and in-progress T1 · Lap 3 (never mph)
+      // Select timer T1: shows T1 · L1, T1 · L2, and in-progress T1 · L3 (never mph)
       drawnTexts.length = 0;
       root.querySelector<HTMLButtonElement>('[data-gate-chip="2"]')!.click();
       await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
       await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
-      expect(drawnTexts).toContain("T1 · Lap 1");
-      expect(drawnTexts).toContain("T1 · Lap 2");
-      expect(drawnTexts).toContain("T1 · Lap 3");
+      expect(drawnTexts).toContain("T1 · L1");
+      expect(drawnTexts).toContain("T1 · L2");
+      expect(drawnTexts).toContain("T1 · L3");
       expect(drawnTexts.some((s) => s.includes("mph"))).toBe(false);
     } finally {
       CanvasRenderingContext2D.prototype.fillText = origFillText;
@@ -989,7 +992,7 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       const savedTs = adjCall!.args[1] as number;
       expect(Math.abs(savedTs - 8_500_000) < 100_000).toBe(true);
       expect(adjCall!.args[2]).toBe(-52);
-      expect(root.querySelector('[data-slot="calib"]')!.textContent).toContain("Adjusted T1 · Lap 1");
+      expect(root.querySelector('[data-slot="calib"]')!.textContent).toContain("Adjusted T1 · L1");
 
       // Click `+` add-crossing button -> adds a crossing for focused timer T1 (gateId=2, slotIndex=1)
       addBtn.click();
