@@ -3040,4 +3040,101 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       view.destroy();
     }
   });
+
+  it("steps Next/Prev cleanly across duplicate legacy lapIds and mid-window H1 lap splits", async () => {
+    const store = makeStore();
+    const p1 = makePilot(1, { callsign: "OneEye", band: 1, channel: 7, frequencyMhz: 5880 });
+    const g1 = makeGate(1, { name: "H1", timerLabel: "H1", role: "START_FINISH", trackOrder: 0 });
+    const g2 = makeGate(2, { name: "T1", timerLabel: "T1", role: "SECTOR_GATE", trackOrder: 1 });
+    const verifySess = makePracticeSession("verify-dup", {
+      name: "25mW Verification",
+      active: false,
+      pilots: [{ slotIndex: 1, callsign: "OneEye", color: "#ef4444", band: 1, channel: 7, frequencyMhz: 5880 }],
+      trackInitialized: true,
+      trackSnapshot: [g1, g2],
+      laps: [
+        { ...makeLap(124, 1, 1, 12.14), completedAtUs: 22_140_000 },
+        { ...makeLap(124, 1, 2, 13.79), completedAtUs: 35_930_000 }, // Legacy duplicate lapId with L1!
+        { ...makeLap(125, 1, 3, 26.0), completedAtUs: 61_930_000 },  // Merged 26s two-lap span [35.93s .. 61.93s]
+      ],
+      crossings: [],
+    });
+    store.hydrate({
+      ...storeSnapshotFrom(store),
+      pilots: [p1],
+      gates: [g1, g2],
+      practiceState: {
+        initialized: true,
+        activeSessionId: "",
+        selectedSessionId: "verify-dup",
+        sessions: [verifySess],
+      },
+    });
+    store.setSessionTrace("verify-dup", [
+      { timerId: 1, seqNum: 1, timestampUs: 10_000_000, rssi: [-55, -127], batteryMv: 4100, noiseFloorDbm: -91 },
+      { timerId: 1, seqNum: 2, timestampUs: 62_000_000, rssi: [-55, -127], batteryMv: 4100, noiseFloorDbm: -91 },
+    ]);
+
+    replaceAppHash("#/practice/verify-dup");
+    const root = mountHtml(`<div id="prac-dup-host"></div>`);
+    const host = root.querySelector<HTMLElement>("#prac-dup-host")!;
+    const mock = makeMockApiClient(store);
+    const view = new PracticeView(host, store, mock.api);
+    try {
+      await flushMicrotasks();
+      host.querySelector<HTMLButtonElement>('[data-practice-mobile-tab="review"]')!.click();
+      await flushMicrotasks();
+
+      // Click L1 (bottom row in reverse-chronological table)
+      const rssiBtns = Array.from(host.querySelectorAll<HTMLButtonElement>("[data-review-open-lap-rssi]"));
+      expect(rssiBtns.length).toBe(3);
+      rssiBtns[2].click(); // L1
+      await flushMicrotasks();
+
+      const modal = document.body.querySelector<HTMLElement>(".lap-editor-modal")!;
+      const nextBtn = modal.querySelector<HTMLButtonElement>('[data-act="next-lap"]')!;
+      const prevBtn = modal.querySelector<HTMLButtonElement>('[data-act="prev-lap"]')!;
+      expect(modal.querySelector(".slaprf-modal-head")?.textContent ?? "").toContain("L1");
+
+      // Next from L1 -> L2 -> L3 even though L1 and L2 both had lapId=124!
+      nextBtn.click();
+      await flushMicrotasks();
+      expect(modal.querySelector(".slaprf-modal-head")?.textContent ?? "").toContain("L2");
+
+      nextBtn.click();
+      await flushMicrotasks();
+      expect(modal.querySelector(".slaprf-modal-head")?.textContent ?? "").toContain("L3");
+
+      // Simulate splitting merged L3 [35.93s..61.93s] into L3 [35.93s..48.93s] (new lapId=126) + L4 [48.93s..61.93s] (kept old lapId=125)
+      store.ingestPractice({
+        initialized: true,
+        activeSessionId: "",
+        selectedSessionId: "verify-dup",
+        sessions: [
+          {
+            ...verifySess,
+            laps: [
+              verifySess.laps[0],
+              verifySess.laps[1],
+              { ...makeLap(126, 1, 3, 13.0), completedAtUs: 48_930_000 },
+              { ...makeLap(125, 1, 4, 13.0), completedAtUs: 61_930_000 },
+            ],
+          },
+        ],
+      });
+      await flushMicrotasks();
+
+      // Stays on first split half (L3), and clicking Next visits second split half (L4) without skipping!
+      expect(modal.querySelector(".slaprf-modal-head")?.textContent ?? "").toContain("L3");
+      expect(nextBtn.disabled).toBe(false);
+      nextBtn.click();
+      await flushMicrotasks();
+      expect(modal.querySelector(".slaprf-modal-head")?.textContent ?? "").toContain("L4");
+      expect(prevBtn.disabled).toBe(false);
+
+      modal.querySelector<HTMLButtonElement>("[data-lap-ed-close]")!.click();
+    } finally {
+      view.destroy();
+    }
+  });
 });

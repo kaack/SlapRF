@@ -333,14 +333,85 @@ func (e *Engine) disambiguateDuplicatePracticeNamesLocked() {
 	}
 }
 
-// recomputePracticeSessionLapsLocked ensures wall-clock CompletedAtMs timestamps exist on all laps
-// and recomputes personal bests, deltas, and sector split badges across valid (non-invalidated) laps.
+// syncPracticeIDHighWaterLocked advances `e.nextLapID` and `e.nextEventID` past any IDs already
+// present in `sessions` so newly created or repaired laps, crossings, and breaks never collide
+// with restored or imported records.
+func (e *Engine) syncPracticeIDHighWaterLocked(sessions []domain.PracticeSession) {
+	for si := range sessions {
+		for _, l := range sessions[si].Laps {
+			if l.LapID > e.nextLapID {
+				e.nextLapID = l.LapID
+			}
+		}
+		for _, c := range sessions[si].Crossings {
+			if c.EventID > e.nextEventID {
+				e.nextEventID = c.EventID
+			}
+		}
+		for _, br := range sessions[si].Breaks {
+			if br.BreakID > e.nextEventID {
+				e.nextEventID = br.BreakID
+			}
+		}
+	}
+}
+
+// syncSinglePracticeSessionHighWaterLocked bumps `e.nextLapID` and `e.nextEventID` from `sess`.
+func (e *Engine) syncSinglePracticeSessionHighWaterLocked(sess *domain.PracticeSession) {
+	if sess == nil {
+		return
+	}
+	for _, l := range sess.Laps {
+		if l.LapID > e.nextLapID {
+			e.nextLapID = l.LapID
+		}
+	}
+	for _, c := range sess.Crossings {
+		if c.EventID > e.nextEventID {
+			e.nextEventID = c.EventID
+		}
+	}
+	for _, br := range sess.Breaks {
+		if br.BreakID > e.nextEventID {
+			e.nextEventID = br.BreakID
+		}
+	}
+}
+
+// recomputePracticeSessionLapsLocked ensures unique non-zero IDs, wall-clock CompletedAtMs
+// timestamps, and personal bests/deltas/sector split badges across valid (non-invalidated) laps.
 func (e *Engine) recomputePracticeSessionLapsLocked(sess *domain.PracticeSession) {
 	if sess == nil {
 		return
 	}
+	e.syncPracticeIDHighWaterLocked(e.practiceState.Sessions)
+	e.syncSinglePracticeSessionHighWaterLocked(sess)
 	if len(sess.Crossings) > 1 {
 		sortCrossingsChronological(sess.Crossings)
+	}
+	if len(sess.Crossings) > 0 {
+		seenEvents := make(map[uint64]struct{}, len(sess.Crossings))
+		for i := range sess.Crossings {
+			eid := sess.Crossings[i].EventID
+			if _, dup := seenEvents[eid]; eid == 0 || dup {
+				e.nextEventID++
+				eid = e.nextEventID
+				sess.Crossings[i].EventID = eid
+			}
+			seenEvents[eid] = struct{}{}
+		}
+	}
+	if len(sess.Breaks) > 0 {
+		seenBreaks := make(map[uint64]struct{}, len(sess.Breaks))
+		for i := range sess.Breaks {
+			bid := sess.Breaks[i].BreakID
+			if _, dup := seenBreaks[bid]; bid == 0 || dup {
+				e.nextEventID++
+				bid = e.nextEventID
+				sess.Breaks[i].BreakID = bid
+			}
+			seenBreaks[bid] = struct{}{}
+		}
 	}
 	if len(sess.Filtered) > 1 {
 		sort.SliceStable(sess.Filtered, func(a, b int) bool {
@@ -359,6 +430,16 @@ func (e *Engine) recomputePracticeSessionLapsLocked(sess *domain.PracticeSession
 		}
 		return sess.Laps[a].LapID < sess.Laps[b].LapID
 	})
+	seenLaps := make(map[uint64]struct{}, len(sess.Laps))
+	for i := range sess.Laps {
+		lid := sess.Laps[i].LapID
+		if _, dup := seenLaps[lid]; lid == 0 || dup {
+			e.nextLapID++
+			lid = e.nextLapID
+			sess.Laps[i].LapID = lid
+		}
+		seenLaps[lid] = struct{}{}
+	}
 	var baseTime time.Time
 	if sess.CreatedAt != "" {
 		if parsed, err := time.Parse(time.RFC3339, sess.CreatedAt); err == nil {

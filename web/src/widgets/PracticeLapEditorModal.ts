@@ -86,13 +86,25 @@ export function openPracticeLapEditorModal(
           a.completedAtUs - b.completedAtUs || a.lapNumber - b.lapNumber || a.lapId - b.lapId
       );
 
+  const lapStartUsOf = (lap: LapRecord): number =>
+    Math.max(0, Math.round(lap.completedAtUs - lap.lapTimeSec * 1_000_000));
+
   const initPilotLaps = getPilotLaps(initSess);
   let lockedLap: LapRecord | undefined;
-  if (opts.initialLapId !== undefined) {
-    lockedLap = initPilotLaps.find((l) => l.lapId === opts.initialLapId);
+  if (
+    opts.initialLapId !== undefined &&
+    opts.focusEndUs !== undefined &&
+    opts.focusEndUs > 0
+  ) {
+    lockedLap = initPilotLaps.find(
+      (l) => l.lapId === opts.initialLapId && Math.abs(l.completedAtUs - opts.focusEndUs!) <= 150_000
+    );
   }
   if (!lockedLap && opts.focusEndUs !== undefined && opts.focusEndUs > 0) {
     lockedLap = initPilotLaps.find((l) => Math.abs(l.completedAtUs - opts.focusEndUs!) <= 150_000);
+  }
+  if (!lockedLap && opts.initialLapId !== undefined) {
+    lockedLap = initPilotLaps.find((l) => l.lapId === opts.initialLapId);
   }
   if (!lockedLap && opts.focusStartUs === undefined && initPilotLaps.length > 0) {
     lockedLap = initPilotLaps[initPilotLaps.length - 1];
@@ -100,25 +112,101 @@ export function openPracticeLapEditorModal(
   let lockedLapId: number | null = lockedLap?.lapId ?? null;
   let lockedLapNumber: number | null = lockedLap?.lapNumber ?? null;
   let fallbackStartUs =
-    opts.focusStartUs !== undefined
-      ? opts.focusStartUs
-      : lockedLap
-        ? Math.max(0, Math.round(lockedLap.completedAtUs - lockedLap.lapTimeSec * 1_000_000))
-        : undefined;
+    lockedLap !== undefined
+      ? lapStartUsOf(lockedLap)
+      : opts.focusStartUs;
   let fallbackEndUs =
-    opts.focusEndUs !== undefined
-      ? opts.focusEndUs
-      : lockedLap
-        ? lockedLap.completedAtUs
-        : undefined;
+    lockedLap !== undefined
+      ? lockedLap.completedAtUs
+      : opts.focusEndUs;
+
+  const lockToLap = (lap: LapRecord): void => {
+    lockedLap = lap;
+    lockedLapId = lap.lapId;
+    lockedLapNumber = lap.lapNumber;
+    fallbackStartUs = lapStartUsOf(lap);
+    fallbackEndUs = lap.completedAtUs;
+  };
 
   const resolveCurrentLapIndex = (sess: PracticeSession): number => {
     const pLaps = getPilotLaps(sess);
     if (pLaps.length === 0) return -1;
-    if (lockedLapId !== null) {
-      const idx = pLaps.findIndex((l) => l.lapId === lockedLapId);
-      if (idx >= 0) return idx;
+    if (lockedLapId === null && lockedLapNumber === null) return -1;
+
+    // 1. If a merged multi-lap window `[fallbackStartUs .. fallbackEndUs]` was just split by
+    //    inserting a mid-window Start/Finish crossing, stay on the first split lap so clicking
+    //    `Next` visits the second split half instead of skipping over it.
+    if (
+      fallbackStartUs !== undefined &&
+      fallbackEndUs !== undefined &&
+      fallbackEndUs - fallbackStartUs >= 4_000_000
+    ) {
+      const firstSplitIdx = pLaps.findIndex((l, idx) => {
+        if (idx + 1 >= pLaps.length) return false;
+        const sUs = lapStartUsOf(l);
+        const nextEndUs = pLaps[idx + 1].completedAtUs;
+        return (
+          Math.abs(sUs - fallbackStartUs!) <= 500_000 &&
+          l.completedAtUs < fallbackEndUs! - 1_000_000 &&
+          Math.abs(nextEndUs - fallbackEndUs!) <= 1_500_000
+        );
+      });
+      if (firstSplitIdx >= 0) return firstSplitIdx;
     }
+
+    // 2. Match `(lapId + completedAtUs)` first so even legacy duplicate `lapId`s never alias.
+    if (lockedLapId !== null && fallbackEndUs !== undefined) {
+      const exactIdx = pLaps.findIndex(
+        (l) => l.lapId === lockedLapId && Math.abs(l.completedAtUs - fallbackEndUs!) <= 2_000_000
+      );
+      if (exactIdx >= 0) return exactIdx;
+    }
+
+    // 3. Unique `lapId` match (disambiguated by timestamp or lapNumber if duplicated).
+    if (lockedLapId !== null) {
+      const matchingIndices: number[] = [];
+      for (let i = 0; i < pLaps.length; i++) {
+        if (pLaps[i].lapId === lockedLapId) matchingIndices.push(i);
+      }
+      if (matchingIndices.length === 1) {
+        return matchingIndices[0];
+      }
+      if (matchingIndices.length > 1) {
+        if (fallbackEndUs !== undefined) {
+          let bestIdx = matchingIndices[0];
+          let bestDiff = Math.abs(pLaps[bestIdx].completedAtUs - fallbackEndUs);
+          for (const idx of matchingIndices) {
+            const d = Math.abs(pLaps[idx].completedAtUs - fallbackEndUs);
+            if (d < bestDiff) {
+              bestDiff = d;
+              bestIdx = idx;
+            }
+          }
+          return bestIdx;
+        }
+        if (lockedLapNumber !== null) {
+          const byNum = matchingIndices.find((idx) => pLaps[idx].lapNumber === lockedLapNumber);
+          if (byNum !== undefined) return byNum;
+        }
+        return matchingIndices[0];
+      }
+    }
+
+    // 4. Midpoint overlap fallback when an H1 drag or Auto-Label moved `completedAtUs` > 50 ms
+    //    (assigning a new `lapId`) while an earlier edit also shifted `lapNumber`.
+    if (
+      fallbackStartUs !== undefined &&
+      fallbackEndUs !== undefined &&
+      fallbackEndUs > fallbackStartUs
+    ) {
+      const midUs = 0.5 * (fallbackStartUs + fallbackEndUs);
+      const midIdx = pLaps.findIndex(
+        (l) => lapStartUsOf(l) - 250_000 <= midUs && midUs <= l.completedAtUs + 250_000
+      );
+      if (midIdx >= 0) return midIdx;
+    }
+
+    // 5. `lapNumber` fallback.
     if (lockedLapNumber !== null) {
       const idx = pLaps.findIndex((l) => l.lapNumber === lockedLapNumber);
       if (idx >= 0) return idx;
@@ -128,10 +216,8 @@ export function openPracticeLapEditorModal(
 
   const computeLapBounds = (sess: PracticeSession): LockedLapWindowBounds => {
     const pLaps = getPilotLaps(sess);
-    const liveLap =
-      (lockedLapId !== null ? pLaps.find((l) => l.lapId === lockedLapId) : undefined) ??
-      (lockedLapNumber !== null ? pLaps.find((l) => l.lapNumber === lockedLapNumber) : undefined) ??
-      lockedLap;
+    const curIdx = resolveCurrentLapIndex(sess);
+    const liveLap = (curIdx >= 0 ? pLaps[curIdx] : undefined) ?? lockedLap;
 
     if (liveLap && liveLap.completedAtUs > 0) {
       const startUs = Math.max(0, Math.round(liveLap.completedAtUs - liveLap.lapTimeSec * 1_000_000));
@@ -288,20 +374,25 @@ export function openPracticeLapEditorModal(
       return pLaps[curIdx + dir];
     }
     const bounds = computeLapBounds(sess);
+    const breakInWindow = (sess.breaks ?? []).find(
+      (b) =>
+        b.slotIndex === selectedPilotSlot &&
+        b.timestampUs >= bounds.passMinUs &&
+        b.timestampUs <= bounds.passMaxUs
+    );
     if (dir < 0) {
+      const refUs = breakInWindow ? breakInWindow.timestampUs : bounds.startUs;
       for (let i = pLaps.length - 1; i >= 0; i--) {
-        if (pLaps[i].completedAtUs <= bounds.startUs + 250_000) {
+        if (pLaps[i].completedAtUs <= refUs + 250_000) {
           return pLaps[i];
         }
       }
       return undefined;
     }
+    const refUs = breakInWindow ? breakInWindow.timestampUs : bounds.endUs;
     for (let i = 0; i < pLaps.length; i++) {
-      const lapStartUs = Math.max(
-        0,
-        Math.round(pLaps[i].completedAtUs - pLaps[i].lapTimeSec * 1_000_000)
-      );
-      if (lapStartUs >= bounds.endUs - 250_000) {
+      const lapStartUs = lapStartUsOf(pLaps[i]);
+      if (lapStartUs >= refUs - 250_000) {
         return pLaps[i];
       }
     }
@@ -320,11 +411,7 @@ export function openPracticeLapEditorModal(
     if (!sess || !chartRef) return;
     const target = findAdjacentLapTarget(sess, dir);
     if (!target) return;
-    lockedLap = target;
-    lockedLapId = target.lapId;
-    lockedLapNumber = target.lapNumber;
-    fallbackStartUs = Math.max(0, Math.round(target.completedAtUs - target.lapTimeSec * 1_000_000));
-    fallbackEndUs = target.completedAtUs;
+    lockToLap(target);
     renderHeader();
     const nextBounds = computeLapBounds(sess);
     chartRef.setLapWindow(
@@ -375,9 +462,7 @@ export function openPracticeLapEditorModal(
         const curIdx = resolveCurrentLapIndex(latestSess);
         const pLaps = getPilotLaps(latestSess);
         if (curIdx >= 0 && pLaps[curIdx]) {
-          lockedLap = pLaps[curIdx];
-          lockedLapId = lockedLap.lapId;
-          lockedLapNumber = lockedLap.lapNumber;
+          lockToLap(pLaps[curIdx]);
         }
         const nextBounds = computeLapBounds(latestSess);
         chart.setLapWindow({
@@ -471,8 +556,26 @@ export function openPracticeLapEditorModal(
 
   const unsubStore = rootStore.subscribe(["practice", "laps", "crossings", "ml"], () => {
     if (!document.body.contains(backdrop)) return;
+    const sess = getSession();
+    if (sess && (lockedLapId !== null || lockedLapNumber !== null)) {
+      const curIdx = resolveCurrentLapIndex(sess);
+      const pLaps = getPilotLaps(sess);
+      if (curIdx >= 0 && pLaps[curIdx]) {
+        lockToLap(pLaps[curIdx]);
+      }
+      const nextBounds = computeLapBounds(sess);
+      chart.setLapWindow({
+        minUs: nextBounds.hardMinUs,
+        maxUs: nextBounds.hardMaxUs,
+        passMinUs: nextBounds.passMinUs,
+        passMaxUs: nextBounds.passMaxUs,
+        canStepLap,
+        onStepLap: stepToAdjacentLap,
+      });
+    } else {
+      chart.renderControls();
+    }
     renderHeader();
-    chart.renderControls();
   });
 
   const topbarEl = document.querySelector<HTMLElement>(".topbar");

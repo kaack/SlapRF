@@ -2427,6 +2427,13 @@ func (e *Engine) ImportMLDatasetTarGz(r io.Reader) (importedSessions int, import
 			importedSessions++
 		}
 	}
+	if importedSessions > 0 {
+		e.syncPracticeIDHighWaterLocked(e.practiceState.Sessions)
+		for si := range e.practiceState.Sessions {
+			e.recomputePracticeSessionLapsLocked(&e.practiceState.Sessions[si])
+			e.practiceState.Sessions[si].Summaries = e.computePracticeSessionSummariesLocked(&e.practiceState.Sessions[si])
+		}
+	}
 
 	existingMod := make(map[string]domain.MLModelSnapshot, len(e.mlState.Models))
 	for _, m := range e.mlState.Models {

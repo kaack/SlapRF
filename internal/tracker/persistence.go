@@ -599,6 +599,7 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 
 	if s.PracticeState != nil && (s.PracticeState.Initialized || len(s.PracticeState.Sessions) > 0) {
 		ps := clonePracticeManagerState(*s.PracticeState)
+		e.syncPracticeIDHighWaterLocked(ps.Sessions)
 		for si := range ps.Sessions {
 			e.bumpSeqFromRestoredIDLocked(ps.Sessions[si].SessionID)
 			for li := range ps.Sessions[si].Laps {
@@ -606,11 +607,6 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 					ps.Sessions[si].Laps[li].Sectors,
 					ps.Sessions[si].Laps[li].LapTimeSec,
 				)
-			}
-			for _, br := range ps.Sessions[si].Breaks {
-				if br.BreakID > e.nextEventID {
-					e.nextEventID = br.BreakID
-				}
 			}
 			e.recomputePracticeSessionLapsLocked(&ps.Sessions[si])
 		}

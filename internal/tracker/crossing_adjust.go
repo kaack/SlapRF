@@ -127,15 +127,23 @@ func (e *Engine) replayPilotCrossingsWithBreaksLocked(
 	}
 	sortCrossingsChronological(pilotCrossings)
 
+	e.syncPracticeIDHighWaterLocked(e.practiceState.Sessions)
 	otherLaps := make([]domain.LapRecord, 0, len(prevAllLaps))
 	prevPilotLaps := make([]domain.LapRecord, 0, len(prevAllLaps))
+	usedLapIDs := make(map[uint64]bool, len(prevAllLaps)+4)
 	for _, l := range prevAllLaps {
+		if l.LapID > e.nextLapID {
+			e.nextLapID = l.LapID
+		}
 		if l.SlotIndex == slotIndex {
 			if l.Callsign != "" && defaultCallsign == "" {
 				defaultCallsign = l.Callsign
 			}
 			prevPilotLaps = append(prevPilotLaps, l)
 		} else {
+			if l.LapID > 0 {
+				usedLapIDs[l.LapID] = true
+			}
 			otherLaps = append(otherLaps, l)
 		}
 	}
@@ -298,10 +306,13 @@ func (e *Engine) replayPilotCrossingsWithBreaksLocked(
 							lapNum = prevMatch.LapNumber
 						}
 					} else {
-						e.nextLapID++
-						lapID = e.nextLapID
 						completedMs = e.wallClockMsForTimestampLocked(c.TimestampUs)
 					}
+					if lapID == 0 || usedLapIDs[lapID] {
+						e.nextLapID++
+						lapID = e.nextLapID
+					}
+					usedLapIDs[lapID] = true
 					lastAssignedLapNum = lapNum
 					rebuiltPilotLaps = append(rebuiltPilotLaps, domain.LapRecord{
 						LapID:         lapID,

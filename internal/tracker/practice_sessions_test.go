@@ -432,3 +432,80 @@ func TestPracticeSessionDeleteLapAndClearPilotLaps(t *testing.T) {
 		t.Fatalf("expected active engine laps synced to 2 remaining laps, got %d", len(activeLaps))
 	}
 }
+
+func TestPracticeSessionUniqueLapIDsAcrossRestoreAndSplit(t *testing.T) {
+	e := NewEngine()
+	persisted := PersistedEngineState{
+		Gates: []domain.TrackGate{
+			{GateID: 1, Name: "H1", Role: domain.GateRoleStartFinish, AssignedTimerID: 1},
+			{GateID: 2, Name: "T1", Role: domain.GateRoleSectorGate, AssignedTimerID: 2},
+		},
+		Pilots: []domain.PilotSlot{
+			{SlotIndex: 1, Callsign: "OneEye", Band: domain.BandRaceband, Channel: 7, FrequencyMHz: 5880, Enabled: true},
+		},
+		Rules: domain.DefaultTimingRules(),
+		PracticeState: &domain.PracticeManagerState{
+			Initialized:       true,
+			SelectedSessionID: "sess-verify",
+			ActiveSessionID:   "", // Inactive session so root e.laps is empty on restore!
+			Sessions: []domain.PracticeSession{
+				{
+					SessionID: "sess-verify",
+					Name:      "25mW Verification",
+					Pilots: []domain.PracticeSessionPilot{
+						{SlotIndex: 1, Callsign: "OneEye", Band: domain.BandRaceband, Channel: 7, FrequencyMHz: 5880},
+					},
+					TrackSnapshot: []domain.TrackGate{
+						{GateID: 1, Name: "H1", Role: domain.GateRoleStartFinish, AssignedTimerID: 1},
+						{GateID: 2, Name: "T1", Role: domain.GateRoleSectorGate, AssignedTimerID: 2},
+					},
+					Laps: []domain.LapRecord{
+						// Simulate legacy duplicate LapID=124 on L1 & L2 + L3 with LapID=125 ( merged 26s lap )
+						{LapID: 124, SlotIndex: 1, Callsign: "OneEye", LapNumber: 1, LapTimeSec: 12.0, CompletedAtUs: 22_000_000},
+						{LapID: 124, SlotIndex: 1, Callsign: "OneEye", LapNumber: 2, LapTimeSec: 13.0, CompletedAtUs: 35_000_000},
+						{LapID: 125, SlotIndex: 1, Callsign: "OneEye", LapNumber: 3, LapTimeSec: 26.0, CompletedAtUs: 61_000_000},
+					},
+					Crossings: []domain.GateCrossingEvent{
+						{EventID: 10, GateID: 1, SlotIndex: 1, TimestampUs: 10_000_000, IsStartFinish: true, StartedLap: true, PeakRSSIDbm: -55},
+						{EventID: 11, GateID: 2, SlotIndex: 1, TimestampUs: 16_000_000, PeakRSSIDbm: -58},
+						{EventID: 12, GateID: 1, SlotIndex: 1, TimestampUs: 22_000_000, IsStartFinish: true, PeakRSSIDbm: -54},
+						{EventID: 13, GateID: 2, SlotIndex: 1, TimestampUs: 28_000_000, PeakRSSIDbm: -57},
+						{EventID: 14, GateID: 1, SlotIndex: 1, TimestampUs: 35_000_000, IsStartFinish: true, PeakRSSIDbm: -55},
+						{EventID: 15, GateID: 2, SlotIndex: 1, TimestampUs: 41_000_000, PeakRSSIDbm: -58},
+						// Missed H1 at 48s!
+						{EventID: 16, GateID: 2, SlotIndex: 1, TimestampUs: 54_000_000, PeakRSSIDbm: -57},
+						{EventID: 17, GateID: 1, SlotIndex: 1, TimestampUs: 61_000_000, IsStartFinish: true, PeakRSSIDbm: -55},
+					},
+				},
+			},
+		},
+	}
+	e.RestoreState(persisted, false)
+
+	// 1. Duplicate LapID=124 on restore must be auto-healed immediately above max LapID (125 -> 126).
+	ps := e.PracticeSnapshot()
+	seen := make(map[uint64]bool)
+	for _, l := range ps.Sessions[0].Laps {
+		if l.LapID == 0 || seen[l.LapID] {
+			t.Fatalf("duplicate or zero LapID after restore: %+v", ps.Sessions[0].Laps)
+		}
+		seen[l.LapID] = true
+	}
+
+	// 2. Add the missed H1 crossing at 48s to split L3 into L3 + L4; all 4 laps must have distinct LapIDs!
+	peak := float32(-56)
+	afterSplit, _, err := e.AddPracticeSessionCrossing("sess-verify", 1, 1, 48_000_000, &peak)
+	if err != nil {
+		t.Fatalf("AddPracticeSessionCrossing failed: %v", err)
+	}
+	if len(afterSplit.Sessions[0].Laps) != 4 {
+		t.Fatalf("expected 4 laps after splitting merged lap, got %d", len(afterSplit.Sessions[0].Laps))
+	}
+	seenAfter := make(map[uint64]bool)
+	for _, l := range afterSplit.Sessions[0].Laps {
+		if l.LapID == 0 || seenAfter[l.LapID] {
+			t.Fatalf("duplicate or zero LapID after adding missed H1 crossing: %+v", afterSplit.Sessions[0].Laps)
+		}
+		seenAfter[l.LapID] = true
+	}
+}
