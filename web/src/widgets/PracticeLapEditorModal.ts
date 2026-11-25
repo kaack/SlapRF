@@ -225,6 +225,9 @@ export function openPracticeLapEditorModal(
           : "";
 
     const teacher = rootStore.mlStatus.teacher;
+    const hasTeacherSupport = Boolean(
+      teacher?.ready || (teacher?.packs && teacher.packs.length > 0)
+    );
     const dlRunning = Boolean(teacher?.download?.running);
     const autoLabelTitle = isAutoLabeling
       ? "Labeling peaks in this lap…"
@@ -244,9 +247,13 @@ export function openPracticeLapEditorModal(
         <h3>${esc(who)}${esc(lapPart)}</h3>
       </div>
       <div class="lap-ed-head-right">
-        <button type="button" class="btn btn-sm ${isAutoLabeling ? "btn-armed" : "btn-ghost"}" data-lap-ed-auto-label ${dlRunning ? "disabled" : ""} title="${esc(autoLabelTitle)}">
-          ${isAutoLabeling || dlRunning ? icons.spinner(13) : icons.zap(13)}<span>${esc(autoLabelText)}</span>
-        </button>
+        ${
+          hasTeacherSupport
+            ? `<button type="button" class="btn btn-sm ${isAutoLabeling ? "btn-armed" : "btn-ghost"}" data-lap-ed-auto-label ${dlRunning ? "disabled" : ""} title="${esc(autoLabelTitle)}">
+                 ${isAutoLabeling || dlRunning ? icons.spinner(13) : icons.zap(13)}<span>${esc(autoLabelText)}</span>
+               </button>`
+            : ""
+        }
         <button type="button" class="btn btn-sm btn-ghost btn-icon lap-ed-desktop-close-btn" data-lap-ed-close aria-label="Close">
           ${icons.close(15)}
         </button>

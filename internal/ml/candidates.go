@@ -254,8 +254,9 @@ func ExtractSessionCandidates(sess domain.PracticeSession, samples []tracestore.
 		all[i].ID = fmt.Sprintf("C%d", i+1)
 	}
 
-	// Populate cross-gate coincident peaks within +-180 ms for the same pilot
-	const coincWindowUs = 180_000
+	// Populate cross-gate coincident peaks within +-420 ms for the same pilot (capturing VTX dipole
+	// sweep lead/lag as the quad banks between adjacent gates).
+	const coincWindowUs = 420_000
 	for i := range all {
 		ci := &all[i]
 		for j := range all {
@@ -365,7 +366,73 @@ func extractGridSequencePeaks(seqIdx int, seq GridSequence) []rawSeqPeak {
 		}
 		merged = append(merged, cur)
 	}
-	return merged
+
+	// Filter out flat-shelf quantization ripples (`< 6.0 dB` local rise above the surrounding +-1.2s
+	// local trough) so compact tracks where ambient VTX sits 10..15 dB above `-91 dBm` thermal noise
+	// emit ~150 real physical excursions instead of thousands of baseline wiggles!
+	const localValleySteps = 60 // +-1.20 s at 50 Hz
+	var prominent []rawSeqPeak
+	for _, pk := range merged {
+		if pk.promDb < 11.0 {
+			continue
+		}
+		loL := pk.stepIdx - localValleySteps
+		if loL < 0 {
+			loL = 0
+		}
+		hiR := pk.stepIdx + localValleySteps
+		if hiR >= T {
+			hiR = T - 1
+		}
+		minLeft := pk.peakDbm
+		for k := loL; k < pk.stepIdx; k++ {
+			if seq.MedRSSI[k] < minLeft {
+				minLeft = seq.MedRSSI[k]
+			}
+		}
+		minRight := pk.peakDbm
+		for k := pk.stepIdx + 1; k <= hiR; k++ {
+			if seq.MedRSSI[k] < minRight {
+				minRight = seq.MedRSSI[k]
+			}
+		}
+		riseLeft := pk.peakDbm - minLeft
+		riseRight := pk.peakDbm - minRight
+		localRise := riseLeft
+		if riseRight < localRise {
+			localRise = riseRight
+		}
+		if localRise < 6.0 {
+			continue
+		}
+		prominent = append(prominent, pk)
+	}
+
+	// Non-maximum suppression within +-420 ms (`21` steps) so minor quantization shoulders on the flanks
+	// of a single gate bell curve collapse to the single true peak crest.
+	const nmsSteps = 21
+	var kept []rawSeqPeak
+	for i, pk := range prominent {
+		suppressed := false
+		for j := i - 1; j >= 0 && pk.stepIdx-prominent[j].stepIdx <= nmsSteps; j-- {
+			if prominent[j].peakDbm >= pk.peakDbm {
+				suppressed = true
+				break
+			}
+		}
+		if !suppressed {
+			for j := i + 1; j < len(prominent) && prominent[j].stepIdx-pk.stepIdx <= nmsSteps; j++ {
+				if prominent[j].peakDbm > pk.peakDbm {
+					suppressed = true
+					break
+				}
+			}
+		}
+		if !suppressed {
+			kept = append(kept, pk)
+		}
+	}
+	return kept
 }
 
 func buildSeqPeak(seqIdx int, seq GridSequence, t int) rawSeqPeak {

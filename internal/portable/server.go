@@ -88,6 +88,7 @@ type Config struct {
 	StaticFS        fs.FS  // Optional embedded WASM-free SPA filesystem
 	DBPath          string // Path to single-file bbolt DB; if empty, an isolated temp DB is used (cleaned on Close)
 	TeacherDir      string // Optional directory for on-device `.gguf` teacher models (defaults to `<dir(DBPath)>/teacher_models`)
+	DisableTeacher  bool   // When true (e.g. mobile Android host), disables heavy `.gguf` LLM teacher download/auto-labeling
 	AllowedOrigins  []string
 	AllowLANOrigins bool
 	MultiGPBaseURL  string // Defaults to DefaultMultiGPBaseURL
@@ -224,17 +225,19 @@ func NewServer(cfg Config) *Server {
 			appLogger.Warnf("[TraceStore] Failed to open traces directory: %v", fErr)
 		}
 	}
-	teacherDir := strings.TrimSpace(cfg.TeacherDir)
-	if teacherDir == "" && dbPath != "" {
-		teacherDir = filepath.Join(filepath.Dir(dbPath), "teacher_models")
+	if !cfg.DisableTeacher {
+		teacherDir := strings.TrimSpace(cfg.TeacherDir)
+		if teacherDir == "" && dbPath != "" {
+			teacherDir = filepath.Join(filepath.Dir(dbPath), "teacher_models")
+		}
+		teacherMgr := ml.NewTeacherManager(teacherDir, hc)
+		teacherMgr.SetUpdateHook(func() {
+			realEngine.BroadcastMLStatus()
+			simEngine.BroadcastMLStatus()
+		})
+		realEngine.SetTeacherManager(teacherMgr)
+		simEngine.SetTeacherManager(teacherMgr)
 	}
-	teacherMgr := ml.NewTeacherManager(teacherDir, hc)
-	teacherMgr.SetUpdateHook(func() {
-		realEngine.BroadcastMLStatus()
-		simEngine.BroadcastMLStatus()
-	})
-	realEngine.SetTeacherManager(teacherMgr)
-	simEngine.SetTeacherManager(teacherMgr)
 	sim := ingest.NewTrackSimulator(simEngine)
 	realHubRx := ingest.NewHubFrameDecoder(realEngine)
 	realHubRx.SetLogger(appLogger)

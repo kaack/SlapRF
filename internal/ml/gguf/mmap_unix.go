@@ -37,6 +37,7 @@ func openMappedFile(path string) (*mappedFile, error) {
 		_ = f.Close()
 		return nil, fmt.Errorf("mmap %q: %w", path, err)
 	}
+	madviseSequential(data)
 	return &mappedFile{file: f, data: data}, nil
 }
 

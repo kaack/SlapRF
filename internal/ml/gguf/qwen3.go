@@ -331,18 +331,38 @@ func (s *Session) ForwardTokens(tokens []int) error {
 // ForwardTokensCtx ingests `tokens` (`len >= 1`) starting at `s.pos`, checking `ctx.Err()` before each
 // transformer block so canceling an on-device Auto-Label job aborts in `< 50 ms` and frees RAM immediately.
 func (s *Session) ForwardTokensCtx(ctx context.Context, tokens []int) error {
+	_, _, err := s.ForwardAndScorePositionsCtx(ctx, tokens, nil, nil)
+	return err
+}
+
+// ForwardAndScorePositionsCtx ingests `tokens` (`len >= 1`) starting at `s.pos` in a SINGLE batched
+// transformer pass (`MatBatch`) and evaluates the exact softmax probability distribution over
+// `classTokenIDs` at every token index in `queryIndices` (`0 <= qi < len(tokens)`), eliminating
+// N-step autoregressive reloads of the `.gguf` weights on mobile devices!
+func (s *Session) ForwardAndScorePositionsCtx(
+	ctx context.Context,
+	tokens []int,
+	queryIndices []int,
+	classTokenIDs []int,
+) ([][]float32, []int, error) {
 	T := len(tokens)
 	if T == 0 {
-		return nil
+		return nil, nil, nil
 	}
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil, nil, err
 		}
 	}
 	m := s.model
 	if s.pos+T > s.maxSeq {
-		return fmt.Errorf("sequence length %d + %d exceeds session maxSeq %d", s.pos, T, s.maxSeq)
+		return nil, nil, fmt.Errorf("sequence length %d + %d exceeds session maxSeq %d", s.pos, T, s.maxSeq)
+	}
+	minQueryIdx := T - 1
+	for _, qi := range queryIndices {
+		if qi >= 0 && qi < minQueryIdx {
+			minQueryIdx = qi
+		}
 	}
 	startPos := s.pos
 	nEmbd := m.NEmbd
@@ -388,7 +408,7 @@ func (s *Session) ForwardTokensCtx(ctx context.Context, tokens []int) error {
 	for il := 0; il < m.NLayer; il++ {
 		if ctx != nil {
 			if err := ctx.Err(); err != nil {
-				return err
+				return nil, nil, err
 			}
 		}
 		ly := &m.layers[il]
@@ -417,10 +437,10 @@ func (s *Session) ForwardTokensCtx(ctx context.Context, tokens []int) error {
 			copy(vLayer[curPos*kvDim:(curPos+1)*kvDim], vt)
 		}
 
-		// On the final transformer block (`il == m.NLayer-1`), only the last token (`t = T-1`) feeds `lastOut`!
+		// On the final transformer block (`il == m.NLayer-1`), only positions `>= minQueryIdx` feed scored outputs!
 		tStart := 0
-		if il == m.NLayer-1 && T > 1 {
-			tStart = T - 1
+		if il == m.NLayer-1 && minQueryIdx > 0 {
+			tStart = minQueryIdx
 		}
 		activeT := T - tStart
 
@@ -550,7 +570,54 @@ func (s *Session) ForwardTokensCtx(ctx context.Context, tokens []int) error {
 	if len(s.lastQ8) > 0 {
 		QuantizeQ8K(s.lastQ8, s.lastOut)
 	}
-	return nil
+	if len(queryIndices) == 0 || len(classTokenIDs) == 0 {
+		return nil, nil, nil
+	}
+
+	probsOut := make([][]float32, len(queryIndices))
+	bestOut := make([]int, len(queryIndices))
+	tmpOut := make([]float32, nEmbd)
+	var tmpQ8 []Q8KBlock
+	if nEmbd%qkK == 0 {
+		tmpQ8 = make([]Q8KBlock, nEmbd/qkK)
+	}
+	logits := make([]float32, len(classTokenIDs))
+
+	for idx, qi := range queryIndices {
+		if qi < 0 || qi >= T {
+			qi = T - 1
+		}
+		rmsNorm(tmpOut, x[qi*nEmbd:(qi+1)*nEmbd], m.outputNorm, m.RMSNormEps)
+		if len(tmpQ8) > 0 {
+			QuantizeQ8K(tmpQ8, tmpOut)
+		}
+		DotSelectedRows(logits, m.output, classTokenIDs, tmpOut, tmpQ8)
+
+		bestIdx := 0
+		maxL := logits[0]
+		for i := 1; i < len(logits); i++ {
+			if logits[i] > maxL {
+				maxL = logits[i]
+				bestIdx = i
+			}
+		}
+		probs := make([]float32, len(logits))
+		var sum float32
+		for i, l := range logits {
+			e := float32(math.Exp(float64(l - maxL)))
+			probs[i] = e
+			sum += e
+		}
+		if sum > 0 {
+			inv := 1.0 / sum
+			for i := range probs {
+				probs[i] *= inv
+			}
+		}
+		probsOut[idx] = probs
+		bestOut[idx] = bestIdx
+	}
+	return probsOut, bestOut, nil
 }
 
 // ScoreSingleTokens evaluates the exact softmax probability distribution over `tokenIDs` at the

@@ -13,6 +13,7 @@ import (
 	"embed"
 	"encoding/json"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -180,6 +181,7 @@ func Java_app_slaprf_SlapRFHost_nativeStartServer(env *C.JNIEnv, clazz C.jclass,
 		Version:         ver,
 		StaticFS:        siteFS,
 		DBPath:          dbPath,
+		DisableTeacher:  true,
 		LogPath:         logPath,
 		AllowLANOrigins: true,
 		USBListPorts:    jniListUSBPorts,
@@ -187,6 +189,8 @@ func Java_app_slaprf_SlapRFHost_nativeStartServer(env *C.JNIEnv, clazz C.jclass,
 		BLEListPorts:    jniListBLEPorts,
 		BLEOpenPort:     jniOpenBLEPort,
 	})
+	log.SetFlags(0)
+	log.SetOutput(pSrv.AppLog().StdLogger().Writer())
 	handler := pSrv.Handler()
 
 	hSrv := &http.Server{

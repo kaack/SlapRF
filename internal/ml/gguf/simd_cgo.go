@@ -18,7 +18,13 @@ typedef struct {
 } slaprf_q8k_t;
 
 static inline float slaprf_fp16_to_fp32(uint16_t h, const float *fp16_tbl) {
+#if defined(__aarch64__) && defined(__clang__)
+    __fp16 fh;
+    memcpy(&fh, &h, 2);
+    return (float)fh;
+#else
     return fp16_tbl[h];
+#endif
 }
 
 static inline void slaprf_scale_min_k4(int j, const uint8_t *q, uint8_t *d, uint8_t *m) {
@@ -158,10 +164,24 @@ static SLAPRF_TARGET_DOTPROD float slaprf_dot_q6k_q8k(const uint8_t *w_row, int 
                 int8x16_t x3 = vld1q_s8(x_sub + 64 + l_start);
                 int8x16_t x4 = vld1q_s8(x_sub + 96 + l_start);
 
-                s1 = vaddvq_s32(vdotq_s32(vdupq_n_s32(0), u1, x1));
-                s2 = vaddvq_s32(vdotq_s32(vdupq_n_s32(0), u2, x2));
-                s3 = vaddvq_s32(vdotq_s32(vdupq_n_s32(0), u3, x3));
-                s4 = vaddvq_s32(vdotq_s32(vdupq_n_s32(0), u4, x4));
+                int32x4_t v1 = vdotq_s32(vdupq_n_s32(0), u1, x1);
+                int32x4_t v2 = vdotq_s32(vdupq_n_s32(0), u2, x2);
+                int32x4_t v3 = vdotq_s32(vdupq_n_s32(0), u3, x3);
+                int32x4_t v4 = vdotq_s32(vdupq_n_s32(0), u4, x4);
+
+                int32x4_t wsum = vmulq_n_s32(v1, (int32_t)sc_sub[h16 + 0]);
+                wsum = vmlaq_n_s32(wsum, v2, (int32_t)sc_sub[h16 + 2]);
+                wsum = vmlaq_n_s32(wsum, v3, (int32_t)sc_sub[h16 + 4]);
+                wsum = vmlaq_n_s32(wsum, v4, (int32_t)sc_sub[h16 + 6]);
+
+                int32_t bias = 32 * (
+                    (int32_t)sc_sub[h16 + 0] * (int32_t)bs_sub[h16] +
+                    (int32_t)sc_sub[h16 + 2] * (int32_t)bs_sub[2 + h16] +
+                    (int32_t)sc_sub[h16 + 4] * (int32_t)bs_sub[4 + h16] +
+                    (int32_t)sc_sub[h16 + 6] * (int32_t)bs_sub[6 + h16]
+                );
+                block_sum += vaddvq_s32(wsum) - bias;
+                continue;
 #elif defined(__aarch64__) || defined(_M_ARM64)
                 const uint8x16_t m0f = vdupq_n_u8(0x0F);
                 const uint8x16_t m03 = vdupq_n_u8(0x03);
@@ -219,7 +239,7 @@ static SLAPRF_TARGET_DOTPROD float slaprf_dot_q6k_q8k(const uint8_t *w_row, int 
     return total;
 }
 
-static void slaprf_matbatch_q4k(
+static SLAPRF_TARGET_DOTPROD void slaprf_matbatch_q4k(
     float *dst,
     const uint8_t *w_data,
     int nb,
@@ -230,15 +250,104 @@ static void slaprf_matbatch_q4k(
     const slaprf_q8k_t *x_batch,
     const float *fp16_tbl
 ) {
-    for (int r = start_row; r < end_row; ++r) {
+#if defined(__aarch64__) && defined(__clang__)
+    const uint8x16_t mask4 = vdupq_n_u8(0x0F);
+    int r = start_row;
+    for (; r + 3 < end_row; r += 4) {
+        const uint8_t *w0 = w_data + (size_t)(r + 0) * (size_t)(nb * 144);
+        const uint8_t *w1 = w_data + (size_t)(r + 1) * (size_t)(nb * 144);
+        const uint8_t *w2 = w_data + (size_t)(r + 2) * (size_t)(nb * 144);
+        const uint8_t *w3 = w_data + (size_t)(r + 3) * (size_t)(nb * 144);
+        for (int t = 0; t < n_tokens; ++t) {
+            const slaprf_q8k_t *xt = x_batch + (size_t)t * (size_t)nb;
+            float tot0 = 0.0f, tot1 = 0.0f, tot2 = 0.0f, tot3 = 0.0f;
+            for (int b = 0; b < nb; ++b) {
+                const slaprf_q8k_t *xb = &xt[b];
+                const uint8_t *b0 = w0 + b * 144;
+                const uint8_t *b1 = w1 + b * 144;
+                const uint8_t *b2 = w2 + b * 144;
+                const uint8_t *b3 = w3 + b * 144;
+
+                __fp16 hd0, hm0, hd1, hm1, hd2, hm2, hd3, hm3;
+                memcpy(&hd0, b0, 2); memcpy(&hm0, b0 + 2, 2);
+                memcpy(&hd1, b1, 2); memcpy(&hm1, b1 + 2, 2);
+                memcpy(&hd2, b2, 2); memcpy(&hm2, b2 + 2, 2);
+                memcpy(&hd3, b3, 2); memcpy(&hm3, b3 + 2, 2);
+
+                int32x4_t vsum0 = vdupq_n_s32(0);
+                int32x4_t vsum1 = vdupq_n_s32(0);
+                int32x4_t vsum2 = vdupq_n_s32(0);
+                int32x4_t vsum3 = vdupq_n_s32(0);
+                int32_t sm0 = 0, sm1 = 0, sm2 = 0, sm3 = 0;
+
+                for (int is = 0; is < 8; is += 2) {
+                    const int8_t *x1 = xb->qs + is * 32;
+                    int8x16_t xv1_0 = vld1q_s8(x1);
+                    int8x16_t xv1_1 = vld1q_s8(x1 + 16);
+                    int8x16_t xv2_0 = vld1q_s8(x1 + 32);
+                    int8x16_t xv2_1 = vld1q_s8(x1 + 48);
+
+                    int32_t bs1 = (int32_t)xb->bsums[is * 2] + (int32_t)xb->bsums[is * 2 + 1];
+                    int32_t bs2 = (int32_t)xb->bsums[(is + 1) * 2] + (int32_t)xb->bsums[(is + 1) * 2 + 1];
+                    const int q_off = 16 + (is / 2) * 32;
+
+                    #define SLAPRF_Q4K_ROW_STEP(B_PTR, VSUM, SM) do { \
+                        uint8_t sc1, m1, sc2, m2; \
+                        slaprf_scale_min_k4(is, (B_PTR) + 4, &sc1, &m1); \
+                        slaprf_scale_min_k4(is + 1, (B_PTR) + 4, &sc2, &m2); \
+                        uint8x16_t qv0 = vld1q_u8((B_PTR) + q_off); \
+                        uint8x16_t qv1 = vld1q_u8((B_PTR) + q_off + 16); \
+                        int32x4_t a1 = vdotq_s32(vdupq_n_s32(0), vreinterpretq_s8_u8(vandq_u8(qv0, mask4)), xv1_0); \
+                        a1 = vdotq_s32(a1, vreinterpretq_s8_u8(vandq_u8(qv1, mask4)), xv1_1); \
+                        int32x4_t a2 = vdotq_s32(vdupq_n_s32(0), vreinterpretq_s8_u8(vshrq_n_u8(qv0, 4)), xv2_0); \
+                        a2 = vdotq_s32(a2, vreinterpretq_s8_u8(vshrq_n_u8(qv1, 4)), xv2_1); \
+                        (VSUM) = vmlaq_n_s32((VSUM), a1, (int32_t)sc1); \
+                        (VSUM) = vmlaq_n_s32((VSUM), a2, (int32_t)sc2); \
+                        (SM) += (int32_t)m1 * bs1 + (int32_t)m2 * bs2; \
+                    } while (0)
+
+                    SLAPRF_Q4K_ROW_STEP(b0, vsum0, sm0);
+                    SLAPRF_Q4K_ROW_STEP(b1, vsum1, sm1);
+                    SLAPRF_Q4K_ROW_STEP(b2, vsum2, sm2);
+                    SLAPRF_Q4K_ROW_STEP(b3, vsum3, sm3);
+                    #undef SLAPRF_Q4K_ROW_STEP
+                }
+                tot0 += xb->d * ((float)hd0 * (float)vaddvq_s32(vsum0) - (float)hm0 * (float)sm0);
+                tot1 += xb->d * ((float)hd1 * (float)vaddvq_s32(vsum1) - (float)hm1 * (float)sm1);
+                tot2 += xb->d * ((float)hd2 * (float)vaddvq_s32(vsum2) - (float)hm2 * (float)sm2);
+                tot3 += xb->d * ((float)hd3 * (float)vaddvq_s32(vsum3) - (float)hm3 * (float)sm3);
+            }
+            float *dst_t = dst + (size_t)t * (size_t)n_rows + (size_t)r;
+            dst_t[0] = tot0;
+            dst_t[1] = tot1;
+            dst_t[2] = tot2;
+            dst_t[3] = tot3;
+        }
+    }
+    for (; r < end_row; ++r) {
         const uint8_t *w_row = w_data + (size_t)r * (size_t)(nb * 144);
         for (int t = 0; t < n_tokens; ++t) {
             dst[(size_t)t * (size_t)n_rows + (size_t)r] = slaprf_dot_q4k_q8k(w_row, nb, x_batch + (size_t)t * (size_t)nb, fp16_tbl);
         }
     }
+#else
+    const int tile_r = (nb <= 8) ? 32 : 16;
+    for (int r0 = start_row; r0 < end_row; r0 += tile_r) {
+        int r1 = r0 + tile_r;
+        if (r1 > end_row) r1 = end_row;
+        for (int t = 0; t < n_tokens; ++t) {
+            const slaprf_q8k_t *xt = x_batch + (size_t)t * (size_t)nb;
+            float *dst_t = dst + (size_t)t * (size_t)n_rows;
+            for (int r = r0; r < r1; ++r) {
+                const uint8_t *w_row = w_data + (size_t)r * (size_t)(nb * 144);
+                dst_t[r] = slaprf_dot_q4k_q8k(w_row, nb, xt, fp16_tbl);
+            }
+        }
+    }
+#endif
 }
 
-static void slaprf_matbatch_q6k(
+static SLAPRF_TARGET_DOTPROD void slaprf_matbatch_q6k(
     float *dst,
     const uint8_t *w_data,
     int nb,
@@ -249,10 +358,17 @@ static void slaprf_matbatch_q6k(
     const slaprf_q8k_t *x_batch,
     const float *fp16_tbl
 ) {
-    for (int r = start_row; r < end_row; ++r) {
-        const uint8_t *w_row = w_data + (size_t)r * (size_t)(nb * 210);
+    const int tile_r = (nb <= 8) ? 24 : 12;
+    for (int r0 = start_row; r0 < end_row; r0 += tile_r) {
+        int r1 = r0 + tile_r;
+        if (r1 > end_row) r1 = end_row;
         for (int t = 0; t < n_tokens; ++t) {
-            dst[(size_t)t * (size_t)n_rows + (size_t)r] = slaprf_dot_q6k_q8k(w_row, nb, x_batch + (size_t)t * (size_t)nb, fp16_tbl);
+            const slaprf_q8k_t *xt = x_batch + (size_t)t * (size_t)nb;
+            float *dst_t = dst + (size_t)t * (size_t)n_rows;
+            for (int r = r0; r < r1; ++r) {
+                const uint8_t *w_row = w_data + (size_t)r * (size_t)(nb * 210);
+                dst_t[r] = slaprf_dot_q6k_q8k(w_row, nb, xt, fp16_tbl);
+            }
         }
     }
 }

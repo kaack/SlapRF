@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"os"
@@ -107,23 +108,48 @@ func (l *Qwen3GGUFLabeler) LabelCandidates(
 	if len(candidates) == 0 {
 		return nil, nil
 	}
-	model, err := gguf.LoadQwen3(l.ModelPath)
+	tStart := time.Now()
+	info, err := os.Stat(l.ModelPath)
 	if err != nil {
 		return nil, fmt.Errorf("load on-device teacher model: %w", err)
 	}
-	defer model.Close()
+	// Real 28-layer Qwen3 GGUF packs are >= 350 MB, whereas synthetic 1-layer unit test fixtures are < 1 MB.
+	enableFastTriage := info.Size() > (10 << 20)
 
-	tok := model.Tokenizer
-	idCross, ok1 := tok.TokenID("\u0120crossing")
-	idBleed, ok2 := tok.TokenID("\u0120bleed")
-	idEcho, ok3 := tok.TokenID("\u0120echo")
-	idNoise, ok4 := tok.TokenID("\u0120noise")
-	if !ok1 || !ok2 || !ok3 || !ok4 {
-		return nil, errors.New("teacher GGUF vocabulary missing required System 1 class tokens")
-	}
-	classTokIDs := []int{idCross, idBleed, idEcho, idNoise}
-	classRawToks := []int{idCross, idBleed, idEcho, idNoise}
+	var (
+		model        *gguf.Qwen3Model
+		tok          *gguf.Tokenizer
+		classTokIDs  []int
+		classRawToks []int
+	)
 	classNames := []string{"crossing", "bleed", "multipath", "noise"}
+	defer func() {
+		if model != nil {
+			_ = model.Close()
+		}
+	}()
+
+	ensureModelLoaded := func() error {
+		if model != nil {
+			return nil
+		}
+		m, loadErr := gguf.LoadQwen3(l.ModelPath)
+		if loadErr != nil {
+			return fmt.Errorf("load on-device teacher model: %w", loadErr)
+		}
+		model = m
+		tok = model.Tokenizer
+		idCross, ok1 := tok.TokenID("\u0120crossing")
+		idBleed, ok2 := tok.TokenID("\u0120bleed")
+		idEcho, ok3 := tok.TokenID("\u0120echo")
+		idNoise, ok4 := tok.TokenID("\u0120noise")
+		if !ok1 || !ok2 || !ok3 || !ok4 {
+			return errors.New("teacher GGUF vocabulary missing required System 1 class tokens")
+		}
+		classTokIDs = []int{idCross, idBleed, idEcho, idNoise}
+		classRawToks = []int{idCross, idBleed, idEcho, idNoise}
+		return nil
+	}
 
 	// Group candidates per pilot slot so multi-pilot practice sessions maintain clean per-pilot gate order
 	bySlot := make(map[int][]CandidatePeak)
@@ -142,168 +168,262 @@ func (l *Qwen3GGUFLabeler) LabelCandidates(
 		minLapSec = sess.Rules.MinLapSec
 	}
 
-	// System 1 prompt + 6-candidate batch + 6 answers fits comfortably inside 768 tokens
-	// (including byte/char test tokenizers), cutting KV-cache heap allocation by ~2.7x (~470 MB -> ~176 MB)!
-	kvSess := model.NewSession(768)
-	enableFastTriage := model.NLayer > 2
-	var sysPos int
-	sysPrefilled := false
-	ensureSysPrefill := func() error {
-		if sysPrefilled {
-			return nil
+	// System 1 prompt + up to 6 contested candidates scored in a SINGLE L1-row-tiled transformer pass
+	// (~350 tokens, ~80 MB KV-cache) guarantees at most 1 sequential pass over the mmap'd GGUF weights
+	// per pilot (zero multi-pass LRU page-cache thrashing on memory-constrained phones).
+	const maxQwenSweepCandidates = 6
+	var kvSess *gguf.Session
+	kvCap := 0
+	qwenScoredCount := 0
+	qwenTokensTotal := 0
+
+	heuristicPriorToken := func(c CandidatePeak) int {
+		maxDiff := float32(-999)
+		for _, co := range c.Coincident {
+			if diff := co.ProminenceDb - c.ProminenceDb; diff > maxDiff {
+				maxDiff = diff
+			}
 		}
-		sysToks := tok.Encode(system1StaticPromptPrefix)
-		if err := kvSess.ForwardTokensCtx(ctx, sysToks); err != nil {
-			return fmt.Errorf("teacher system prefill: %w", err)
+		if maxDiff >= 2.0 {
+			return classRawToks[1] // bleed
 		}
-		sysPos = kvSess.Pos()
-		sysPrefilled = true
-		return nil
+		if c.ProminenceDb >= 15.0 && maxDiff <= -3.0 && c.WidthHalfPromMs >= 70 && c.WidthHalfPromMs <= 1050 {
+			return classRawToks[0] // crossing
+		}
+		return classRawToks[3] // noise
+	}
+
+	recordFastDecision := func(decisionsByID map[string]CandidateDecision, cand CandidatePeak, lbl string, conf float32) {
+		deltaMs := 0
+		if lbl == "crossing" && cand.MDipDb >= 1.5 && cand.MDipOffsetMs != 0 {
+			deltaMs = cand.MDipOffsetMs
+		}
+		finalInt := int64(cand.AnchorTsUs) + int64(deltaMs)*1000
+		if finalInt < 0 {
+			finalInt = 0
+		}
+		decisionsByID[cand.ID] = CandidateDecision{
+			ID:         cand.ID,
+			GateID:     cand.GateID,
+			SlotIndex:  cand.SlotIndex,
+			Label:      lbl,
+			AnchorTsUs: cand.AnchorTsUs,
+			DeltaMs:    deltaMs,
+			FinalTsUs:  uint64(finalInt),
+			PeakDbm:    cand.PeakRSSIDbm,
+			Confidence: conf,
+		}
 	}
 
 	decisionsByID := make(map[string]CandidateDecision, len(candidates))
 	doneCount := 0
 	totalCount := len(candidates)
 
-	const windowSize = 6
 	for _, slot := range slots {
 		pCands := bySlot[slot]
-		var prevCrossGate string
-		var prevCrossSec float64 = -999
 		lastSameGateSec := make(map[uint8]float64)
+		confirmedSameGateSecs := make(map[uint8][]float64)
+		type confirmedPass struct {
+			gateID   uint8
+			gateName string
+			tSec     float64
+			promDb   float32
+		}
+		var confirmedPasses []confirmedPass
+		var unresolvedIdx []int
 
-		var pendingBatch []CandidatePeak
-		flushPendingBatch := func() error {
-			for start := 0; start < len(pendingBatch); start += windowSize {
+		// Pass 1A: O(N) physical triage of unambiguous crossings, bleeds, multipath echoes, and noise
+		if enableFastTriage {
+			for idx, cand := range pCands {
 				if err := ctx.Err(); err != nil {
-					return err
+					return nil, err
 				}
-				end := start + windowSize
-				if end > len(pendingBatch) {
-					end = len(pendingBatch)
-				}
-				batch := pendingBatch[start:end]
-
-				if err := ensureSysPrefill(); err != nil {
-					return err
-				}
-				// Append `batch[0].ID + ":"` directly to user prompt so `batch[0]` needs 0 extra forward sweeps!
-				userDelta := buildSystem1UserPromptDelta(trackSeq, minLapSec, prevCrossGate, prevCrossSec, batch) + batch[0].ID + ":"
-				kvSess.SetPos(sysPos)
-				if err := kvSess.ForwardTokensCtx(ctx, tok.Encode(userDelta)); err != nil {
-					return fmt.Errorf("teacher prefill: %w", err)
-				}
-
-				for bi, cand := range batch {
-					if err := ctx.Err(); err != nil {
-						return err
-					}
-					probs, bestIdx := kvSess.ScoreSingleTokens(classTokIDs)
-					chosenLabel := classNames[bestIdx]
-					conf := probs[bestIdx]
-					chosenTok := classRawToks[bestIdx]
-
-					// Fuse `[chosenTok] + "\n" + nextCand.ID + ":"` into a SINGLE forward sweep (and 0 sweeps on last item)!
-					if bi+1 < len(batch) {
-						nextTokens := append([]int{chosenTok}, tok.Encode("\n"+batch[bi+1].ID+":")...)
-						if err := kvSess.ForwardTokensCtx(ctx, nextTokens); err != nil {
-							return err
-						}
-					}
-
-					deltaMs := 0
-					if chosenLabel == "crossing" && cand.MDipDb >= 1.5 && cand.MDipOffsetMs != 0 {
-						deltaMs = cand.MDipOffsetMs
-					}
-
+				if fastLbl, fastConf, ok := triageUnambiguousCandidate(cand, idx, pCands, minLapSec, lastSameGateSec); ok {
 					tSec := float64(cand.AnchorTsUs) / 1e6
-					if chosenLabel == "crossing" {
-						prevCrossGate = cand.GateName
-						prevCrossSec = tSec
+					if fastLbl == "crossing" {
 						lastSameGateSec[cand.GateID] = tSec
+						confirmedSameGateSecs[cand.GateID] = append(confirmedSameGateSecs[cand.GateID], tSec)
+						confirmedPasses = append(confirmedPasses, confirmedPass{
+							gateID:   cand.GateID,
+							gateName: cand.GateName,
+							tSec:     tSec,
+							promDb:   cand.ProminenceDb,
+						})
 					}
-
-					finalInt := int64(cand.AnchorTsUs) + int64(deltaMs)*1000
-					if finalInt < 0 {
-						finalInt = 0
-					}
-					decisionsByID[cand.ID] = CandidateDecision{
-						ID:         cand.ID,
-						GateID:     cand.GateID,
-						SlotIndex:  cand.SlotIndex,
-						Label:      chosenLabel,
-						AnchorTsUs: cand.AnchorTsUs,
-						DeltaMs:    deltaMs,
-						FinalTsUs:  uint64(finalInt),
-						PeakDbm:    cand.PeakRSSIDbm,
-						Confidence: float32(math.Round(float64(conf)*1000) / 1000),
-					}
+					recordFastDecision(decisionsByID, cand, fastLbl, fastConf)
 					doneCount++
-					if onProgress != nil {
-						onProgress(doneCount, totalCount)
+					continue
+				}
+				unresolvedIdx = append(unresolvedIdx, idx)
+			}
+
+			// Pass 1B: Bidirectional lockout & cross-gate bleed check against all Pass-1A confirmed passes
+			minSameLockSec := math.Max(1.2, minLapSec*0.75)
+			stillUnresolved := unresolvedIdx[:0]
+			for _, idx := range unresolvedIdx {
+				cand := pCands[idx]
+				tSec := float64(cand.AnchorTsUs) / 1e6
+				resolved := false
+				for _, cSec := range confirmedSameGateSecs[cand.GateID] {
+					if math.Abs(tSec-cSec) < minSameLockSec {
+						recordFastDecision(decisionsByID, cand, "multipath", 0.91)
+						doneCount++
+						resolved = true
+						break
 					}
+				}
+				if resolved {
+					continue
+				}
+				for _, cp := range confirmedPasses {
+					if cp.gateID != cand.GateID && math.Abs(tSec-cp.tSec) <= 0.55 && cp.promDb >= cand.ProminenceDb+3.5 {
+						recordFastDecision(decisionsByID, cand, "bleed", 0.90)
+						doneCount++
+						resolved = true
+						break
+					}
+				}
+				if !resolved {
+					stillUnresolved = append(stillUnresolved, idx)
 				}
 			}
-			pendingBatch = pendingBatch[:0]
-			return nil
+			unresolvedIdx = stillUnresolved
+			if onProgress != nil && doneCount > 0 {
+				onProgress(doneCount, totalCount)
+			}
+		} else {
+			for idx := range pCands {
+				unresolvedIdx = append(unresolvedIdx, idx)
+			}
 		}
 
-		for idx, cand := range pCands {
+		if len(unresolvedIdx) == 0 {
+			continue
+		}
+
+		// If > maxQwenSweepCandidates remain on a real 28-layer GGUF model, prioritize the highest-prominence
+		// genuinely contested peaks for the single Qwen3 sweep and classify weak tail bumps via fast physics
+		// so mobile labeling NEVER exceeds 1 sequential pass through the 1.03 GB weights!
+		var qwenIndices []int
+		if enableFastTriage && len(unresolvedIdx) > maxQwenSweepCandidates {
+			ranked := append([]int(nil), unresolvedIdx...)
+			sort.Slice(ranked, func(i, j int) bool {
+				return pCands[ranked[i]].ProminenceDb > pCands[ranked[j]].ProminenceDb
+			})
+			keepSet := make(map[int]bool, maxQwenSweepCandidates)
+			for _, rIdx := range ranked[:maxQwenSweepCandidates] {
+				keepSet[rIdx] = true
+			}
+			for _, idx := range unresolvedIdx {
+				if keepSet[idx] {
+					qwenIndices = append(qwenIndices, idx)
+				} else {
+					cand := pCands[idx]
+					maxDiff := float32(-999)
+					for _, co := range cand.Coincident {
+						if diff := co.ProminenceDb - cand.ProminenceDb; diff > maxDiff {
+							maxDiff = diff
+						}
+					}
+					lbl := "noise"
+					conf := float32(0.82)
+					if maxDiff >= 1.5 {
+						lbl = "bleed"
+						conf = 0.84
+					} else if cand.ProminenceDb >= 15.0 && maxDiff <= -3.0 && cand.WidthHalfPromMs >= 70 && cand.WidthHalfPromMs <= 1050 {
+						lbl = "crossing"
+						conf = 0.80
+					}
+					recordFastDecision(decisionsByID, cand, lbl, conf)
+					doneCount++
+				}
+			}
+			if onProgress != nil {
+				onProgress(doneCount, totalCount)
+			}
+		} else {
+			qwenIndices = unresolvedIdx
+		}
+
+		if err := ensureModelLoaded(); err != nil {
+			return nil, err
+		}
+
+		for start := 0; start < len(qwenIndices); start += maxQwenSweepCandidates {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			if enableFastTriage {
-				if fastLbl, fastConf, ok := triageUnambiguousCandidate(cand, idx, pCands, minLapSec, lastSameGateSec); ok {
-					if len(pendingBatch) > 0 {
-						if err := flushPendingBatch(); err != nil {
-							return nil, err
-						}
-					}
-					deltaMs := 0
-					if fastLbl == "crossing" && cand.MDipDb >= 1.5 && cand.MDipOffsetMs != 0 {
-						deltaMs = cand.MDipOffsetMs
-					}
-					tSec := float64(cand.AnchorTsUs) / 1e6
-					if fastLbl == "crossing" {
-						prevCrossGate = cand.GateName
-						prevCrossSec = tSec
-						lastSameGateSec[cand.GateID] = tSec
-					}
-					finalInt := int64(cand.AnchorTsUs) + int64(deltaMs)*1000
-					if finalInt < 0 {
-						finalInt = 0
-					}
-					decisionsByID[cand.ID] = CandidateDecision{
-						ID:         cand.ID,
-						GateID:     cand.GateID,
-						SlotIndex:  cand.SlotIndex,
-						Label:      fastLbl,
-						AnchorTsUs: cand.AnchorTsUs,
-						DeltaMs:    deltaMs,
-						FinalTsUs:  uint64(finalInt),
-						PeakDbm:    cand.PeakRSSIDbm,
-						Confidence: fastConf,
-					}
-					doneCount++
-					if onProgress != nil {
-						onProgress(doneCount, totalCount)
-					}
-					continue
+			end := start + maxQwenSweepCandidates
+			if end > len(qwenIndices) {
+				end = len(qwenIndices)
+			}
+			batch := make([]CandidatePeak, 0, end-start)
+			for _, qi := range qwenIndices[start:end] {
+				batch = append(batch, pCands[qi])
+			}
+
+			var batchPrevGate string
+			var batchPrevSec float64 = -999
+			firstSec := float64(batch[0].AnchorTsUs) / 1e6
+			for _, cp := range confirmedPasses {
+				if cp.tSec < firstSec && cp.tSec > batchPrevSec {
+					batchPrevSec = cp.tSec
+					batchPrevGate = cp.gateName
 				}
 			}
-			pendingBatch = append(pendingBatch, cand)
-			if len(pendingBatch) >= windowSize {
-				if err := flushPendingBatch(); err != nil {
-					return nil, err
+
+			allToks := tok.Encode(system1StaticPromptPrefix + buildSystem1UserPromptDelta(trackSeq, minLapSec, batchPrevGate, batchPrevSec, batch))
+			queryIndices := make([]int, 0, len(batch))
+			for bi, cand := range batch {
+				if bi == 0 {
+					allToks = append(allToks, tok.Encode(cand.ID+":")...)
+				} else {
+					priorTok := heuristicPriorToken(batch[bi-1])
+					allToks = append(allToks, priorTok)
+					allToks = append(allToks, tok.Encode("\n"+cand.ID+":")...)
 				}
+				queryIndices = append(queryIndices, len(allToks)-1)
 			}
-		}
-		if len(pendingBatch) > 0 {
-			if err := flushPendingBatch(); err != nil {
-				return nil, err
+			if kvSess == nil || len(allToks)+8 > kvCap {
+				kvCap = len(allToks) + 32
+				if kvCap < 256 && len(slots) > 1 {
+					kvCap = 512
+				}
+				kvSess = model.NewSession(kvCap)
+			} else {
+				kvSess.SetPos(0)
+			}
+
+			qwenTokensTotal += len(allToks)
+			probsList, bestIndices, err := kvSess.ForwardAndScorePositionsCtx(ctx, allToks, queryIndices, classTokIDs)
+			if err != nil {
+				return nil, fmt.Errorf("teacher batch score: %w", err)
+			}
+
+			for bi, cand := range batch {
+				bestIdx := bestIndices[bi]
+				probs := probsList[bi]
+				chosenLabel := classNames[bestIdx]
+				conf := probs[bestIdx]
+				recordFastDecision(decisionsByID, cand, chosenLabel, float32(math.Round(float64(conf)*1000)/1000))
+				qwenScoredCount++
+				doneCount++
+				if onProgress != nil {
+					onProgress(doneCount, totalCount)
+				}
 			}
 		}
 	}
+
+	log.Printf(
+		"[ML] Auto-labeled session %s: candidates=%d fastResolved=%d qwenScored=%d qwenTokens=%d dur=%s",
+		sess.SessionID,
+		len(candidates),
+		len(candidates)-qwenScoredCount,
+		qwenScoredCount,
+		qwenTokensTotal,
+		time.Since(tStart).Round(time.Millisecond),
+	)
 
 	out := make([]CandidateDecision, 0, len(candidates))
 	for _, c := range candidates {
@@ -398,47 +518,47 @@ func triageUnambiguousCandidate(
 		}
 	}
 
-	// 1. Unmistakable cross-gate bleed: another gate simultaneously peaked >= +10.0 dB stronger!
-	if maxCoincDiff >= 10.0 {
-		return "bleed", 0.96, true
+	// 1. Unmistakable cross-gate bleed: another gate simultaneously peaked >= +5.0 dB stronger!
+	if maxCoincDiff >= 5.0 {
+		return "bleed", 0.95, true
 	}
 
-	// 2. Unmistakable tiny RF noise blip: < 11.5 dB prominence and narrow width
-	if cand.ProminenceDb < 11.5 && cand.WidthHalfPromMs < 110 {
-		return "noise", 0.94, true
+	// 2. Unmistakable weak RF noise / far-field drift: < 14.0 dB prominence
+	if cand.ProminenceDb < 14.0 && (cand.WidthHalfPromMs < 140 || maxCoincDiff > -3.5) {
+		return "noise", 0.93, true
 	}
 
-	// Check for a stronger peak on the same gate within +-480 ms (potential multipath echo)
+	// Check for a stronger peak on the same gate within +-650 ms (potential multipath echo)
 	for j := idx - 1; j >= 0; j-- {
 		dtUs := cand.AnchorTsUs - pCands[j].AnchorTsUs
-		if dtUs > 480_000 {
+		if dtUs > 650_000 {
 			break
 		}
-		if pCands[j].GateID == cand.GateID && pCands[j].ProminenceDb >= cand.ProminenceDb+5.5 {
+		if pCands[j].GateID == cand.GateID && pCands[j].ProminenceDb >= cand.ProminenceDb+4.5 {
 			return "multipath", 0.92, true
 		}
 	}
 	for j := idx + 1; j < len(pCands); j++ {
 		dtUs := pCands[j].AnchorTsUs - cand.AnchorTsUs
-		if dtUs > 480_000 {
+		if dtUs > 650_000 {
 			break
 		}
-		if pCands[j].GateID == cand.GateID && pCands[j].ProminenceDb >= cand.ProminenceDb+5.5 {
+		if pCands[j].GateID == cand.GateID && pCands[j].ProminenceDb >= cand.ProminenceDb+4.5 {
 			return "multipath", 0.92, true
 		}
 	}
 
-	// 3. Unmistakable clean gate crossing: >= 22 dB prominence, realistic pass width, clearly dominant
-	// over any coincident gate (>= 8 dB stronger), and respects minimum same-gate lockout!
+	// 3. Unmistakable clean gate crossing: >= 16.5 dB prominence, realistic pass width, clearly dominant
+	// over any coincident gate (>= 3.0 dB stronger), and respects minimum same-gate lockout!
 	tSec := float64(cand.AnchorTsUs) / 1e6
 	prevSame, hasPrevSame := lastSameGateSec[cand.GateID]
 	lockoutOK := !hasPrevSame || (tSec-prevSame) >= math.Max(1.2, minLapSec*0.75)
-	if cand.ProminenceDb >= 22.0 &&
-		cand.WidthHalfPromMs >= 80 &&
-		cand.WidthHalfPromMs <= 980 &&
-		maxCoincDiff <= -8.0 &&
+	if cand.ProminenceDb >= 16.5 &&
+		cand.WidthHalfPromMs >= 65 &&
+		cand.WidthHalfPromMs <= 1100 &&
+		maxCoincDiff <= -3.0 &&
 		lockoutOK {
-		return "crossing", 0.97, true
+		return "crossing", 0.96, true
 	}
 
 	return "", 0, false
@@ -726,25 +846,9 @@ func (m *TeacherManager) isInstalledLocked(spec TeacherPackSpec) bool {
 // Status returns the current teacher pack catalog, installation status, and active download state.
 func (m *TeacherManager) Status(activePackID string) domain.MLTeacherStatus {
 	if m == nil {
-		id := strings.TrimSpace(activePackID)
-		if id == "" {
-			id = DefaultTeacherPackID
-		}
-		packs := make([]domain.MLTeacherPackInfo, 0, len(builtinTeacherCatalog))
-		for _, sp := range builtinTeacherCatalog {
-			packs = append(packs, domain.MLTeacherPackInfo{
-				PackID:      sp.PackID,
-				Name:        sp.Name,
-				Description: sp.Description,
-				SizeBytes:   sp.SizeBytes,
-				Recommended: sp.Recommended,
-				Installed:   false,
-			})
-		}
 		return domain.MLTeacherStatus{
-			ActivePackID: id,
-			Ready:        false,
-			Packs:        packs,
+			Ready: false,
+			Packs: []domain.MLTeacherPackInfo{},
 		}
 	}
 

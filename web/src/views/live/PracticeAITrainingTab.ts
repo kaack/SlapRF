@@ -828,7 +828,10 @@ export class PracticeAITrainingTab extends Component {
           .startMLTraining({
             epochs: 28,
             includeUnverified: true,
-            autoLabel: this.store.mlStatus.config.autoLabelOnTrain !== false,
+            autoLabel: Boolean(
+              this.store.mlStatus.teacher?.ready &&
+              this.store.mlStatus.config.autoLabelOnTrain !== false
+            ),
             sessionIds: this.selectedSessionIds(false),
             continueModelId: modelId,
           })
@@ -861,7 +864,10 @@ export class PracticeAITrainingTab extends Component {
           .startMLTraining({
             epochs: 20,
             includeUnverified: true,
-            autoLabel: this.store.mlStatus.config.autoLabelOnTrain !== false,
+            autoLabel: Boolean(
+              this.store.mlStatus.teacher?.ready &&
+              this.store.mlStatus.config.autoLabelOnTrain !== false
+            ),
             sessionIds: this.selectedSessionIds(true),
             continueModelId: modelId,
           })
