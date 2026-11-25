@@ -1686,6 +1686,100 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /v1/practice/sessions/{sessionId}/filtered:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      tags: [Practice Sessions]
+      summary: Delete a rejected DSP detection hint (TOO_SHORT, SPIKE, MIN_LAP, OUT_OF_ORDER) from a Practice session
+      operationId: deletePracticeSessionFiltered
+      parameters:
+        - name: gateId
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: slotIndex
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: timestampUs
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Updated full state with the filtered detection removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Missing or invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session or filtered detection not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/race/sessions/{sessionId}/filtered:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      tags: [Race Sessions]
+      summary: Delete a rejected DSP detection hint from a Race session
+      operationId: deleteRaceSessionFiltered
+      parameters:
+        - name: gateId
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: slotIndex
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: timestampUs
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Updated full state with the filtered detection removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Missing or invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Filtered detection not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /v1/race/sessions/{sessionId}/crossings:
     parameters:
       - name: sessionId

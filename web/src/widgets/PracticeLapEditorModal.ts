@@ -458,6 +458,9 @@ export function openPracticeLapEditorModal(
   const onKeyDown = (e: KeyboardEvent): void => {
     if (e.key === "Escape") {
       e.preventDefault();
+      if (chartRef?.cancelAddCrossingMode()) {
+        return;
+      }
       close();
     }
   };

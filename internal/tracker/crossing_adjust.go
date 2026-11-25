@@ -599,6 +599,27 @@ func (e *Engine) AddPracticeSessionCrossing(
 		}
 		target.ManualDeletedCrossings = keptNeg
 	}
+	// Prune any stale live-DSP filtered hint (e.g. TOO_SHORT / SPIKE) on this gate within +-1.5s
+	if len(target.Filtered) > 0 {
+		keptFilt := target.Filtered[:0]
+		for _, f := range target.Filtered {
+			if f.GateID == gateID && f.SlotIndex == slotIndex && absDiffUs(f.TimestampUs, timestampUs) <= 1_500_000 {
+				continue
+			}
+			keptFilt = append(keptFilt, f)
+		}
+		target.Filtered = keptFilt
+	}
+	if isActive && len(e.filtered) > 0 {
+		keptRootFilt := e.filtered[:0]
+		for _, f := range e.filtered {
+			if f.GateID == gateID && f.SlotIndex == slotIndex && absDiffUs(f.TimestampUs, timestampUs) <= 1_500_000 {
+				continue
+			}
+			keptRootFilt = append(keptRootFilt, f)
+		}
+		e.filtered = keptRootFilt
+	}
 	target.Crossings, target.Laps = e.replayPilotCrossingsWithBreaksLocked(
 		target.Crossings,
 		target.Laps,
@@ -1100,6 +1121,110 @@ func (e *Engine) DeletePracticeSessionBreak(
 	return practiceSnap, nil
 }
 
+// DeletePracticeSessionFiltered removes a rejected `FilteredDetection` hint (`TOO_SHORT`, `SPIKE`,
+// `MIN_LAP`, `OUT_OF_ORDER`) from a Practice session.
+func (e *Engine) DeletePracticeSessionFiltered(
+	sessionID string,
+	gateID uint8,
+	slotIndex int,
+	timestampUs uint64,
+) (domain.PracticeManagerState, error) {
+	if gateID == 0 || slotIndex <= 0 || timestampUs == 0 {
+		return e.PracticeSnapshot(), fmt.Errorf("gateId, slotIndex, and timestampUs must be positive")
+	}
+
+	e.mu.Lock()
+	targetID := strings.TrimSpace(sessionID)
+	if targetID == "" || strings.EqualFold(targetID, "current") {
+		targetID = e.practiceState.SelectedSessionID
+		if targetID == "" {
+			targetID = e.practiceState.ActiveSessionID
+		}
+	}
+	target := e.findPracticeSessionLocked(targetID)
+	if target == nil {
+		snap := clonePracticeManagerState(e.practiceState)
+		e.mu.Unlock()
+		return snap, fmt.Errorf("practice session %q not found", sessionID)
+	}
+
+	isActive := target.Active && e.practiceState.ActiveSessionID == target.SessionID && !e.isLiveRaceHeatActiveLocked()
+	if isActive && len(e.filtered) > len(target.Filtered) {
+		e.syncActivePracticeRecordsLocked()
+	}
+
+	delIdx := -1
+	var bestDiff uint64 = 10_001
+	for i, f := range target.Filtered {
+		if f.GateID == gateID && f.SlotIndex == slotIndex {
+			d := absDiffUs(f.TimestampUs, timestampUs)
+			if d <= 10_000 && d < bestDiff {
+				bestDiff = d
+				delIdx = i
+				if d == 0 {
+					break
+				}
+			}
+		}
+	}
+	if delIdx < 0 {
+		snap := clonePracticeManagerState(e.practiceState)
+		e.mu.Unlock()
+		return snap, fmt.Errorf("filtered detection not found in practice session %q", target.SessionID)
+	}
+
+	removedTs := target.Filtered[delIdx].TimestampUs
+	target.Filtered = append(target.Filtered[:delIdx], target.Filtered[delIdx+1:]...)
+	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+
+	if isActive && len(e.filtered) > 0 {
+		keptRoot := e.filtered[:0]
+		for _, f := range e.filtered {
+			if f.GateID == gateID && f.SlotIndex == slotIndex && f.TimestampUs == removedTs {
+				continue
+			}
+			keptRoot = append(keptRoot, f)
+		}
+		e.filtered = keptRoot
+	}
+
+	practiceSnap := clonePracticeManagerState(e.practiceState)
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	e.notifyPracticeUpdated(practiceSnap, subs)
+	return practiceSnap, nil
+}
+
+// DeleteEngineFiltered removes a `FilteredDetection` directly from the root engine buffers.
+func (e *Engine) DeleteEngineFiltered(gateID uint8, slotIndex int, timestampUs uint64) error {
+	if gateID == 0 || slotIndex <= 0 || timestampUs == 0 {
+		return fmt.Errorf("gateId, slotIndex, and timestampUs must be positive")
+	}
+	e.mu.Lock()
+	delIdx := -1
+	var bestDiff uint64 = 10_001
+	for i, f := range e.filtered {
+		if f.GateID == gateID && f.SlotIndex == slotIndex {
+			d := absDiffUs(f.TimestampUs, timestampUs)
+			if d <= 10_000 && d < bestDiff {
+				bestDiff = d
+				delIdx = i
+				if d == 0 {
+					break
+				}
+			}
+		}
+	}
+	if delIdx < 0 {
+		e.mu.Unlock()
+		return fmt.Errorf("filtered detection not found")
+	}
+	e.filtered = append(e.filtered[:delIdx], e.filtered[delIdx+1:]...)
+	e.mu.Unlock()
+	return nil
+}
+
 // AddEngineCrossing inserts a manual crossing directly on the root engine buffers.
 func (e *Engine) AddEngineCrossing(gateID uint8, slotIndex int, timestampUs uint64, peakRSSIDbm *float32) (uint64, error) {
 	e.mu.Lock()
@@ -1110,6 +1235,16 @@ func (e *Engine) AddEngineCrossing(gateID uint8, slotIndex int, timestampUs uint
 		return 0, err
 	}
 	e.crossings = append(e.crossings, ev)
+	if len(e.filtered) > 0 {
+		keptFilt := e.filtered[:0]
+		for _, f := range e.filtered {
+			if f.GateID == gateID && f.SlotIndex == slotIndex && absDiffUs(f.TimestampUs, timestampUs) <= 1_500_000 {
+				continue
+			}
+			keptFilt = append(keptFilt, f)
+		}
+		e.filtered = keptFilt
+	}
 	e.crossings, e.laps = e.replayPilotCrossingsLocked(
 		e.crossings,
 		e.laps,
@@ -1241,6 +1376,16 @@ func (e *Engine) AddRaceCrossing(raceID string, gateID uint8, slotIndex int, tim
 		return 0, err
 	}
 	e.crossings = append(e.crossings, ev)
+	if len(e.filtered) > 0 {
+		keptFilt := e.filtered[:0]
+		for _, f := range e.filtered {
+			if f.GateID == gateID && f.SlotIndex == slotIndex && absDiffUs(f.TimestampUs, timestampUs) <= 1_500_000 {
+				continue
+			}
+			keptFilt = append(keptFilt, f)
+		}
+		e.filtered = keptFilt
+	}
 	e.crossings, e.laps = e.replayPilotCrossingsLocked(
 		e.crossings,
 		e.laps,

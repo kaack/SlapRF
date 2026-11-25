@@ -216,6 +216,7 @@ interface PassMarker {
   eventId?: number;
   gateId: number;
   counted: boolean;
+  isFiltered?: boolean;
   title: string;
   detail: string;
   color?: string;
@@ -242,6 +243,7 @@ interface CrossingBox {
   title: string;
   counted: boolean;
   isBreak?: boolean;
+  isFiltered?: boolean;
   lineX: number;
   pillX: number;
   pillY: number;
@@ -349,7 +351,10 @@ export class PilotRssiChart extends Component {
   private readonly pendingDeletedCrossings = new Set<number>();
   private readonly pendingBreaks = new Map<number, number>();
   private readonly pendingDeletedBreaks = new Set<number>();
+  private readonly pendingDeletedFiltered = new Set<string>();
   private pendingDeleteCrossing: { box: CrossingBox; startX: number; startY: number } | null = null;
+  private addCrossingArmed = false;
+  private pendingPlaceCrossing: { startX: number; startY: number } | null = null;
   private crossingBoxes: CrossingBox[] = [];
   /** Values shown while a save is in flight, so the line doesn't jump back. */
   private readonly pending = new Map<number, { enter: number; exit: number }>();
@@ -466,14 +471,23 @@ export class PilotRssiChart extends Component {
     return !this.chartLinesLocked && this.focus !== null && !this.isMultiPilotMode && !this.store.isHistoricalTrack;
   }
 
-  /** True when unlocked on a single timer and paused (or viewing a stopped Practice pack), enabling crossing-line dragging & deletion. */
+  /** True when unlocked and paused (or viewing a stopped Practice pack), enabling crossing-line dragging & deletion across single or all timers. */
   private get canEditCrossings(): boolean {
     const canModifyCrossings =
       !this.chartLinesLocked &&
-      this.focus !== null &&
+      this.shownGates.length > 0 &&
       !this.isMultiPilotMode &&
       (this.contextMode === "practice" || !this.store.isHistoricalTrack);
     return canModifyCrossings && (this.endUs !== null || !this.store.isScopeLive);
+  }
+
+  /** Cancels click-to-place `+` mode if armed; returns true when disarmed. */
+  public cancelAddCrossingMode(): boolean {
+    if (!this.addCrossingArmed) return false;
+    this.addCrossingArmed = false;
+    this.pendingPlaceCrossing = null;
+    this.renderControls();
+    return true;
   }
 
   private get activePilotSlot(): number {
@@ -822,10 +836,14 @@ export class PilotRssiChart extends Component {
           if (this.focus === null) {
             this.tuneDrawerOpen = false;
             this.tuningGateId = null;
-          } else if (this.tuneDrawerOpen) {
-            this.tuningGateId = this.focus;
           } else {
-            this.tuningGateId = null;
+            this.addCrossingArmed = false;
+            this.pendingPlaceCrossing = null;
+            if (this.tuneDrawerOpen) {
+              this.tuningGateId = this.focus;
+            } else {
+              this.tuningGateId = null;
+            }
           }
           this.calibMessage = "";
           this.calibMessageShort = "";
@@ -911,10 +929,14 @@ export class PilotRssiChart extends Component {
         if (this.focus === null) {
           this.tuneDrawerOpen = false;
           this.tuningGateId = null;
-        } else if (this.tuneDrawerOpen) {
-          this.tuningGateId = this.focus;
         } else {
-          this.tuningGateId = null;
+          this.addCrossingArmed = false;
+          this.pendingPlaceCrossing = null;
+          if (this.tuneDrawerOpen) {
+            this.tuningGateId = this.focus;
+          } else {
+            this.tuningGateId = null;
+          }
         }
         this.calibMessage = "";
         this.calibMessageShort = "";
@@ -992,6 +1014,10 @@ export class PilotRssiChart extends Component {
     });
 
     this.listen(host, "keydown", (e) => {
+      if (e.key === "Escape" && this.cancelAddCrossingMode()) {
+        e.preventDefault();
+        return;
+      }
       if (e.key === " ") this.toggleLive();
       else if (e.key === "ArrowLeft") {
         if (this.lapWindow?.onStepLap) this.lapWindow.onStepLap(-1);
@@ -1145,7 +1171,7 @@ export class PilotRssiChart extends Component {
 
       const grabbedCrossing = this.crossingAt(x, y, isTouch);
       if (grabbedCrossing !== null) {
-        if (grabbedCrossing.inDelete) {
+        if (grabbedCrossing.inDelete || grabbedCrossing.box.isFiltered) {
           this.pendingDeleteCrossing = { box: grabbedCrossing.box, startX: x, startY: y };
           host.classList.add("is-over-crossing-delete");
           return;
@@ -1170,6 +1196,19 @@ export class PilotRssiChart extends Component {
         };
         host.classList.add("is-dragging", "is-over-crossing");
         return;
+      }
+
+      if (
+        this.addCrossingArmed &&
+        this.canEditCrossings &&
+        x >= this.padL &&
+        x <= this.padL + this.plot.w &&
+        y >= this.padT &&
+        y <= this.padT + this.plot.h
+      ) {
+        this.pendingPlaceCrossing = { startX: x, startY: y };
+      } else {
+        this.pendingPlaceCrossing = null;
       }
 
       const yAxisW = isTouch ? (this.isMobileLayout ? 36 : 54) : this.padL;
@@ -1489,8 +1528,35 @@ export class PilotRssiChart extends Component {
         ) {
           if (pendingDel.box.isBreak) {
             void this.deleteManualBreak(pendingDel.box.eventId);
+          } else if (pendingDel.box.isFiltered) {
+            void this.deleteManualFiltered(
+              pendingDel.box.gateId,
+              pendingDel.box.slotIndex,
+              pendingDel.box.origTsUs,
+              pendingDel.box.title
+            );
           } else {
             void this.deleteManualCrossing(pendingDel.box.eventId, pendingDel.box.title);
+          }
+        }
+      }
+      if (this.pendingPlaceCrossing) {
+        const pendingPlace = this.pendingPlaceCrossing;
+        this.pendingPlaceCrossing = null;
+        const r = host.getBoundingClientRect();
+        const ux = e.clientX - r.left;
+        const uy = e.clientY - r.top;
+        if (
+          e.type !== "pointercancel" &&
+          this.addCrossingArmed &&
+          Math.hypot(ux - pendingPlace.startX, uy - pendingPlace.startY) <= 8
+        ) {
+          const hit = this.nearestGateAtPoint(ux, uy);
+          if (hit) {
+            this.addCrossingArmed = false;
+            this.drag = null;
+            this.renderControls();
+            void this.addManualCrossingForGate(hit.gateId, hit.tsUs);
           }
         }
       }
@@ -1683,6 +1749,8 @@ export class PilotRssiChart extends Component {
       this.crossingDrag = null;
       this.tagDrag = null;
       this.pendingDeleteCrossing = null;
+      this.addCrossingArmed = false;
+      this.pendingPlaceCrossing = null;
       this.syncDragReadout(null);
       this.autoX = true;
       this.autoY = true;
@@ -2123,6 +2191,8 @@ export class PilotRssiChart extends Component {
       this.tagDrag = null;
       this.crossingDrag = null;
       this.pendingDeleteCrossing = null;
+      this.addCrossingArmed = false;
+      this.pendingPlaceCrossing = null;
     }
     this.renderControls();
     this.renderCalib();
@@ -2166,7 +2236,7 @@ export class PilotRssiChart extends Component {
         y >= b.pillY - padPad &&
         y <= b.pillY + TAG_H + padPad
       ) {
-        const inDelete = x >= b.delX - (isTouch ? 3 : 0);
+        const inDelete = b.isFiltered ? true : x >= b.delX - (isTouch ? 3 : 0);
         return { box: b, inPill: true, inDelete };
       }
     }
@@ -2175,6 +2245,7 @@ export class PilotRssiChart extends Component {
     const hitPx = isTouch ? 16 : MARKER_HIT_PX;
     let best: CrossingBox | null = null;
     for (const b of this.crossingBoxes) {
+      if (b.isFiltered) continue;
       const dx = Math.abs(x - b.lineX);
       if (dx <= hitPx && (!best || dx < Math.abs(x - best.lineX))) {
         best = b;
@@ -2211,16 +2282,90 @@ export class PilotRssiChart extends Component {
     return { minTsUs, maxTsUs: Math.max(minTsUs, maxTsUs) };
   }
 
+  /** Interpolated RSSI value on `gateId` for pilot index `slotPos` at `ts`, for snapping clicks to the closest visible trace. */
+  private rssiInterpolatedAt(gateId: number, slotPos: number, ts: number): number | undefined {
+    if (slotPos < 0) return undefined;
+    const frames = this.store.historyFor(gateId);
+    if (frames.length === 0) return undefined;
+    const i = PilotRssiChart.firstAtOrAfter(frames, ts);
+    if (i <= 0) return frames[0].rssi[slotPos];
+    if (i >= frames.length) return frames[frames.length - 1].rssi[slotPos];
+    const prev = frames[i - 1];
+    const next = frames[i];
+    const v0 = prev.rssi[slotPos];
+    const v1 = next.rssi[slotPos];
+    if (v0 === undefined) return v1;
+    if (v1 === undefined) return v0;
+    const dt = next.timestampUs - prev.timestampUs;
+    if (dt <= 0) return v1;
+    const t = Math.max(0, Math.min(1, (ts - prev.timestampUs) / dt));
+    return v0 + (v1 - v0) * t;
+  }
+
+  /** Resolves which visible timer trace (`gateId`) passes closest in 2D pixel space to plot point `(x, y)`. */
+  private nearestGateAtPoint(
+    x: number,
+    y: number
+  ): { gateId: number; tsUs: number; dbm: number | undefined; traceY: number } | null {
+    if (
+      x < this.padL ||
+      x > this.padL + this.plot.w ||
+      y < this.padT ||
+      y > this.padT + this.plot.h
+    ) {
+      return null;
+    }
+    const gates = this.shownGates;
+    if (gates.length === 0) return null;
+    let tsUs = Math.max(1, Math.round(this.timeAt(x)));
+    if (this.lapWindow) {
+      tsUs = Math.max(this.lapWindow.minUs, Math.min(this.lapWindow.maxUs, tsUs));
+    }
+    const pilot = this.store.pilot(this.activePilotSlot);
+    const slotPos = pilot ? this.store.pilots.indexOf(pilot) : -1;
+    let bestGateId = gates[0].gateId;
+    let bestDbm: number | undefined;
+    let bestTraceY = Math.max(this.padT, Math.min(this.padT + this.plot.h, y));
+    let bestDist = Infinity;
+    const dxOffsets = [0, -4, 4, -8, 8, -12, 12];
+
+    for (const gate of gates) {
+      const centerDbm = this.rssiInterpolatedAt(gate.gateId, slotPos, tsUs);
+      if (centerDbm === undefined) continue;
+      const centerTraceY = Math.max(this.padT, Math.min(this.padT + this.plot.h, this.yOf(centerDbm)));
+      let gateMinDist = Math.abs(centerTraceY - y);
+      for (let oi = 1; oi < dxOffsets.length; oi++) {
+        const dx = dxOffsets[oi];
+        const sx = x + dx;
+        if (sx < this.padL || sx > this.padL + this.plot.w) continue;
+        const sampleTs = Math.max(1, Math.round(this.timeAt(sx)));
+        const sampleDbm = this.rssiInterpolatedAt(gate.gateId, slotPos, sampleTs);
+        if (sampleDbm === undefined) continue;
+        const sy = Math.max(this.padT, Math.min(this.padT + this.plot.h, this.yOf(sampleDbm)));
+        const d2 = Math.hypot(dx, sy - y);
+        if (d2 < gateMinDist) {
+          gateMinDist = d2;
+        }
+      }
+      if (gateMinDist < bestDist) {
+        bestDist = gateMinDist;
+        bestGateId = gate.gateId;
+        bestDbm = centerDbm;
+        bestTraceY = centerTraceY;
+      }
+    }
+    return { gateId: bestGateId, tsUs, dbm: bestDbm, traceY: bestTraceY };
+  }
+
   private async addManualCrossing(): Promise<void> {
     if (
       this.chartLinesLocked ||
-      this.focus === null ||
+      this.shownGates.length === 0 ||
       this.isMultiPilotMode ||
       (this.contextMode !== "practice" && this.store.isHistoricalTrack)
     ) {
       return;
     }
-    const gateId = this.focus;
     if (this.endUs === null) {
       const anchor =
         this.latest > 0
@@ -2231,9 +2376,20 @@ export class PilotRssiChart extends Component {
       this.pauseAt(anchor);
       this.renderControls();
     }
+    if (this.focus === null) {
+      this.addCrossingArmed = !this.addCrossingArmed;
+      this.pendingPlaceCrossing = null;
+      this.renderControls();
+      return;
+    }
     const end = this.viewEnd();
     const start = end - this.windowUs;
-    let tsUs = Math.max(1, Math.round(start + this.windowUs * 0.5));
+    const centerTsUs = Math.max(1, Math.round(start + this.windowUs * 0.5));
+    await this.addManualCrossingForGate(this.focus, centerTsUs);
+  }
+
+  private async addManualCrossingForGate(gateId: number, initialTsUs: number): Promise<void> {
+    let tsUs = Math.max(1, Math.round(initialTsUs));
     if (this.lapWindow) {
       tsUs = Math.max(this.lapWindow.minUs, Math.min(this.lapWindow.maxUs, tsUs));
     }
@@ -2274,6 +2430,28 @@ export class PilotRssiChart extends Component {
       this.calibMessage = `Could not add ${gateLbl} crossing.`;
       this.calibMessageShort = `Could not add ${gateLbl} crossing.`;
     } finally {
+      this.renderCalib();
+    }
+  }
+
+  private async deleteManualFiltered(
+    gateId: number,
+    slotIndex: number,
+    timestampUs: number,
+    title: string
+  ): Promise<void> {
+    const key = `${gateId}:${slotIndex}:${timestampUs}`;
+    if (!gateId || !timestampUs || this.pendingDeletedFiltered.has(key)) return;
+    this.pendingDeletedFiltered.add(key);
+    try {
+      await this.api.deleteFiltered(gateId, slotIndex, timestampUs);
+      this.calibMessage = `Removed ${title}.`;
+      this.calibMessageShort = `Removed ${title}`;
+    } catch {
+      this.calibMessage = `Could not remove ${title}.`;
+      this.calibMessageShort = `Could not remove ${title}.`;
+    } finally {
+      this.pendingDeletedFiltered.delete(key);
       this.renderCalib();
     }
   }
@@ -3181,10 +3359,13 @@ export class PilotRssiChart extends Component {
       if (f.slotIndex !== slot) continue;
       if (!inLockedLapPassBounds(f.timestampUs)) continue;
       if (crossingTsSet.has(`${f.gateId}:${f.timestampUs}`)) continue;
+      if (this.pendingDeletedFiltered.has(`${f.gateId}:${f.slotIndex}:${f.timestampUs}`)) continue;
       out.push({
         ts: f.timestampUs,
+        origTs: f.timestampUs,
         gateId: f.gateId,
         counted: false,
+        isFiltered: true,
         title: `${this.labelOfGate(f.gateId)}-${FILTER_SHORT_CODES[f.reason] ?? f.reason}`,
         detail: f.detail,
         slotIndex: f.slotIndex,
@@ -3426,12 +3607,20 @@ export class PilotRssiChart extends Component {
     passes.forEach((p) => {
       const x = xOf(p.ts);
       const color = p.counted ? adaptColorForTheme(p.color || this.colorOf(p.gateId)) : theme.bad;
-      const editable = canEdit && (p.eventId ?? 0) > 0;
-      const isDraggingThis = editable && this.crossingDrag?.eventId === p.eventId;
-      const isActiveCrossing =
-        editable && (isDraggingThis || prevCrossingHit?.box.eventId === p.eventId);
+      const editable = canEdit && ((p.eventId ?? 0) > 0 || Boolean(p.isFiltered));
+      const isDraggingThis = editable && !p.isFiltered && this.crossingDrag?.eventId === p.eventId;
+      const isSameHitBox = Boolean(
+        prevCrossingHit &&
+          !prevCrossingHit.box.isBreak &&
+          (p.isFiltered
+            ? prevCrossingHit.box.isFiltered &&
+              prevCrossingHit.box.gateId === p.gateId &&
+              prevCrossingHit.box.origTsUs === (p.origTs ?? p.ts)
+            : !prevCrossingHit.box.isFiltered && prevCrossingHit.box.eventId === p.eventId)
+      );
+      const isActiveCrossing = editable && (isDraggingThis || isSameHitBox);
       const isHoverDelete =
-        editable && !isDraggingThis && Boolean(prevCrossingHit?.inDelete && prevCrossingHit.box.eventId === p.eventId);
+        editable && !isDraggingThis && Boolean(prevCrossingHit?.inDelete && isSameHitBox);
 
       ctx.save();
       ctx.strokeStyle = withAlpha(color, isActiveCrossing ? 0.96 : p.counted ? 0.75 : 0.92);
@@ -3510,13 +3699,14 @@ export class PilotRssiChart extends Component {
         ctx.restore();
 
         nextCrossingBoxes.push({
-          eventId: p.eventId!,
+          eventId: p.eventId ?? 0,
           gateId: p.gateId,
           slotIndex: p.slotIndex ?? this.activePilotSlot,
           origTsUs: p.origTs ?? p.ts,
           tsUs: p.ts,
           title: p.title,
           counted: p.counted,
+          isFiltered: p.isFiltered,
           lineX: x,
           pillX,
           pillY,
@@ -3665,6 +3855,59 @@ export class PilotRssiChart extends Component {
     }
 
     this.crossingBoxes = nextCrossingBoxes;
+
+    // Live click-to-place `+` preview when adding a crossing across multiple / All timers
+    const placePreview =
+      this.addCrossingArmed &&
+      canEdit &&
+      !this.crossingDrag &&
+      !this.tagDrag &&
+      !this.drag &&
+      !prevCrossingHit &&
+      this.hoverX !== null &&
+      this.hoverY !== null
+        ? this.nearestGateAtPoint(this.hoverX, this.hoverY)
+        : null;
+    if (placePreview) {
+      const px = Math.max(padL, Math.min(padL + plotW, this.hoverX!));
+      const py = placePreview.traceY;
+      const pColor = adaptColorForTheme(this.colorOf(placePreview.gateId));
+      const gLbl = this.labelOfGate(placePreview.gateId);
+      const pLbl =
+        placePreview.dbm !== undefined
+          ? `+ ${gLbl} · ${placePreview.dbm.toFixed(0)}${this.unitSuffix}`
+          : `+ ${gLbl}`;
+      ctx.save();
+      ctx.strokeStyle = withAlpha(pColor, 0.85);
+      ctx.lineWidth = 1.6;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(px, padT);
+      ctx.lineTo(px, padT + plotH);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.beginPath();
+      ctx.arc(px, py, 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = pColor;
+      ctx.fill();
+      ctx.lineWidth = 1.8;
+      ctx.strokeStyle = theme.surface;
+      ctx.stroke();
+
+      ctx.font = font(700, 10.5);
+      const pw = ctx.measureText(pLbl).width + 14;
+      const pillX = Math.max(padL + 2, Math.min(padL + plotW - pw - 2, px + 8));
+      const pillY = Math.max(padT + 2, Math.min(padT + plotH - TAG_H - 2, py - TAG_H - 6));
+      ctx.beginPath();
+      ctx.roundRect(pillX, pillY, pw, TAG_H, 5);
+      ctx.fillStyle = pColor;
+      ctx.fill();
+      ctx.fillStyle = inkOnColor(pColor);
+      ctx.textAlign = "left";
+      ctx.fillText(pLbl, pillX + 7, pillY + 12.5);
+      ctx.restore();
+    }
 
     if (this.crossingDrag) {
       if (this.crossingDrag.isBreak) {
@@ -3866,7 +4109,7 @@ export class PilotRssiChart extends Component {
       }
       const x = (p.ts - baseTs) * pxPerUs;
       const targetRowEnd = p.counted ? topRowEnd : botRowEnd;
-      const padExtra = editMode && (p.eventId ?? 0) > 0 ? 32 : 4;
+      const padExtra = editMode && ((p.eventId ?? 0) > 0 || p.isFiltered) ? 32 : 4;
       const row = x > targetRowEnd[0] + 6 ? 0 : x > targetRowEnd[1] + 6 ? 1 : 0;
       targetRowEnd[row] = x + width + padExtra;
       rows.set(PilotRssiChart.keyOf(p), row);
@@ -4072,37 +4315,73 @@ export class PilotRssiChart extends Component {
     const overlayEl = this.el.querySelector<HTMLElement>('[data-slot="chart-actions"]');
     if (overlayEl) {
       const showOverlay =
-        this.focus !== null &&
+        this.shownGates.length > 0 &&
         !this.isMultiPilotMode &&
         (this.contextMode === "practice" || !this.store.isHistoricalTrack);
-      const overlaySig = `${showOverlay ? 1 : 0}:${this.focus ?? 0}:${this.chartLinesLocked ? 1 : 0}`;
+      const overlaySig = `${showOverlay ? 1 : 0}:${this.selectedGatesKey}:${this.chartLinesLocked ? 1 : 0}:${this.addCrossingArmed ? 1 : 0}`;
       if (overlaySig !== this.lastOverlayActionsSig) {
         this.lastOverlayActionsSig = overlaySig;
         overlayEl.hidden = !showOverlay;
-        if (showOverlay && this.focus !== null) {
-          const gName = gateLabel(this.store, this.focus);
+        if (showOverlay) {
           const addBtn = overlayEl.querySelector<HTMLButtonElement>('[data-act="add-crossing"]');
           const lockBtn = overlayEl.querySelector<HTMLButtonElement>('[data-act="toggle-chart-lock"]');
-          if (addBtn) {
-            addBtn.disabled = this.chartLinesLocked;
-            const addTitle = this.chartLinesLocked
-              ? `Unlock chart lines to add ${gName} crossings`
-              : `Add ${gName} crossing`;
-            addBtn.title = addTitle;
-            addBtn.setAttribute("aria-label", addTitle);
-          }
-          if (lockBtn) {
-            lockBtn.className = `scope-chart-action-btn ${this.chartLinesLocked ? "is-locked" : "is-unlocked"}`;
-            lockBtn.setAttribute("aria-pressed", String(!this.chartLinesLocked));
-            const lockTitle = this.chartLinesLocked
-              ? `Unlock ${gName} threshold and crossing lines`
-              : `Lock ${gName} threshold and crossing lines`;
-            lockBtn.title = lockTitle;
-            lockBtn.setAttribute("aria-label", lockTitle);
-            lockBtn.innerHTML = this.chartLinesLocked ? icons.lock(14) : icons.unlock(14);
+          if (this.focus !== null) {
+            const gName = gateLabel(this.store, this.focus);
+            if (addBtn) {
+              addBtn.disabled = this.chartLinesLocked;
+              addBtn.className = "scope-chart-action-btn";
+              addBtn.removeAttribute("aria-pressed");
+              const addTitle = this.chartLinesLocked
+                ? `Unlock chart lines to add ${gName} crossings`
+                : `Add ${gName} crossing`;
+              addBtn.title = addTitle;
+              addBtn.setAttribute("aria-label", addTitle);
+            }
+            if (lockBtn) {
+              lockBtn.className = `scope-chart-action-btn ${this.chartLinesLocked ? "is-locked" : "is-unlocked"}`;
+              lockBtn.setAttribute("aria-pressed", String(!this.chartLinesLocked));
+              const lockTitle = this.chartLinesLocked
+                ? `Unlock ${gName} threshold and crossing lines`
+                : `Lock ${gName} threshold and crossing lines`;
+              lockBtn.title = lockTitle;
+              lockBtn.setAttribute("aria-label", lockTitle);
+              lockBtn.innerHTML = this.chartLinesLocked ? icons.lock(14) : icons.unlock(14);
+            }
+          } else {
+            const armed = !this.chartLinesLocked && this.addCrossingArmed;
+            if (addBtn) {
+              addBtn.disabled = this.chartLinesLocked;
+              addBtn.className = `scope-chart-action-btn${armed ? " is-unlocked" : ""}`;
+              addBtn.setAttribute("aria-pressed", String(armed));
+              const addTitle = this.chartLinesLocked
+                ? "Unlock crossing lines to add crossings"
+                : armed
+                  ? "Click on any timer curve to add crossing (click + or Esc to cancel)"
+                  : "Click + then click on a timer curve to add crossing";
+              addBtn.title = addTitle;
+              addBtn.setAttribute("aria-label", addTitle);
+            }
+            if (lockBtn) {
+              lockBtn.className = `scope-chart-action-btn ${this.chartLinesLocked ? "is-locked" : "is-unlocked"}`;
+              lockBtn.setAttribute("aria-pressed", String(!this.chartLinesLocked));
+              const lockTitle = this.chartLinesLocked
+                ? "Unlock crossing lines"
+                : "Lock crossing lines";
+              lockBtn.title = lockTitle;
+              lockBtn.setAttribute("aria-label", lockTitle);
+              lockBtn.innerHTML = this.chartLinesLocked ? icons.lock(14) : icons.unlock(14);
+            }
           }
         }
       }
+    }
+
+    const chartHostEl = this.el.querySelector<HTMLElement>('[data-slot="chart"]');
+    if (chartHostEl) {
+      chartHostEl.classList.toggle(
+        "is-placing-crossing",
+        Boolean(this.addCrossingArmed && this.canEditCrossings && this.focus === null)
+      );
     }
 
     const winSec = this.windowUs / 1e6;
@@ -4206,7 +4485,11 @@ export class PilotRssiChart extends Component {
     const nextHint = live
       ? "Live · drag chart to pan · Shift+drag box to zoom · drag axes to stretch"
       : this.canEditCrossings
-        ? "Paused · drag crossing lines or thresholds to adjust · drag chart to pan"
+        ? this.addCrossingArmed && this.focus === null
+          ? "Click on any timer curve to place a crossing · Esc or + to cancel"
+          : this.focus === null
+            ? "Paused · drag crossing lines or click × to remove · click + then a curve to add"
+            : "Paused · drag crossing lines or thresholds to adjust · drag chart to pan"
         : "Paused · drag chart to pan · Shift+drag box to zoom · drag axes to stretch";
     const hintEl = this.slot("hint");
     if (hintEl.textContent !== nextHint) hintEl.textContent = nextHint;

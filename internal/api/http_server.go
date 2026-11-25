@@ -253,6 +253,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/practice/sessions/{sessionId}/breaks", wrap(s.handleAddPracticeSessionBreak))
 	mux.HandleFunc("PATCH /v1/practice/sessions/{sessionId}/breaks/{breakId}", wrap(s.handlePatchPracticeSessionBreak))
 	mux.HandleFunc("DELETE /v1/practice/sessions/{sessionId}/breaks/{breakId}", wrap(s.handleDeletePracticeSessionBreak))
+	mux.HandleFunc("DELETE /v1/practice/sessions/{sessionId}/filtered", wrap(s.handleDeletePracticeSessionFiltered))
 	s.registerScopedTrackRoutes(mux, wrap, trackScopePractice)
 
 	// Race Sessions Resource Hierarchy (`/v1/race/sessions` - symmetric with `/v1/practice/sessions`)
@@ -276,6 +277,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/race/sessions/{sessionId}/crossings", wrap(s.handleAddRaceSessionCrossing))
 	mux.HandleFunc("PATCH /v1/race/sessions/{sessionId}/crossings/{eventId}", wrap(s.handlePatchRaceSessionCrossing))
 	mux.HandleFunc("DELETE /v1/race/sessions/{sessionId}/crossings/{eventId}", wrap(s.handleDeleteRaceSessionCrossing))
+	mux.HandleFunc("DELETE /v1/race/sessions/{sessionId}/filtered", wrap(s.handleDeleteRaceSessionFiltered))
 	mux.HandleFunc("GET /v1/race/sessions/{sessionId}/standings.csv", s.handleExportRaceSessionStandingsCSV)
 	s.registerScopedTrackRoutes(mux, wrap, trackScopeRace)
 	mux.HandleFunc("GET /v1/race/standings.csv", s.handleExportRaceResultsCSV)

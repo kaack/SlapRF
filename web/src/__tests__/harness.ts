@@ -1400,6 +1400,7 @@ export function makeMockApiClient(store: AppStore): MockApiClientRecord {
     addBreak: record("addBreak"),
     adjustBreak: record("adjustBreak"),
     deleteBreak: record("deleteBreak"),
+    deleteFiltered: record("deleteFiltered"),
     setGateRules: record("setGateRules"),
     setPilotGateRules: record("setPilotGateRules"),
     updateRules: record("updateRules"),

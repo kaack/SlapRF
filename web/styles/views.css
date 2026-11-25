@@ -3147,6 +3147,9 @@ html[data-theme="light"] .bar-time {
 .channel-all-dot {
   background: conic-gradient(#d4ff3a, #38bdf8, #f472b6, #fb923c, #d4ff3a);
 }
+.scope-canvas.is-placing-crossing {
+  cursor: crosshair;
+}
 .scope-canvas.is-over-tag,
 .scope-canvas.is-over-yaxis,
 .scope-canvas.is-dragging.is-over-yaxis {

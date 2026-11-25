@@ -1156,6 +1156,113 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       );
       await flushMicrotasks();
       expect(calls.filter((c) => c.method === "setGateThresholds").length).toBe(setThrCallsBefore + 1);
+
+      // Switch to "All timers" (`[data-focus="all"]`) while unlocked:
+      // 1) Enter/Exit threshold tags are NOT shown (`tags.length === 0`),
+      // 2) Red `TOO_SHORT` filtered entries render a deletable `[ × ]` pill (`deleteFiltered`),
+      // 3) Clicking `+` arms click-to-place mode and clicking on top of T1's trace adds a T1 crossing!
+      root.querySelector<HTMLElement>('[data-focus="all"]')!.click();
+      store.ingestFiltered({
+        gateId: 2,
+        slotIndex: 1,
+        timestampUs: 4_200_000,
+        peakRssiDbm: -61,
+        reason: "TOO_SHORT",
+        detail: "Peak above enter for 40ms",
+      });
+      await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
+      await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
+
+      const allTimersTags = (chart as unknown as { tags: unknown[] }).tags;
+      expect(allTimersTags.length).toBe(0);
+      const overlayInAll = root.querySelector<HTMLElement>('[data-slot="chart-actions"]')!;
+      expect(overlayInAll.hidden).toBe(false);
+
+      // Delete the red `TOO_SHORT` filtered entry via its pill `×`
+      const filtBoxes = (
+        chart as unknown as {
+          crossingBoxes: Array<{
+            isFiltered?: boolean;
+            gateId: number;
+            origTsUs: number;
+            delX: number;
+            delW: number;
+            pillY: number;
+          }>;
+        }
+      ).crossingBoxes;
+      const shortBox = filtBoxes.find((b) => b.isFiltered && b.gateId === 2 && b.origTsUs === 4_200_000);
+      expect(shortBox).toBeDefined();
+      const shortClickX = rect.left + shortBox!.delX + shortBox!.delW * 0.5;
+      const shortClickY = rect.top + shortBox!.pillY + 9;
+      hostEl.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: shortClickX,
+          clientY: shortClickY,
+          pointerId: 6,
+          pointerType: "mouse",
+        })
+      );
+      hostEl.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          button: 0,
+          clientX: shortClickX,
+          clientY: shortClickY,
+          pointerId: 6,
+          pointerType: "mouse",
+        })
+      );
+      await flushMicrotasks();
+      const delFiltCall = calls.find((c) => c.method === "deleteFiltered");
+      expect(delFiltCall).toBeDefined();
+      expect(delFiltCall!.args[0]).toBe(2);
+      expect(delFiltCall!.args[1]).toBe(1);
+      expect(delFiltCall!.args[2]).toBe(4_200_000);
+
+      // Arm `+` in "All timers", reset pan to [0..15s] via dblclick, and click near the top of T1's 8.5s peak
+      hostEl.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      // Pause at 15s again after reset if needed and arm `+`
+      if (!root.querySelector<HTMLButtonElement>('[data-act="live"]')!.classList.contains("btn-ghost")) {
+        root.querySelector<HTMLButtonElement>('[data-act="live"]')!.click();
+      }
+      await new Promise((r) => window.requestAnimationFrame(() => r(undefined)));
+      const addCallsBefore = calls.filter((c) => c.method === "addCrossing").length;
+      addBtn.click();
+      expect(hostEl.classList.contains("is-placing-crossing")).toBe(true);
+      const curEndUs = (chart as unknown as { viewEnd: () => number }).viewEnd();
+      const curWinUs = (chart as unknown as { windowUs: number }).windowUs;
+      const peakClickX = rect.left + 46 + ((8_500_000 - (curEndUs - curWinUs)) / curWinUs) * plotW;
+      const peakClickY = rect.top + 28; // High in plot -> closest to T1's -52 dBm peak!
+      hostEl.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          clientX: peakClickX,
+          clientY: peakClickY,
+          pointerId: 7,
+          pointerType: "mouse",
+        })
+      );
+      hostEl.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          button: 0,
+          clientX: peakClickX,
+          clientY: peakClickY,
+          pointerId: 7,
+          pointerType: "mouse",
+        })
+      );
+      await flushMicrotasks();
+      const addCallsAfter = calls.filter((c) => c.method === "addCrossing");
+      expect(addCallsAfter.length).toBe(addCallsBefore + 1);
+      const placedCall = addCallsAfter[addCallsAfter.length - 1];
+      expect(placedCall.args[0]).toBe(2); // T1!
+      expect(placedCall.args[1]).toBe(1);
+      expect(hostEl.classList.contains("is-placing-crossing")).toBe(false);
     } finally {
       chart.destroy();
     }

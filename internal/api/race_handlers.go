@@ -866,6 +866,63 @@ func (s *Server) handleDeletePracticeSessionBreak(w http.ResponseWriter, r *http
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
+// handleDeletePracticeSessionFiltered serves `DELETE /v1/practice/sessions/{sessionId}/filtered`.
+func (s *Server) handleDeletePracticeSessionFiltered(w http.ResponseWriter, r *http.Request) {
+	rawID := strings.TrimSpace(r.PathValue("sessionId"))
+	if !rejectColonInPathValue(w, rawID) {
+		return
+	}
+	q := r.URL.Query()
+	gateID64, err1 := strconv.ParseUint(strings.TrimSpace(q.Get("gateId")), 10, 8)
+	slotIndex, err2 := strconv.Atoi(strings.TrimSpace(q.Get("slotIndex")))
+	timestampUs, err3 := strconv.ParseUint(strings.TrimSpace(q.Get("timestampUs")), 10, 64)
+	if err1 != nil || gateID64 == 0 || err2 != nil || slotIndex <= 0 || err3 != nil || timestampUs == 0 {
+		writeErrorJSON(w, http.StatusBadRequest, "query parameters 'gateId', 'slotIndex', and 'timestampUs' must be positive integers")
+		return
+	}
+	eng := s.activeEngine()
+	sess, targetID := resolvePracticeSession(eng, rawID)
+	if sess == nil {
+		if rawID == "" || strings.EqualFold(rawID, "current") {
+			if err := eng.DeleteEngineFiltered(uint8(gateID64), slotIndex, timestampUs); err != nil {
+				writeEngineError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+			return
+		}
+		writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("practice session %q not found", rawID))
+		return
+	}
+	if _, err := eng.DeletePracticeSessionFiltered(targetID, uint8(gateID64), slotIndex, timestampUs); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	s.logUserAction("Practice", "Deleted filtered detection gate=%d slot=%d ts=%d us in session %q (id=%s)", gateID64, slotIndex, timestampUs, sess.Name, targetID)
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+// handleDeleteRaceSessionFiltered serves `DELETE /v1/race/sessions/{sessionId}/filtered`.
+func (s *Server) handleDeleteRaceSessionFiltered(w http.ResponseWriter, r *http.Request) {
+	rawID := strings.TrimSpace(r.PathValue("sessionId"))
+	if !rejectColonInPathValue(w, rawID) {
+		return
+	}
+	q := r.URL.Query()
+	gateID64, err1 := strconv.ParseUint(strings.TrimSpace(q.Get("gateId")), 10, 8)
+	slotIndex, err2 := strconv.Atoi(strings.TrimSpace(q.Get("slotIndex")))
+	timestampUs, err3 := strconv.ParseUint(strings.TrimSpace(q.Get("timestampUs")), 10, 64)
+	if err1 != nil || gateID64 == 0 || err2 != nil || slotIndex <= 0 || err3 != nil || timestampUs == 0 {
+		writeErrorJSON(w, http.StatusBadRequest, "query parameters 'gateId', 'slotIndex', and 'timestampUs' must be positive integers")
+		return
+	}
+	if err := s.activeEngine().DeleteEngineFiltered(uint8(gateID64), slotIndex, timestampUs); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
 // handleAddRaceSessionCrossing serves `POST /v1/race/sessions/{sessionId}/crossings`.
 func (s *Server) handleAddRaceSessionCrossing(w http.ResponseWriter, r *http.Request) {
 	rawID := strings.TrimSpace(r.PathValue("sessionId"))

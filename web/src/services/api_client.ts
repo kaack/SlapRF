@@ -1539,6 +1539,21 @@ export class ApiClient {
     );
   }
 
+  public async deleteFiltered(
+    gateId: number,
+    slotIndex: number,
+    timestampUs: number,
+    scope?: TrackScope | null
+  ): Promise<void> {
+    const qs = `gateId=${encodeURIComponent(String(Math.round(gateId)))}&slotIndex=${encodeURIComponent(String(Math.round(slotIndex)))}&timestampUs=${encodeURIComponent(String(Math.round(timestampUs)))}`;
+    this.store.hydrate(
+      await this.transport.request<FullStateResponse>(
+        "DELETE",
+        `${this.resolveSessionBaseUrl(scope)}/filtered?${qs}`
+      )
+    );
+  }
+
   public async updateTrackNode(update: GateUpdate, scope?: TrackScope | null): Promise<void> {
     this.store.hydrate(
       await this.transport.request<FullStateResponse>(
