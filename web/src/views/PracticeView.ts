@@ -43,16 +43,18 @@ import {
 } from "../widgets/markup";
 import { PilotPicker } from "../widgets/PilotPicker";
 import { PilotRssiChart } from "../widgets/PilotRssiChart";
+import { closeActivePracticeLapEditorModal } from "../widgets/PracticeLapEditorModal";
 import { ScopedTrackWorkspace } from "../widgets/ScopedTrackWorkspace";
 import { mountTagPillEditor, renderTagPillBoxHtml } from "../widgets/TagPillEditor";
 import { cleanConnectionInvalidReason, showToast } from "../widgets/Toast";
 import { AllPilotsPanel } from "./live/AllPilotsPanel";
 import { PilotPanel } from "./live/PilotPanel";
 import { PracticeAITrainingTab } from "./live/PracticeAITrainingTab";
+import { PracticeReviewTab } from "./live/PracticeReviewTab";
 import { PilotView } from "./PilotView";
 
 type SessionDirStatusFilter = "all" | "live" | "stopped" | "laps";
-type MobilePracticeTab = "pilots" | "track" | "overview" | "laps" | "trends" | "signals" | "analytics" | "ai";
+type MobilePracticeTab = "pilots" | "track" | "overview" | "laps" | "review" | "trends" | "signals" | "analytics" | "ai";
 
 function formatShortSessionDate(iso?: string): string {
   if (!iso) return "";
@@ -161,6 +163,7 @@ export class PracticeView extends Component {
   public override onDeactivate(): void {
     this.isViewActive = false;
     this.stopMobileLapClock();
+    closeActivePracticeLapEditorModal();
     this.pilotPopoverOpen = false;
     this.pilotDrawerAnimatedOpen = false;
     this.pilotDrawerClosing = false;
@@ -205,6 +208,8 @@ export class PracticeView extends Component {
   private practiceTrackSessionId = "";
   private practiceAnalyticsView: PilotView | null = null;
   private practiceAnalyticsEl: HTMLElement | null = null;
+  private practiceReviewView: PracticeReviewTab | null = null;
+  private practiceReviewEl: HTMLElement | null = null;
   private practiceAIView: PracticeAITrainingTab | null = null;
   private practiceAIEl: HTMLElement | null = null;
   private dirOpenMenuSessionId = "";
@@ -256,6 +261,9 @@ export class PracticeView extends Component {
                 <button type="button" role="tab" aria-selected="false" class="rc-topleft-btn rc-mode-btn" data-practice-mobile-tab="laps">
                   ${icons.timer(15)}<span>Laps</span>
                 </button>
+                <button type="button" role="tab" aria-selected="false" class="rc-topleft-btn rc-mode-btn" data-practice-mobile-tab="review">
+                  ${icons.reviewCheck(15)}<span>Review</span>
+                </button>
                 <button type="button" role="tab" aria-selected="false" class="rc-topleft-btn rc-mode-btn" data-practice-mobile-tab="trends">
                   ${icons.chart(15)}<span>Trends</span>
                 </button>
@@ -266,7 +274,7 @@ export class PracticeView extends Component {
                   ${icons.chart(15)}<span>Analytics</span>
                 </button>
                 <button type="button" role="tab" aria-selected="false" class="rc-topleft-btn rc-mode-btn" data-practice-mobile-tab="ai">
-                  ${icons.ai(15)}<span>AI Training</span>
+                  ${icons.ai(15)}<span>AI</span>
                 </button>
               </div>
               <button type="button" class="sched-lineup-cue is-right" data-lineup-scroll="1" aria-label="Scroll tabs right" title="More tabs" hidden>${icons.chevronRight(14)}</button>
@@ -288,6 +296,7 @@ export class PracticeView extends Component {
           <section class="card card-flush practice-mobile-pilots-card" data-slot="mobile-pilots" data-practice-mobile-pane="pilots"></section>
           <div class="practice-mobile-track-wrap" data-slot="mobile-track" data-practice-mobile-pane="track"></div>
           <div class="practice-mobile-sectors-wrap" data-slot="mobile-sectors" data-practice-mobile-pane="laps"></div>
+          <div class="practice-mobile-review-wrap" data-slot="mobile-review" data-practice-mobile-pane="review"></div>
           <section class="rc-canvas-panel rc-page-card is-signals-panel practice-mobile-signals-panel" data-slot="mobile-signals" data-practice-mobile-pane="signals"></section>
           <div class="practice-mobile-analytics-wrap" data-slot="mobile-analytics" data-practice-mobile-pane="analytics"></div>
           <div class="practice-mobile-ai-wrap" data-slot="mobile-ai" data-practice-mobile-pane="ai"></div>
@@ -377,8 +386,10 @@ export class PracticeView extends Component {
         this.pilotDrawerCloseTimer = null;
       }
       this.stopMobileLapClock();
+      closeActivePracticeLapEditorModal();
       this.disposePracticeSignalsChart();
       this.disposePracticeTrackView();
+      this.disposePracticeReviewView();
       this.disposePracticeAnalyticsView();
       this.disposePracticeAIView();
       this.panel?.destroy();
@@ -502,6 +513,7 @@ export class PracticeView extends Component {
       requestedPane === "track" ||
       requestedPane === "overview" ||
       requestedPane === "laps" ||
+      requestedPane === "review" ||
       requestedPane === "trends" ||
       requestedPane === "signals" ||
       requestedPane === "analytics" ||
@@ -587,6 +599,7 @@ export class PracticeView extends Component {
       wsEl.style.display = "none";
       this.disposePracticeSignalsChart();
       this.disposePracticeTrackView();
+      this.disposePracticeReviewView();
       this.disposePracticeAnalyticsView();
       this.disposePracticeAIView();
       this.renderDirectory();
@@ -622,6 +635,13 @@ export class PracticeView extends Component {
           this.shownFocus = undefined;
         }
         this.renderMobileTrackPanel();
+      } else if (tab === "review") {
+        if (this.panel) {
+          this.panel.destroy();
+          this.panel = undefined;
+          this.shownFocus = undefined;
+        }
+        this.renderMobileReviewPanel();
       } else if (tab === "analytics") {
         if (this.panel) {
           this.panel.destroy();
@@ -761,6 +781,13 @@ export class PracticeView extends Component {
         this.shownFocus = undefined;
       }
       this.renderMobileSignalsPanel(true);
+    } else if (nextTab === "review") {
+      if (this.panel) {
+        this.panel.destroy();
+        this.panel = undefined;
+        this.shownFocus = undefined;
+      }
+      this.renderMobileReviewPanel(true);
     } else if (nextTab === "analytics") {
       if (this.panel) {
         this.panel.destroy();
@@ -3418,6 +3445,37 @@ export class PracticeView extends Component {
     }
     if (force) {
       this.practiceAnalyticsView.onActivate();
+    }
+  }
+
+  private disposePracticeReviewView(): void {
+    if (this.practiceReviewView) {
+      this.practiceReviewView.destroy();
+      this.practiceReviewView = null;
+    }
+    if (this.practiceReviewEl) {
+      this.practiceReviewEl.remove();
+      this.practiceReviewEl = null;
+    }
+  }
+
+  private renderMobileReviewPanel(force = false): void {
+    const host = this.slot("mobile-review");
+    if (this.activeTab !== "session") {
+      this.disposePracticeReviewView();
+      host.innerHTML = "";
+      return;
+    }
+    if (!this.practiceReviewView || !this.practiceReviewEl) {
+      this.practiceReviewEl = document.createElement("div");
+      this.practiceReviewEl.className = "rc-review-embedded";
+      this.practiceReviewView = new PracticeReviewTab(this.practiceReviewEl, this.store, this.api);
+    }
+    if (this.practiceReviewEl.parentElement !== host) {
+      host.appendChild(this.practiceReviewEl);
+    }
+    if (force) {
+      this.practiceReviewView.onActivate();
     }
   }
 

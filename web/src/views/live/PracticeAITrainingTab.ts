@@ -14,17 +14,14 @@ function countValidLaps(s: PracticeSession): number {
 }
 
 /**
- * Embedded `AI Training` tab inside a Practice session workspace (`#/practice/<session>/ai`):
- * - Uses the current Practice session's `.rfbin` trace and crossings (including any edits made in `Signals`).
- * - Optionally includes other recorded Practice sessions so multi-pack runs combine seamlessly.
- * - Supports iterative training (`Train Model`, `Train More (+20 Epochs)`, `Retrain`), displays the
- *   validation scorecard vs Classic DSP, and lets the user mark a model as **Ready** so it becomes
- *   selectable in `Track` (`Race -> Track` and `Practice -> Track`).
+ * Clean, concise `AI` training tab inside each Practice session (`#/practice/<session>/ai`):
+ * - Uses crossings & `.rfbin` traces from the current Practice (and optionally other practices).
+ * - Train -> Train More / Retrain -> Mark Ready -> available in Race & Practice `Track`.
  */
 export class PracticeAITrainingTab extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
-  private readonly onOpenTab: (tab: "signals" | "track") => void;
+  private readonly onOpenTab: (tab: "review" | "signals" | "track") => void;
 
   private lastSessionId = "";
   private modelNameDraft = "";
@@ -38,7 +35,7 @@ export class PracticeAITrainingTab extends Component {
     el: HTMLElement,
     store: AppStore,
     api: ApiClient,
-    onOpenTab: (tab: "signals" | "track") => void
+    onOpenTab: (tab: "review" | "signals" | "track") => void
   ) {
     super(el);
     this.store = store;
@@ -52,7 +49,11 @@ export class PracticeAITrainingTab extends Component {
     this.onDispose(
       store.subscribe(["practice", "ml", "config", "laps", "crossings"], () => {
         const active = document.activeElement;
-        if (active instanceof HTMLInputElement && this.el.contains(active) && active.hasAttribute("data-ai-model-name")) {
+        if (
+          active instanceof HTMLInputElement &&
+          this.el.contains(active) &&
+          active.hasAttribute("data-ai-model-name")
+        ) {
           return;
         }
         this.render();
@@ -113,15 +114,12 @@ export class PracticeAITrainingTab extends Component {
       sess?.name ?? "",
       sess?.laps.length ?? 0,
       sess?.crossings.length ?? 0,
-      sess?.traceSampleCount ?? 0,
-      Math.round(sess?.traceDurationSec ?? 0),
       others.length,
       others.reduce((sum, s) => sum + countValidPasses(s), 0),
       this.includeAllPractices ? 1 : 0,
       this.focusedModelId,
       ml.config.detectorMode,
       ml.config.activeModelId,
-      ml.config.liveTuneEnabled ? 1 : 0,
       ml.training.running ? 1 : 0,
       ml.training.epoch,
       ml.training.totalEpochs,
@@ -140,9 +138,9 @@ export class PracticeAITrainingTab extends Component {
       this.lastSessionId = sess.sessionId;
       this.focusedModelId = "";
       const existing = this.resolveCandidateModel(sess);
-      this.modelNameDraft = existing?.name || `${sess.name || "Practice"} Model`;
+      this.modelNameDraft = existing?.name || `${sess.name || "Practice"}`;
     } else if (!this.modelNameDraft && sess) {
-      this.modelNameDraft = `${sess.name || "Practice"} Model`;
+      this.modelNameDraft = `${sess.name || "Practice"}`;
     }
 
     const sig = this.computeSig();
@@ -159,11 +157,9 @@ export class PracticeAITrainingTab extends Component {
     const ml = this.store.mlStatus;
     const curLaps = countValidLaps(sess);
     const curPasses = countValidPasses(sess);
-    const manualEdits = (sess.crossings ?? []).filter((c) => c.manual).length;
     const others = this.otherRecordedSessions(sess.sessionId);
     const otherPasses = others.reduce((sum, s) => sum + countValidPasses(s), 0);
-    const totalSelectedPasses = curPasses + (this.includeAllPractices ? otherPasses : 0);
-    const totalSelectedSessions = 1 + (this.includeAllPractices ? others.length : 0);
+    const totalPasses = curPasses + (this.includeAllPractices ? otherPasses : 0);
 
     const candidate = this.resolveCandidateModel(sess);
     if (candidate && this.focusedModelId !== candidate.modelId) {
@@ -174,78 +170,63 @@ export class PracticeAITrainingTab extends Component {
     const trainPct =
       ml.training.running && ml.training.totalEpochs > 0
         ? Math.min(100, Math.round((ml.training.epoch / ml.training.totalEpochs) * 100))
-        : ml.training.completedModelId
-          ? 100
-          : 0;
+        : 0;
 
     const customModels = this.customModels();
-    const readyCount = customModels.filter((m) => m.ready).length;
 
     const alertsHtml = `
       ${this.errorMsg ? `<div class="ai-train-banner is-error" role="alert">${esc(this.errorMsg)}</div>` : ""}
       ${this.statusMsg ? `<div class="ai-train-banner is-ok" role="status">${esc(this.statusMsg)}</div>` : ""}`;
 
-    const scorecardHtml = candidate
+    const candidateHtml = candidate
       ? `
         <div class="ai-scorecard-box">
           <div class="ai-card-head">
-            <div>
-              <div class="ai-scorecard-title">
-                ${esc(candidate.name)}
-                <span class="race-state-pill ${candidate.ready ? "is-live" : "is-paused"}" style="margin-left:6px">
-                  ${candidate.ready ? "Ready ✓" : "Draft"}
-                </span>
-              </div>
-              <span class="note">${candidate.epochsTrained ?? 28} epochs · trained on ${candidate.trainPasses} passes</span>
+            <div class="ai-model-title-line">
+              <strong>${esc(candidate.name)}</strong>
+              <span class="race-state-pill ${candidate.ready ? "is-live" : "is-paused"}">
+                ${candidate.ready ? "Ready ✓" : "Draft"}
+              </span>
+              <span class="note">${candidate.epochsTrained ?? 28} epochs</span>
             </div>
             <div class="ai-card-actions">
               <button
                 type="button"
-                class="btn btn-sm ${candidate.ready ? "btn-ghost" : "btn-primary"}"
+                class="btn btn-xs ${candidate.ready ? "btn-ghost" : "btn-primary"}"
                 data-ai-act="toggle-model-ready"
                 data-model-id="${esc(candidate.modelId)}"
-              >${candidate.ready ? "Unmark Ready" : "✓ Mark Model as Ready"}</button>
+              >${candidate.ready ? "Unmark Ready" : "✓ Mark Ready"}</button>
               ${
                 candidate.ready
-                  ? `<button type="button" class="btn btn-ghost btn-sm" data-ai-act="open-track">Select in Track →</button>`
+                  ? `<button type="button" class="btn btn-ghost btn-xs" data-ai-act="open-track">Track →</button>`
                   : ""
               }
             </div>
           </div>
           <div class="table-scroll">
-            <table class="table ai-scorecard-table">
+            <table class="table rc-compact-table ai-scorecard-table">
               <thead>
                 <tr>
-                  <th>Validation Metric</th>
-                  <th>Classic DSP</th>
-                  <th>${esc(candidate.name)}</th>
+                  <th>Metric</th>
+                  <th>Classic</th>
+                  <th>AI</th>
                 </tr>
               </thead>
               <tbody>
                 <tr>
-                  <td>Detected Passes</td>
+                  <td>Passes found</td>
                   <td class="mono">${candidate.classicMetrics.detectedPasses} / ${candidate.classicMetrics.totalPasses}</td>
                   <td class="mono"><strong>${candidate.aiMetrics.detectedPasses} / ${candidate.aiMetrics.totalPasses}</strong></td>
                 </tr>
                 <tr>
-                  <td>Missed Passes</td>
-                  <td class="mono">${candidate.classicMetrics.missedPasses}</td>
-                  <td class="mono"><strong>${candidate.aiMetrics.missedPasses}</strong></td>
-                </tr>
-                <tr>
-                  <td>False Triggers</td>
+                  <td>False triggers</td>
                   <td class="mono">${candidate.classicMetrics.falseTriggers}</td>
                   <td class="mono"><strong>${candidate.aiMetrics.falseTriggers}</strong></td>
                 </tr>
                 <tr>
-                  <td>F1 Accuracy</td>
+                  <td>Accuracy</td>
                   <td class="mono">${(candidate.classicMetrics.f1 * 100).toFixed(1)}%</td>
                   <td class="mono"><strong>${(candidate.aiMetrics.f1 * 100).toFixed(1)}%</strong></td>
-                </tr>
-                <tr>
-                  <td>Timing Jitter</td>
-                  <td class="mono">±${candidate.classicMetrics.meanJitterMs.toFixed(1)} ms</td>
-                  <td class="mono"><strong>±${candidate.aiMetrics.meanJitterMs.toFixed(1)} ms</strong></td>
                 </tr>
               </tbody>
             </table>
@@ -253,34 +234,34 @@ export class PracticeAITrainingTab extends Component {
         </div>`
       : "";
 
-    const savedModelsCardHtml =
+    const savedModelsHtml =
       customModels.length > 0
         ? `
         <div class="card ai-train-card">
           <div class="ai-card-head">
-            <div>
-              <h3 class="ai-card-title">Trained Models (${readyCount} Ready)</h3>
-              <p class="note">Models marked <strong>Ready ✓</strong> appear as selectable crossing detectors in <strong>Track</strong> inside any Race or Practice.</p>
+            <h3 class="ai-card-title">Models</h3>
+            <div class="ai-card-actions">
+              <button type="button" class="btn btn-ghost btn-xs" data-ai-act="export-dataset">Export</button>
+              <label class="btn btn-ghost btn-xs ai-import-label">
+                <span>Import</span>
+                <input type="file" accept=".gz,.tgz,application/gzip" data-ai-import-file hidden />
+              </label>
             </div>
-            <button type="button" class="btn btn-ghost btn-sm" data-ai-act="open-track">
-              ${icons.gate(14)}<span>Open Track Tab</span>
-            </button>
           </div>
           <div class="ai-model-list">
             ${customModels
               .map((m) => {
-                const isActive = ml.config.detectorMode === "ai" && ml.config.activeModelId === m.modelId;
-                const isFocused = candidate?.modelId === m.modelId;
+                const isActive =
+                  ml.config.detectorMode === "ai" && ml.config.activeModelId === m.modelId;
                 return `
                   <div class="ai-model-row ${isActive ? "is-active" : ""}">
                     <div class="ai-model-meta" data-ai-act="focus-model" data-model-id="${esc(m.modelId)}" style="cursor:pointer">
                       <div class="ai-model-title-line">
                         <strong>${esc(m.name)}</strong>
                         <span class="race-state-pill ${m.ready ? "is-live" : "is-paused"}">${m.ready ? "Ready ✓" : "Draft"}</span>
-                        ${isActive ? `<span class="scope-ai-chip">Active Detector</span>` : ""}
-                        ${isFocused && !isActive ? `<span class="note">(Selected above)</span>` : ""}
+                        ${isActive ? `<span class="scope-ai-chip">Active</span>` : ""}
                       </div>
-                      <span class="note">F1 ${(m.aiMetrics.f1 * 100).toFixed(1)}% · ±${m.aiMetrics.meanJitterMs.toFixed(1)} ms · ${m.epochsTrained ?? 28} epochs · ${m.trainPasses} passes</span>
+                      <span class="note">${(m.aiMetrics.f1 * 100).toFixed(1)}% accuracy · ${m.trainPasses} passes</span>
                     </div>
                     <div class="ai-card-actions">
                       <button
@@ -288,28 +269,19 @@ export class PracticeAITrainingTab extends Component {
                         class="btn btn-xs ${m.ready ? "btn-ghost" : "btn-primary"}"
                         data-ai-act="toggle-model-ready"
                         data-model-id="${esc(m.modelId)}"
-                      >${m.ready ? "Unmark Ready" : "✓ Mark Ready"}</button>
+                      >${m.ready ? "Unmark" : "Mark Ready"}</button>
                       <button
                         type="button"
                         class="btn btn-ghost btn-xs"
                         data-ai-act="delete-model"
                         data-model-id="${esc(m.modelId)}"
-                        title="Delete model ${esc(m.name)}"
-                        aria-label="Delete model ${esc(m.name)}"
+                        title="Delete ${esc(m.name)}"
+                        aria-label="Delete ${esc(m.name)}"
                       >${icons.trash(13)}</button>
                     </div>
                   </div>`;
               })
               .join("")}
-          </div>
-          <div class="ai-export-actions">
-            <button type="button" class="btn btn-ghost btn-sm" data-ai-act="export-dataset">
-              Export Traces &amp; Models (.tar.gz)
-            </button>
-            <label class="btn btn-ghost btn-sm ai-import-label">
-              <span>Import (.tar.gz)</span>
-              <input type="file" accept=".gz,.tgz,application/gzip" data-ai-import-file hidden />
-            </label>
           </div>
         </div>`
         : "";
@@ -320,73 +292,65 @@ export class PracticeAITrainingTab extends Component {
 
         <div class="card ai-train-card">
           <div class="ai-card-head">
-            <div>
-              <h3 class="ai-card-title">Train Crossing Model from Practice</h3>
-              <p class="note">Fly laps naturally in this Practice and adjust any crossings in <strong>Signals</strong>. Your 50 Hz RF traces are captured automatically in the background.</p>
+            <div class="ai-model-title-line">
+              <h3 class="ai-card-title">AI Training</h3>
+              <span class="badge mono">${curLaps} laps · ${curPasses} passes</span>
             </div>
-            <button type="button" class="btn btn-ghost btn-sm" data-ai-act="open-signals">
-              ${icons.signal(14)}<span>Review Crossings in Signals</span>
+            <button type="button" class="btn btn-ghost btn-xs" data-ai-act="open-review">
+              ${icons.reviewCheck(14)}<span>Review Laps</span>
             </button>
           </div>
 
-          <div class="ai-pack-status-box">
-            <div class="ai-pack-kpis">
-              <span>This Practice (<strong>${esc(sess.name)}</strong>): <strong>${curLaps}</strong> lap${curLaps === 1 ? "" : "s"} · <strong>${curPasses}</strong> pass${curPasses === 1 ? "" : "es"}${manualEdits > 0 ? ` (${manualEdits} manual edit${manualEdits === 1 ? "" : "s"})` : ""}</span>
-              ${
-                others.length > 0
-                  ? `<label class="ai-check-label">
-                       <input type="checkbox" data-ai-include-others ${this.includeAllPractices ? "checked" : ""} />
-                       <span>Also include ${others.length} other recorded practice${others.length === 1 ? "" : "s"} (+${otherPasses} passes → <strong>${totalSelectedPasses} total</strong>)</span>
-                     </label>`
-                  : ""
-              }
-            </div>
-          </div>
+          ${
+            others.length > 0
+              ? `<label class="ai-check-label">
+                   <input type="checkbox" data-ai-include-others ${this.includeAllPractices ? "checked" : ""} />
+                   <span>Include ${others.length} other practice${others.length === 1 ? "" : "s"} (${totalPasses} passes total)</span>
+                 </label>`
+              : ""
+          }
 
           <div class="ai-train-controls-row">
-            <label class="ai-name-field">
-              <span class="note">Model name</span>
-              <input
-                type="text"
-                class="input"
-                data-ai-model-name
-                value="${esc(this.modelNameDraft)}"
-                placeholder="${esc(`${sess.name || "Practice"} Model`)}"
-              />
-            </label>
+            <input
+              type="text"
+              class="input ai-name-input"
+              data-ai-model-name
+              aria-label="Model name"
+              value="${esc(this.modelNameDraft)}"
+              placeholder="Model name"
+            />
             <div class="ai-card-actions">
               ${
                 candidate
                   ? `<button
                        type="button"
-                       class="btn btn-primary"
+                       class="btn btn-primary btn-sm"
                        data-ai-act="train-more"
                        data-model-id="${esc(candidate.modelId)}"
                        ${ml.training.running ? "disabled" : ""}
-                     >${ml.training.running ? "Training..." : "Train More (+20 Epochs)"}</button>
+                     >${ml.training.running ? "Training…" : "Train More"}</button>
                      <button
                        type="button"
-                       class="btn btn-ghost"
+                       class="btn btn-ghost btn-sm"
                        data-ai-act="train-fresh"
                        ${ml.training.running ? "disabled" : ""}
-                       title="Start a fresh model run from updated Signals crossings (${totalSelectedSessions} session${totalSelectedSessions === 1 ? "" : "s"})"
-                     >Retrain Fresh</button>`
+                     >Retrain</button>`
                   : `<button
                        type="button"
-                       class="btn btn-primary"
+                       class="btn btn-primary btn-sm"
                        data-ai-act="train-fresh"
                        ${ml.training.running ? "disabled" : ""}
-                     >${ml.training.running ? "Training..." : "Train Model"}</button>`
+                     >${ml.training.running ? "Training…" : "Train"}</button>`
               }
             </div>
           </div>
 
           ${
-            ml.training.running || ml.training.message
+            ml.training.running
               ? `<div class="ai-train-progress-wrap">
                    <div class="ai-train-progress-text">
-                     <span>${esc(ml.training.message || "Ready")}</span>
-                     ${ml.training.totalEpochs > 0 ? `<span class="mono">${ml.training.epoch}/${ml.training.totalEpochs} · loss ${ml.training.loss.toFixed(4)}</span>` : ""}
+                     <span>Epoch ${ml.training.epoch} / ${ml.training.totalEpochs}</span>
+                     <span class="mono">loss ${ml.training.loss.toFixed(4)}</span>
                    </div>
                    <div class="ai-progress-track">
                      <div class="ai-progress-fill" style="width:${trainPct}%"></div>
@@ -395,10 +359,10 @@ export class PracticeAITrainingTab extends Component {
               : ""
           }
 
-          ${scorecardHtml}
+          ${candidateHtml}
         </div>
 
-        ${savedModelsCardHtml}
+        ${savedModelsHtml}
       </div>`;
   }
 
@@ -478,8 +442,8 @@ export class PracticeAITrainingTab extends Component {
     this.errorMsg = "";
 
     switch (act) {
-      case "open-signals":
-        this.onOpenTab("signals");
+      case "open-review":
+        this.onOpenTab("review");
         break;
 
       case "open-track":
@@ -500,8 +464,7 @@ export class PracticeAITrainingTab extends Component {
       case "train-fresh": {
         this.statusMsg = "";
         const sess = this.store.selectedPracticeSession;
-        const cleanName =
-          this.modelNameDraft.trim() || `${sess?.name || "Practice"} Model`;
+        const cleanName = this.modelNameDraft.trim() || `${sess?.name || "Practice"}`;
         void this.api
           .startMLTraining({
             epochs: 28,
@@ -543,8 +506,8 @@ export class PracticeAITrainingTab extends Component {
           .updateMLModel(modelId, { ready: nextReady, name: pendingName })
           .then(() => {
             this.statusMsg = nextReady
-              ? `"${pendingName}" is marked Ready ✓ — select it anytime in Race → Track or Practice → Track.`
-              : `"${pendingName}" returned to Draft.`;
+              ? `"${pendingName}" is Ready ✓ — select it in Track.`
+              : `"${pendingName}" moved back to Draft.`;
             this.render(true);
           })
           .catch((err: unknown) => this.setErr(err));
@@ -560,7 +523,7 @@ export class PracticeAITrainingTab extends Component {
         void this.api
           .deleteMLModel(modelId)
           .then(() => {
-            this.statusMsg = "Deleted model snapshot.";
+            this.statusMsg = "";
             this.render(true);
           })
           .catch((err: unknown) => this.setErr(err));

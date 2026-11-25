@@ -1,0 +1,251 @@
+import { Component } from "../../core/component";
+import { esc, fmtDelta, fmtTime } from "../../core/format";
+import { icons } from "../../core/icons";
+import { formatBandChannelShort } from "../../core/vtx_channels";
+import { ApiClient } from "../../services/api_client";
+import { AppStore } from "../../state/store";
+import { LapRecord, PracticeSession } from "../../types/models";
+import { openPracticeLapEditorModal } from "../../widgets/PracticeLapEditorModal";
+
+/**
+ * Practice `Review` tab (`#/practice/<session>/review`) — mirrors Race `Review`:
+ * - Lists recorded laps for the selected pilot with split deltas and 1-tap scratch/restore.
+ * - Lets you open the interactive RSSI & Gate Crossing Editor (`openPracticeLapEditorModal`)
+ *   either for the whole session or zoomed directly onto any individual lap on-demand.
+ */
+export class PracticeReviewTab extends Component {
+  private readonly store: AppStore;
+  private readonly api: ApiClient;
+  private selectedSlot = 1;
+  private lastSig = "";
+
+  constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
+    super(el);
+    this.store = store;
+    this.api = api;
+
+    this.listen(el, "click", this.handleClick);
+    this.onDispose(
+      store.subscribe(["practice", "laps", "crossings", "config", "selection"], () => {
+        this.render();
+      })
+    );
+    this.render(true);
+  }
+
+  public onActivate(): void {
+    const sess = this.store.selectedPracticeSession;
+    if (sess) {
+      void this.api.ensurePracticeSessionTrace(sess.sessionId).catch(() => undefined);
+    }
+    this.render(true);
+  }
+
+  private resolveActivePilotSlot(sess: PracticeSession): number {
+    if (
+      this.store.liveFocus !== null &&
+      sess.pilots.some((p) => p.slotIndex === this.store.liveFocus)
+    ) {
+      this.selectedSlot = this.store.liveFocus;
+      return this.selectedSlot;
+    }
+    if (sess.pilots.some((p) => p.slotIndex === this.selectedSlot)) {
+      return this.selectedSlot;
+    }
+    this.selectedSlot = sess.pilots[0]?.slotIndex ?? 1;
+    return this.selectedSlot;
+  }
+
+  private computeSig(sess: PracticeSession | undefined): string {
+    if (!sess) return "none";
+    const slot = this.resolveActivePilotSlot(sess);
+    const lapsSig = (sess.laps ?? [])
+      .filter((l) => l.slotIndex === slot)
+      .map((l) => `${l.lapId}:${l.lapNumber}:${l.lapTimeSec}:${l.invalidated ? 1 : 0}:${l.isBestLap ? 1 : 0}`)
+      .join(",");
+    const pilotsSig = (sess.pilots ?? [])
+      .map((p) => `${p.slotIndex}:${p.callsign}:${p.band ?? 1}:${p.channel}`)
+      .join("|");
+    return `${sess.sessionId}:${sess.name}:${slot}:${sess.crossings.length}:${pilotsSig}:${lapsSig}`;
+  }
+
+  public render(force = false): void {
+    const sess = this.store.selectedPracticeSession;
+    const sig = this.computeSig(sess);
+    if (!force && sig === this.lastSig) return;
+    this.lastSig = sig;
+
+    if (!sess) {
+      this.el.innerHTML = "";
+      return;
+    }
+
+    const slot = this.resolveActivePilotSlot(sess);
+    const pilot = sess.pilots.find((p) => p.slotIndex === slot);
+    const callsign = pilot?.callsign || `Pilot ${slot}`;
+    const chLabel = pilot?.channel ? formatBandChannelShort(pilot.band, pilot.channel) : "";
+    const pilotLaps: LapRecord[] = (sess.laps ?? []).filter((l) => l.slotIndex === slot);
+    const validLaps = pilotLaps.filter((l) => !l.invalidated);
+    const bestSec = validLaps.reduce(
+      (b, l) => (l.lapTimeSec > 0 && (b === 0 || l.lapTimeSec < b) ? l.lapTimeSec : b),
+      0
+    );
+    const passCount = (sess.crossings ?? []).filter((c) => c.slotIndex === slot).length;
+
+    const pilotTabsHtml =
+      sess.pilots.length > 1
+        ? `<div class="practice-review-pilots">
+            ${sess.pilots
+              .map((p) => {
+                const isAct = p.slotIndex === slot;
+                const ch = p.channel ? formatBandChannelShort(p.band, p.channel) : "";
+                return `<button type="button" class="pilot-chip ${isAct ? "is-active" : ""}" style="--c:${esc(p.color || "#38bdf8")}" data-review-pilot="${p.slotIndex}">
+                  <span class="dot" style="--c:${esc(p.color || "#38bdf8")}"></span>
+                  <span class="pilot-chip-name">${esc(p.callsign)}</span>
+                  ${ch ? `<span class="pilot-chip-chan">${esc(ch)}</span>` : ""}
+                </button>`;
+              })
+              .join("")}
+          </div>`
+        : "";
+
+    const rowsHtml =
+      pilotLaps.length === 0
+        ? `<tr><td colspan="5" class="muted" style="text-align:center; padding: 22px 12px;">No laps recorded yet for ${esc(callsign)}. Tap <strong>RSSI Editor</strong> above to inspect or add crossings.</td></tr>`
+        : pilotLaps
+            .slice()
+            .reverse()
+            .map((lap) => {
+              const inv = Boolean(lap.invalidated);
+              const startUs = Math.max(0, Math.round(lap.completedAtUs - lap.lapTimeSec * 1_000_000));
+              const deltaHtml = inv
+                ? `<span class="muted">Scratched</span>`
+                : lap.isBestLap
+                  ? `<span class="split-best">best</span>`
+                  : bestSec > 0
+                    ? `<span class="mono muted">${esc(fmtDelta(lap.lapTimeSec - bestSec))}</span>`
+                    : `<span class="muted">—</span>`;
+              const secSummary =
+                (lap.sectors ?? []).length > 0
+                  ? lap.sectors.map((s) => s.splitSeconds.toFixed(2)).join(" · ")
+                  : "—";
+              return `
+                <tr class="practice-review-row ${inv ? "is-invalidated" : ""}" data-review-lap-row="${lap.lapId}" data-lap-start-us="${startUs}" data-lap-end-us="${lap.completedAtUs}">
+                  <td class="mono"><strong>L${lap.lapNumber}</strong></td>
+                  <td class="mono">${lap.isBestLap && !inv ? `<span class="split-best">${fmtTime(lap.lapTimeSec)}</span>` : fmtTime(lap.lapTimeSec)}</td>
+                  <td>${deltaHtml}</td>
+                  <td class="mono note practice-review-splits-col">${esc(secSummary)}</td>
+                  <td class="practice-review-actions-col">
+                    <button
+                      type="button"
+                      class="btn btn-ghost btn-xs"
+                      data-review-open-lap-rssi="${lap.lapId}"
+                      data-lap-start-us="${startUs}"
+                      data-lap-end-us="${lap.completedAtUs}"
+                      title="Open RSSI crossing editor for Lap ${lap.lapNumber}"
+                      aria-label="Open RSSI crossing editor for Lap ${lap.lapNumber}"
+                    >${icons.rssiBadge(14)}<span>RSSI</span></button>
+                    <button
+                      type="button"
+                      class="btn btn-ghost btn-xs"
+                      data-review-toggle-lap="${lap.lapId}"
+                      title="${inv ? "Restore lap" : "Scratch lap"}"
+                      aria-label="${inv ? "Restore lap" : "Scratch lap"}"
+                    >${inv ? icons.reset(14) : icons.ban(14)}</button>
+                  </td>
+                </tr>`;
+            })
+            .join("");
+
+    this.el.innerHTML = `
+      <div class="ai-train-stack">
+        ${pilotTabsHtml}
+        <section class="card card-flush practice-review-card">
+          <header class="rc-panel-header">
+            <div class="rc-panel-title-wrap">
+              ${icons.reviewCheck(15)}
+              <strong>${esc(callsign)}</strong>
+              ${chLabel ? `<span class="badge mono">${esc(chLabel)}</span>` : ""}
+              <span class="note">${validLaps.length} lap${validLaps.length === 1 ? "" : "s"} · ${passCount} passes</span>
+            </div>
+            <div class="rc-panel-actions">
+              <button type="button" class="btn btn-primary btn-xs" data-review-open-editor>
+                ${icons.rssiBadge(14)}<span>RSSI Editor</span>
+              </button>
+            </div>
+          </header>
+          <div class="table-scroll">
+            <table class="table rc-compact-table practice-review-table">
+              <thead>
+                <tr>
+                  <th>Lap</th>
+                  <th>Time</th>
+                  <th>vs Best</th>
+                  <th class="practice-review-splits-col">Sections</th>
+                  <th style="text-align:right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>${rowsHtml}</tbody>
+            </table>
+          </div>
+        </section>
+      </div>`;
+  }
+
+  private readonly handleClick = (e: MouseEvent): void => {
+    const target = e.target;
+    if (!(target instanceof Element)) return;
+    const sess = this.store.selectedPracticeSession;
+    if (!sess) return;
+
+    const pilotBtn = target.closest<HTMLButtonElement>("[data-review-pilot]");
+    if (pilotBtn) {
+      const nextSlot = Number(pilotBtn.dataset.reviewPilot || "1");
+      this.selectedSlot = nextSlot;
+      this.store.setLiveFocus(nextSlot);
+      this.render(true);
+      return;
+    }
+
+    if (target.closest("[data-review-open-editor]")) {
+      openPracticeLapEditorModal(this.store, this.api, sess.sessionId, this.selectedSlot);
+      return;
+    }
+
+    const rssiBtn = target.closest<HTMLButtonElement>("[data-review-open-lap-rssi]");
+    if (rssiBtn) {
+      e.stopPropagation();
+      const startUs = Number(rssiBtn.dataset.lapStartUs || "0");
+      const endUs = Number(rssiBtn.dataset.lapEndUs || "0");
+      openPracticeLapEditorModal(this.store, this.api, sess.sessionId, this.selectedSlot, {
+        focusStartUs: startUs,
+        focusEndUs: endUs,
+      });
+      return;
+    }
+
+    const toggleBtn = target.closest<HTMLButtonElement>("[data-review-toggle-lap]");
+    if (toggleBtn) {
+      e.stopPropagation();
+      const lapId = Number(toggleBtn.dataset.reviewToggleLap || "0");
+      if (lapId > 0) {
+        void this.api.practiceAction({
+          action: "toggle_session_lap",
+          sessionId: sess.sessionId,
+          lapId,
+        });
+      }
+      return;
+    }
+
+    const row = target.closest<HTMLElement>("[data-review-lap-row]");
+    if (row) {
+      const startUs = Number(row.dataset.lapStartUs || "0");
+      const endUs = Number(row.dataset.lapEndUs || "0");
+      openPracticeLapEditorModal(this.store, this.api, sess.sessionId, this.selectedSlot, {
+        focusStartUs: startUs,
+        focusEndUs: endUs,
+      });
+    }
+  };
+}

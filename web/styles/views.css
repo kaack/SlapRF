@@ -23001,6 +23001,8 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
   .practice-workspace-page[data-mobile-practice-view="signals"] .practice-panel-stack,
   .practice-workspace-page[data-mobile-practice-view="analytics"] [data-practice-mobile-pane]:not([data-practice-mobile-pane="analytics"]),
   .practice-workspace-page[data-mobile-practice-view="analytics"] .practice-panel-stack,
+  .practice-workspace-page[data-mobile-practice-view="review"] [data-practice-mobile-pane]:not([data-practice-mobile-pane="review"]),
+  .practice-workspace-page[data-mobile-practice-view="review"] .practice-panel-stack,
   .practice-workspace-page[data-mobile-practice-view="ai"] [data-practice-mobile-pane]:not([data-practice-mobile-pane="ai"]),
   .practice-workspace-page[data-mobile-practice-view="ai"] .practice-panel-stack {
     display: none !important;
@@ -23107,6 +23109,7 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
   }
 
   .practice-workspace-page[data-mobile-practice-view="analytics"] .practice-mobile-analytics-wrap,
+  .practice-workspace-page[data-mobile-practice-view="review"] .practice-mobile-review-wrap,
   .practice-workspace-page[data-mobile-practice-view="ai"] .practice-mobile-ai-wrap {
     flex: 1 1 0;
     min-height: 0;
@@ -23137,6 +23140,7 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
   }
 
   .practice-mobile-analytics-wrap > .rc-analytics-embedded,
+  .practice-mobile-review-wrap > .rc-review-embedded,
   .practice-mobile-ai-wrap > .rc-ai-embedded,
   .races-page.is-analytics-page > .races-page-stack > .rc-analytics-embedded {
     flex: 0 0 auto;
@@ -25903,6 +25907,7 @@ html[data-theme="light"] .mre-sheet-check-toggle input[type="checkbox"]:checked:
   .practice-workspace-page[data-mobile-practice-view="laps"] [data-slot="mobile-pilots"],
   .practice-workspace-page[data-mobile-practice-view="laps"] [data-slot="mobile-track"],
   .practice-workspace-page[data-mobile-practice-view="laps"] [data-slot="mobile-signals"],
+  .practice-workspace-page[data-mobile-practice-view="laps"] [data-slot="mobile-review"],
   .practice-workspace-page[data-mobile-practice-view="laps"] [data-slot="mobile-analytics"],
   .practice-workspace-page[data-mobile-practice-view="laps"] [data-slot="mobile-ai"],
   .practice-workspace-page[data-mobile-practice-view="laps"] .practice-standings-card,
@@ -25926,6 +25931,8 @@ html[data-theme="light"] .mre-sheet-check-toggle input[type="checkbox"]:checked:
   /* Tab: Analytics (scoped PilotView inside Practice) */
   .practice-workspace-page[data-mobile-practice-view="analytics"] [data-practice-mobile-pane]:not([data-practice-mobile-pane="analytics"]),
   .practice-workspace-page[data-mobile-practice-view="analytics"] .practice-panel-stack,
+  .practice-workspace-page[data-mobile-practice-view="review"] [data-practice-mobile-pane]:not([data-practice-mobile-pane="review"]),
+  .practice-workspace-page[data-mobile-practice-view="review"] .practice-panel-stack,
   .practice-workspace-page[data-mobile-practice-view="ai"] [data-practice-mobile-pane]:not([data-practice-mobile-pane="ai"]),
   .practice-workspace-page[data-mobile-practice-view="ai"] .practice-panel-stack {
     display: none !important;
@@ -27800,10 +27807,51 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
 
 .ai-train-controls-row {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
+}
+
+.ai-name-input {
+  flex: 1 1 180px;
+  min-width: 140px;
+  height: 32px;
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.practice-review-pilots {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.practice-review-row {
+  cursor: pointer;
+}
+
+.practice-review-row:hover {
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+}
+
+.practice-review-row.is-invalidated {
+  opacity: 0.55;
+}
+
+.practice-review-actions-col {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .practice-review-splits-col {
+    display: none;
+  }
 }
 
 .ai-name-field {

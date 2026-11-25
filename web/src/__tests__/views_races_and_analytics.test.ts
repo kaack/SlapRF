@@ -2608,7 +2608,34 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       expect(rulesAiBtnBefore).not.toBeNull();
       expect(rulesAiBtnBefore.disabled).toBe(true);
 
-      // 2. Inside the Practice session, switch to the AI Training tab
+      // 2. Switch to Practice Review tab -> inspect recorded laps & open on-demand RSSI Editor modal
+      const reviewTabBtn = host.querySelector<HTMLButtonElement>(
+        '[data-practice-mobile-tab="review"]'
+      )!;
+      expect(reviewTabBtn).not.toBeNull();
+      reviewTabBtn.click();
+      await flushMicrotasks();
+
+      const reviewPane = host.querySelector<HTMLElement>('[data-slot="mobile-review"]')!;
+      expect(reviewPane.textContent ?? "").toContain("OneEye");
+      expect(reviewPane.textContent ?? "").toContain("L1");
+
+      const lapRssiBtn = reviewPane.querySelector<HTMLButtonElement>(
+        '[data-review-open-lap-rssi="1"]'
+      )!;
+      expect(lapRssiBtn).not.toBeNull();
+      lapRssiBtn.click();
+      await flushMicrotasks();
+
+      const editorModal = document.body.querySelector<HTMLElement>(".lap-editor-modal")!;
+      expect(editorModal).not.toBeNull();
+      expect(editorModal.querySelector('[data-lap-ed-gate="1"]')).not.toBeNull();
+      expect(editorModal.querySelector('[data-lap-ed-gate="2"]')).not.toBeNull();
+      editorModal.querySelector<HTMLButtonElement>("[data-lap-ed-close]")!.click();
+      await flushMicrotasks();
+      expect(document.body.querySelector(".lap-editor-modal")).toBeNull();
+
+      // 3. Inside the Practice session, switch to the concise AI tab
       const aiTabBtn = host.querySelector<HTMLButtonElement>(
         '[data-practice-mobile-tab="ai"]'
       )!;
@@ -2616,10 +2643,10 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       aiTabBtn.click();
       await flushMicrotasks();
 
-      expect(host.textContent ?? "").toContain("Train Crossing Model from Practice");
+      expect(host.textContent ?? "").toContain("AI Training");
       expect(host.textContent ?? "").toContain("Pack 1 Model");
 
-      // 3. Click Train More (+20 Epochs) -> calls startMLTraining with continueModelId
+      // 4. Click Train More -> calls startMLTraining with continueModelId
       const trainMoreBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="train-more"]')!;
       expect(trainMoreBtn).not.toBeNull();
       trainMoreBtn.click();
@@ -2632,7 +2659,7 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
         )
       ).toBe(true);
 
-      // 4. Mark Model as Ready -> unlocks AI Model selection in the top-level Track Crossing Detector card!
+      // 5. Mark Model as Ready -> unlocks AI selection in the top-level Track Crossing Detector card!
       const readyBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="toggle-model-ready"]')!;
       expect(readyBtn).not.toBeNull();
       readyBtn.click();
