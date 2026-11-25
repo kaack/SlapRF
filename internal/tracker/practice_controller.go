@@ -339,6 +339,15 @@ func (e *Engine) recomputePracticeSessionLapsLocked(sess *domain.PracticeSession
 	if sess == nil || len(sess.Laps) == 0 {
 		return
 	}
+	sort.SliceStable(sess.Laps, func(a, b int) bool {
+		if sess.Laps[a].CompletedAtUs != sess.Laps[b].CompletedAtUs {
+			return sess.Laps[a].CompletedAtUs < sess.Laps[b].CompletedAtUs
+		}
+		if sess.Laps[a].LapNumber != sess.Laps[b].LapNumber {
+			return sess.Laps[a].LapNumber < sess.Laps[b].LapNumber
+		}
+		return sess.Laps[a].LapID < sess.Laps[b].LapID
+	})
 	var baseTime time.Time
 	if sess.CreatedAt != "" {
 		if parsed, err := time.Parse(time.RFC3339, sess.CreatedAt); err == nil {

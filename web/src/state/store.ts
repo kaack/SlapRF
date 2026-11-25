@@ -1648,7 +1648,12 @@ export class AppStore {
       }
       const activeSlots = new Set(sess.pilots.map((p) => p.slotIndex));
       const raw = this.isSelectedSessionLiveStream(sess) ? this._laps : sess.laps;
-      const res = raw.filter((l) => activeSlots.has(l.slotIndex));
+      const res = raw
+        .filter((l) => activeSlots.has(l.slotIndex))
+        .sort(
+          (a, b) =>
+            a.completedAtUs - b.completedAtUs || a.lapNumber - b.lapNumber || a.lapId - b.lapId
+        );
       this._cachedLaps = { rev: this._stateRev, sess, res };
       return res;
     }

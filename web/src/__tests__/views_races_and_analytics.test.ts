@@ -2497,9 +2497,11 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       trackInitialized: true,
       trackSnapshot: [g1, g2],
       laps: [
-        { ...makeLap(1, 1, 1, 12.4), completedAtUs: 22_400_000 },
+        // Intentionally out-of-chronological array order to verify Review & RSSI Editor sort by completedAtUs!
         { ...makeLap(2, 1, 2, 11.8), completedAtUs: 129_200_000 }, // Started at 117.4s -> 95s (1m 35s) landing break after L1!
+        { ...makeLap(1, 1, 1, 12.4), completedAtUs: 22_400_000 },
       ],
+      breaks: [{ breakId: 77, slotIndex: 1, timestampUs: 60_000_000 }],
       crossings: [
         makeCrossing(10, 1, 1, 10_000_000),
         makeCrossing(11, 1, 1, 22_400_000),
@@ -2701,6 +2703,11 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       const reviewBreakRow = reviewPane.querySelector<HTMLElement>("[data-lap-break-row]")!;
       expect(reviewBreakRow).not.toBeNull();
       expect(reviewBreakRow.textContent ?? "").toContain("Break · 1m 35s");
+      expect(reviewBreakRow.querySelector('[data-delete-break-id="77"]')).not.toBeNull();
+      const reviewLapOrder = Array.from(
+        reviewPane.querySelectorAll<HTMLElement>("[data-review-lap-row]")
+      ).map((r) => r.getAttribute("data-review-lap-row"));
+      expect(reviewLapOrder).toEqual(["2", "1"]);
 
       const fakeBackBtn = document.createElement("button");
       fakeBackBtn.className = "topbar-back-btn";

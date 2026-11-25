@@ -7,7 +7,12 @@ export function lapsFor(store: AppStore, slotIndex: number): LapRecord[] {
 }
 
 export function allLapsFor(store: AppStore, slotIndex: number): LapRecord[] {
-  return store.laps.filter((l) => l.slotIndex === slotIndex);
+  return store.laps
+    .filter((l) => l.slotIndex === slotIndex)
+    .sort(
+      (a, b) =>
+        a.completedAtUs - b.completedAtUs || a.lapNumber - b.lapNumber || a.lapId - b.lapId
+    );
 }
 
 export function bestLapOf(laps: LapRecord[]): number {

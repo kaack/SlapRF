@@ -438,6 +438,15 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 			}
 		}
 	}
+	sort.SliceStable(e.laps, func(a, b int) bool {
+		if e.laps[a].CompletedAtUs != e.laps[b].CompletedAtUs {
+			return e.laps[a].CompletedAtUs < e.laps[b].CompletedAtUs
+		}
+		if e.laps[a].LapNumber != e.laps[b].LapNumber {
+			return e.laps[a].LapNumber < e.laps[b].LapNumber
+		}
+		return e.laps[a].LapID < e.laps[b].LapID
+	})
 	if len(e.laps) > maxStoredLaps {
 		e.laps = e.laps[len(e.laps)-maxStoredLaps:]
 	}
@@ -597,6 +606,12 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 					ps.Sessions[si].Laps[li].LapTimeSec,
 				)
 			}
+			for _, br := range ps.Sessions[si].Breaks {
+				if br.BreakID > e.nextEventID {
+					e.nextEventID = br.BreakID
+				}
+			}
+			e.recomputePracticeSessionLapsLocked(&ps.Sessions[si])
 		}
 		ps.Initialized = true
 		e.practiceState = ps

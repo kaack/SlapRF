@@ -92,7 +92,12 @@ export class PracticeReviewTab extends Component {
     const pilot = sess.pilots.find((p) => p.slotIndex === slot);
     const callsign = pilot?.callsign || `Pilot ${slot}`;
     const chLabel = pilot?.channel ? formatBandChannelShort(pilot.band, pilot.channel) : "";
-    const pilotLaps: LapRecord[] = (sess.laps ?? []).filter((l) => l.slotIndex === slot);
+    const pilotLaps: LapRecord[] = (sess.laps ?? [])
+      .filter((l) => l.slotIndex === slot)
+      .sort(
+        (a, b) =>
+          a.completedAtUs - b.completedAtUs || a.lapNumber - b.lapNumber || a.lapId - b.lapId
+      );
     const validLaps = pilotLaps.filter((l) => !l.invalidated);
     const bestSec = validLaps.reduce(
       (b, l) => (l.lapTimeSec > 0 && (b === 0 || l.lapTimeSec < b) ? l.lapTimeSec : b),
@@ -188,7 +193,7 @@ export class PracticeReviewTab extends Component {
                 const gapSec = lapBreakGapSec(lap, older);
                 const manualBreak = (sess.breaks ?? []).find(
                   (b) =>
-                    b.slotIndex === activeSlot &&
+                    b.slotIndex === slot &&
                     b.timestampUs >= older.completedAtUs &&
                     b.timestampUs <= startUs
                 );

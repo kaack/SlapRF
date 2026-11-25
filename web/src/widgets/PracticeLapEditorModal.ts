@@ -79,7 +79,12 @@ export function openPracticeLapEditorModal(
   }
 
   const getPilotLaps = (sess: PracticeSession): LapRecord[] =>
-    (sess.laps ?? []).filter((l) => l.slotIndex === selectedPilotSlot);
+    (sess.laps ?? [])
+      .filter((l) => l.slotIndex === selectedPilotSlot)
+      .sort(
+        (a, b) =>
+          a.completedAtUs - b.completedAtUs || a.lapNumber - b.lapNumber || a.lapId - b.lapId
+      );
 
   const initPilotLaps = getPilotLaps(initSess);
   let lockedLap: LapRecord | undefined;
