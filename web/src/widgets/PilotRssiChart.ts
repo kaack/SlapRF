@@ -34,9 +34,23 @@ import {
 } from "../types/models";
 import { FILTER_LABELS, FILTER_SHORT_CODES } from "./markup";
 
+export interface PilotRssiLapWindow {
+  /** Hard left viewport bound in microseconds (`Start - pad`). */
+  minUs: number;
+  /** Hard right viewport bound in microseconds (`Finish + pad`). */
+  maxUs: number;
+  /** Pass-visibility bounds `[passMinUs, passMaxUs]` so only crossings belonging to this lap appear. */
+  passMinUs?: number;
+  passMaxUs?: number;
+  /** Optional initial focused timer ID (`null` = All timers). */
+  initialFocusGateId?: number | null;
+}
+
 export interface PilotRssiChartOptions {
   /** "practice" (default) shows session lap/filtered counters; "race" shows active heat context. */
   contextMode?: "practice" | "race";
+  /** When set, locks the chart strictly to a single lap window `[minUs, maxUs]`. */
+  lapWindow?: PilotRssiLapWindow;
 }
 
 interface TuneRuleSpec {
@@ -286,6 +300,13 @@ export class PilotRssiChart extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
   private readonly contextMode: "practice" | "race";
+  private lapWindow: {
+    minUs: number;
+    maxUs: number;
+    passMinUs: number;
+    passMaxUs: number;
+  } | null = null;
+  private readonly lapWindowAllowedEventIds = new Set<number>();
   private windowUs = DEFAULT_WINDOW_US;
   private autoX = true;
   private autoY = true;
@@ -541,8 +562,29 @@ export class PilotRssiChart extends Component {
     this.api = api;
     this.contextMode = options?.contextMode ?? "practice";
     this.mobileLayoutCached = this.computeIsMobileLayout();
-    this.loadChartPrefs();
+    if (options?.lapWindow) {
+      const minUs = Math.max(0, Math.round(options.lapWindow.minUs));
+      const maxUs = Math.max(minUs + MIN_WINDOW_US, Math.round(options.lapWindow.maxUs));
+      this.lapWindow = {
+        minUs,
+        maxUs,
+        passMinUs: Math.max(minUs, Math.round(options.lapWindow.passMinUs ?? minUs)),
+        passMaxUs: Math.min(maxUs, Math.round(options.lapWindow.passMaxUs ?? maxUs)),
+      };
+      this.autoX = true;
+      this.windowUs = this.defaultWindowUs;
+      this.refUs = maxUs;
+      this.endUs = maxUs;
+      if (options.lapWindow.initialFocusGateId !== undefined) {
+        this.focus = options.lapWindow.initialFocusGateId;
+      }
+    } else {
+      this.loadChartPrefs();
+    }
     el.classList.add("scope-root");
+    if (this.lapWindow) {
+      el.classList.add("is-lap-locked");
+    }
     el.innerHTML = `
       <div class="scope-graph-box">
         <div class="scope-toolbar">
@@ -550,7 +592,7 @@ export class PilotRssiChart extends Component {
             <button class="btn btn-sm btn-ghost scope-step-btn" type="button" data-act="prev" title="Previous pass (←)">
               ${icons.chevronLeft(16)}<span class="scope-step-text-full">Prev pass</span><span class="scope-step-text-short">Prev</span>
             </button>
-            <button class="btn btn-sm scope-live-btn" type="button" data-act="live"></button>
+            <button class="btn btn-sm scope-live-btn" type="button" data-act="live"${this.lapWindow ? " hidden" : ""}></button>
             <button class="btn btn-sm btn-ghost scope-step-btn" type="button" data-act="next" title="Next pass (→)">
               <span class="scope-step-text-full">Next pass</span><span class="scope-step-text-short">Next</span>${icons.chevronRight(16)}
             </button>
@@ -866,7 +908,11 @@ export class PilotRssiChart extends Component {
         this.renderControls();
       } else if (btn.dataset.axisAct === "auto-x") {
         this.autoX = true;
-        this.windowUs = DEFAULT_WINDOW_US;
+        this.windowUs = this.defaultWindowUs;
+        if (this.lapWindow) {
+          this.refUs = this.lapWindow.maxUs;
+          this.endUs = this.lapWindow.maxUs;
+        }
         this.openAxisMenu = null;
         this.saveChartPrefs();
         this.renderControls();
@@ -977,8 +1023,8 @@ export class PilotRssiChart extends Component {
       if (wf.mode === "x" || wf.mode === "xy") {
         const prevWin = this.windowUs;
         const prevEnd = this.viewEnd();
-        const nextWin = Math.max(MIN_WINDOW_US, Math.min(MAX_WINDOW_US, prevWin * wf.xSpanFactor));
-        this.autoX = false;
+        const nextWin = Math.max(MIN_WINDOW_US, Math.min(this.maxAllowedWindowUs, prevWin * wf.xSpanFactor));
+        this.autoX = Boolean(this.lapWindow && Math.abs(nextWin - this.maxAllowedWindowUs) < 5_000);
         this.windowUs = nextWin;
         if (this.endUs !== null) {
           const anchorUs = prevEnd - (1 - xFrac) * prevWin;
@@ -1208,11 +1254,11 @@ export class PilotRssiChart extends Component {
               return;
             }
             if (pinch.mode === "x" || pinch.mode === "xy") {
-              this.autoX = false;
               const nextWin = Math.max(
                 MIN_WINDOW_US,
-                Math.min(MAX_WINDOW_US, pinchState.startWindowUs * pinch.xSpanFactor)
+                Math.min(this.maxAllowedWindowUs, pinchState.startWindowUs * pinch.xSpanFactor)
               );
+              this.autoX = Boolean(this.lapWindow && Math.abs(nextWin - this.maxAllowedWindowUs) < 5_000);
               this.windowUs = nextWin;
               if (!pinchState.wasLive) {
                 const liveXFrac = Math.max(0, Math.min(1, (pinch.midX - this.padL) / Math.max(10, this.plot.w)));
@@ -1317,9 +1363,9 @@ export class PilotRssiChart extends Component {
 
       if (this.drag.mode === "xstretch") {
         const dx = x - this.drag.startX;
-        this.autoX = false;
         const factor = Math.exp(-dx / 150);
-        const nextUs = Math.max(MIN_WINDOW_US, Math.min(MAX_WINDOW_US, this.drag.startWindowUs * factor));
+        const nextUs = Math.max(MIN_WINDOW_US, Math.min(this.maxAllowedWindowUs, this.drag.startWindowUs * factor));
+        this.autoX = Boolean(this.lapWindow && Math.abs(nextUs - this.maxAllowedWindowUs) < 5_000);
         const anchorUs = this.drag.startEndUs - (1 - this.drag.anchorFrac) * this.drag.startWindowUs;
         this.windowUs = nextUs;
         if (this.endUs !== null) {
@@ -1565,7 +1611,44 @@ export class PilotRssiChart extends Component {
     return this.livePlayhead;
   }
 
+  private get maxAllowedWindowUs(): number {
+    return this.lapWindow
+      ? Math.max(MIN_WINDOW_US, this.lapWindow.maxUs - this.lapWindow.minUs)
+      : MAX_WINDOW_US;
+  }
+
+  private get defaultWindowUs(): number {
+    return this.lapWindow ? this.maxAllowedWindowUs : DEFAULT_WINDOW_US;
+  }
+
+  /** Updates the locked single-lap bounds in place while preserving user zoom if zoomed in. */
+  public setLapWindow(next: PilotRssiLapWindow): void {
+    const minUs = Math.max(0, Math.round(next.minUs));
+    const maxUs = Math.max(minUs + MIN_WINDOW_US, Math.round(next.maxUs));
+    this.lapWindow = {
+      minUs,
+      maxUs,
+      passMinUs: Math.max(minUs, Math.round(next.passMinUs ?? minUs)),
+      passMaxUs: Math.min(maxUs, Math.round(next.passMaxUs ?? maxUs)),
+    };
+    this.refUs = maxUs;
+    if (this.autoX || this.windowUs > this.maxAllowedWindowUs) {
+      this.autoX = true;
+      this.windowUs = this.defaultWindowUs;
+      this.endUs = maxUs;
+    } else if (this.endUs !== null) {
+      this.endUs = this.clampEnd(this.endUs);
+    } else {
+      this.endUs = maxUs;
+    }
+    this.renderControls();
+  }
+
   private clampEnd(end: number): number {
+    if (this.lapWindow) {
+      const minEnd = Math.min(this.lapWindow.maxUs, this.lapWindow.minUs + this.windowUs);
+      return Math.min(this.lapWindow.maxUs, Math.max(minEnd, end));
+    }
     const latest =
       this.endUs !== null && this.refUs > 0
         ? this.refUs
@@ -1747,9 +1830,14 @@ export class PilotRssiChart extends Component {
   }
 
   private resetAxesToAuto(): void {
-    this.endUs = null;
     this.autoX = true;
-    this.windowUs = DEFAULT_WINDOW_US;
+    this.windowUs = this.defaultWindowUs;
+    if (this.lapWindow) {
+      this.refUs = this.lapWindow.maxUs;
+      this.endUs = this.lapWindow.maxUs;
+    } else {
+      this.endUs = null;
+    }
     this.autoY = true;
     this.smoothYMin = null;
     this.smoothYMax = null;
@@ -1801,6 +1889,7 @@ export class PilotRssiChart extends Component {
   }
 
   private saveChartPrefs(): void {
+    if (this.lapWindow) return;
     try {
       window.localStorage.setItem(
         RSSI_CHART_STORAGE_KEY,
@@ -1831,10 +1920,15 @@ export class PilotRssiChart extends Component {
       this.chartLinesLocked = false;
     }
     this.autoX = false;
-    this.windowUs = Math.min(MAX_WINDOW_US, Math.max(MIN_WINDOW_US, spanUs));
-    const latest = this.latest;
-    this.refUs = latest > 0 ? latest : centerTsUs;
-    this.endUs = Math.round(centerTsUs + this.windowUs / 2);
+    this.windowUs = Math.min(this.maxAllowedWindowUs, Math.max(MIN_WINDOW_US, spanUs));
+    if (this.lapWindow) {
+      this.refUs = this.lapWindow.maxUs;
+      this.endUs = this.clampEnd(Math.round(centerTsUs + this.windowUs / 2));
+    } else {
+      const latest = this.latest;
+      this.refUs = latest > 0 ? latest : centerTsUs;
+      this.endUs = Math.round(centerTsUs + this.windowUs / 2);
+    }
     this.renderControls();
     this.renderCalib();
     this.renderLegend();
@@ -1842,7 +1936,7 @@ export class PilotRssiChart extends Component {
   }
 
   public restoreDefaults(): void {
-    this.windowUs = DEFAULT_WINDOW_US;
+    this.windowUs = this.defaultWindowUs;
     this.autoX = true;
     this.autoY = true;
     this.yMin = this.defYMin;
@@ -1851,7 +1945,12 @@ export class PilotRssiChart extends Component {
     this.smoothYMax = null;
     this.selectedGates.clear();
     this.chartLinesLocked = true;
-    this.endUs = null;
+    if (this.lapWindow) {
+      this.refUs = this.lapWindow.maxUs;
+      this.endUs = this.lapWindow.maxUs;
+    } else {
+      this.endUs = null;
+    }
     this.calibMessage = "";
     this.saveChartPrefs();
     this.renderControls();
@@ -1862,9 +1961,10 @@ export class PilotRssiChart extends Component {
 
   private setWindow(us: number, isAuto = false): void {
     const center = this.viewEnd() - this.windowUs / 2;
-    this.windowUs = us;
+    const clampedUs = Math.min(this.maxAllowedWindowUs, Math.max(MIN_WINDOW_US, us));
+    this.windowUs = clampedUs;
     this.autoX = isAuto;
-    if (this.endUs !== null) this.endUs = this.clampEnd(center + us / 2);
+    if (this.endUs !== null) this.endUs = this.clampEnd(center + clampedUs / 2);
     this.saveChartPrefs();
     this.renderControls();
   }
@@ -1872,9 +1972,9 @@ export class PilotRssiChart extends Component {
   private zoom(factor: number, x: number): void {
     const anchor = this.timeAt(x);
     const frac = Math.min(1, Math.max(0, (x - this.plot.x) / this.plot.w));
-    const next = Math.min(MAX_WINDOW_US, Math.max(MIN_WINDOW_US, this.windowUs * factor));
+    const next = Math.min(this.maxAllowedWindowUs, Math.max(MIN_WINDOW_US, this.windowUs * factor));
     this.windowUs = next;
-    this.autoX = false;
+    this.autoX = Boolean(this.lapWindow && Math.abs(next - this.maxAllowedWindowUs) < 5_000);
     // Following live keeps the right edge at "now"; otherwise zoom around the cursor.
     if (this.endUs !== null) this.endUs = this.clampEnd(anchor + (1 - frac) * next);
     this.saveChartPrefs();
@@ -1882,6 +1982,7 @@ export class PilotRssiChart extends Component {
   }
 
   private toggleLive(): void {
+    if (this.lapWindow) return;
     if (this.endUs === null) {
       this.pauseAt(this.latest);
     } else {
@@ -2016,11 +2117,17 @@ export class PilotRssiChart extends Component {
 
   /** Computes the allowed microsecond range `[minTsUs, maxTsUs]` for freely dragging a crossing line. */
   private crossingBoundsFor(
-    _eventId: number,
+    eventId: number,
     _slotIndex: number,
     _gateId: number,
     origTsUs: number
   ): { minTsUs: number; maxTsUs: number } {
+    if (this.lapWindow) {
+      if (eventId > 0) this.lapWindowAllowedEventIds.add(eventId);
+      const minTsUs = Math.max(1, Math.round(this.lapWindow.minUs));
+      const maxTsUs = Math.max(minTsUs, Math.round(this.lapWindow.maxUs));
+      return { minTsUs, maxTsUs };
+    }
     const end = this.viewEnd();
     const start = end - this.windowUs;
     let minTsUs = Math.min(this.earliest, start);
@@ -2059,6 +2166,9 @@ export class PilotRssiChart extends Component {
     const end = this.viewEnd();
     const start = end - this.windowUs;
     let tsUs = Math.max(1, Math.round(start + this.windowUs * 0.5));
+    if (this.lapWindow) {
+      tsUs = Math.max(this.lapWindow.minUs, Math.min(this.lapWindow.maxUs, tsUs));
+    }
     const slot = this.activePilotSlot;
     while (
       this.store.crossings.some(
@@ -2071,12 +2181,25 @@ export class PilotRssiChart extends Component {
     ) {
       tsUs += 150_000;
     }
+    if (this.lapWindow) {
+      tsUs = Math.max(this.lapWindow.minUs, Math.min(this.lapWindow.maxUs, tsUs));
+    }
+    const prevIds = this.lapWindow
+      ? new Set<number>(this.store.crossings.map((c) => c.eventId))
+      : null;
     const pilot = this.store.pilot(slot);
     const pos = pilot ? this.store.pilots.indexOf(pilot) : -1;
     const peakDbm = pos >= 0 ? this.rssiAt(gateId, pos, tsUs) : undefined;
     const gateLbl = this.labelOfGate(gateId);
     try {
       await this.api.addCrossing(gateId, slot, tsUs, peakDbm);
+      if (prevIds) {
+        for (const c of this.store.crossings) {
+          if (c.eventId > 0 && !prevIds.has(c.eventId)) {
+            this.lapWindowAllowedEventIds.add(c.eventId);
+          }
+        }
+      }
       this.calibMessage = `Added ${gateLbl} crossing — drag handle to position.`;
       this.calibMessageShort = `Added ${gateLbl} crossing`;
     } catch {
@@ -2837,6 +2960,11 @@ export class PilotRssiChart extends Component {
 
   /** Selected pilot's (or all seated pilots') passes in [from, to], oldest first. */
   private passes(from: number, to: number, gateFilter: ReadonlySet<number> | null = null): PassMarker[] {
+    if (this.lapWindow) {
+      from = Math.max(from, this.lapWindow.minUs);
+      to = Math.min(to, this.lapWindow.maxUs);
+      if (from > to) return [];
+    }
     const crossings = this.store.crossings;
     const filtered = this.store.filtered;
     const out: PassMarker[] = [];
@@ -2845,6 +2973,19 @@ export class PilotRssiChart extends Component {
     }
     const cStart = PilotRssiChart.firstEventAtOrAfter(crossings, from);
     const fStart = PilotRssiChart.firstEventAtOrAfter(filtered, from);
+    const inLockedLapPassBounds = (tsUs: number, eventId?: number): boolean => {
+      if (!this.lapWindow) return true;
+      if (
+        eventId !== undefined &&
+        eventId > 0 &&
+        (this.lapWindowAllowedEventIds.has(eventId) ||
+          this.crossingDrag?.eventId === eventId ||
+          this.pendingCrossings.has(eventId))
+      ) {
+        return tsUs >= this.lapWindow.minUs && tsUs <= this.lapWindow.maxUs;
+      }
+      return tsUs >= this.lapWindow.passMinUs && tsUs <= this.lapWindow.passMaxUs;
+    };
 
     if (this.isMultiPilotMode && this.multiPilotSlots) {
       const slotSet = new Set(this.multiPilotSlots);
@@ -2914,6 +3055,9 @@ export class PilotRssiChart extends Component {
       const evRes = c.eventId && evalMap ? evalMap.get(c.eventId) : undefined;
       const effTs = evRes ? evRes.effTs : c.timestampUs;
       if (effTs < from || effTs > to) continue;
+      if (!inLockedLapPassBounds(c.timestampUs, c.eventId) && !inLockedLapPassBounds(effTs, c.eventId)) {
+        continue;
+      }
 
       crossingTsSet.add(`${c.gateId}:${c.timestampUs}`);
       const gateLbl = this.labelOfGate(c.gateId);
@@ -2946,6 +3090,7 @@ export class PilotRssiChart extends Component {
       if (f.timestampUs > to) break;
       if (gateFilter !== null && !gateFilter.has(f.gateId)) continue;
       if (f.slotIndex !== slot) continue;
+      if (!inLockedLapPassBounds(f.timestampUs)) continue;
       if (crossingTsSet.has(`${f.gateId}:${f.timestampUs}`)) continue;
       out.push({
         ts: f.timestampUs,
@@ -3766,9 +3911,20 @@ export class PilotRssiChart extends Component {
         ? "Full"
         : `${Math.round(this.yMax - this.yMin)}${isLapRF || isRH ? "" : "dB"}`;
 
+    const autoWinSec = this.defaultWindowUs / 1e6;
+    const autoWinLabel =
+      Math.round(autoWinSec) >= 120 && Math.round(autoWinSec) % 60 === 0
+        ? `${Math.round(autoWinSec) / 60} min`
+        : autoWinSec < 10 && Math.abs(autoWinSec - Math.round(autoWinSec)) >= 0.05
+          ? `${autoWinSec.toFixed(1)} s`
+          : `${Math.round(autoWinSec)} s`;
+    const visiblePresets = this.lapWindow
+      ? WINDOWS_SEC.filter((w) => w < autoWinSec - 0.25)
+      : WINDOWS_SEC;
+
     const nextAxisHtml = `
       <div class="debug-axis-pill ${this.autoX ? "is-armed" : "is-unarmed"}" data-axis-pill>
-        <button type="button" class="debug-axis-pill-main" data-axis-act="${this.autoX ? "toggle-menu" : "auto-x"}" data-menu="rssi-x" title="${this.autoX ? `Auto X-axis time window (${xWinLabel}) · click to choose a time window preset, or drag X-axis to stretch` : "Click to reset X-axis time window to Auto X (15 s)"}">
+        <button type="button" class="debug-axis-pill-main" data-axis-act="${this.autoX ? "toggle-menu" : "auto-x"}" data-menu="rssi-x" title="${this.autoX ? `Auto X-axis time window (${xWinLabel}) · click to choose a time window preset, or drag X-axis to stretch` : `Click to reset X-axis time window to Auto X (${autoWinLabel})`}">
           ${icons.target(13)}<span>${this.autoX ? "Auto X" : `<span class="debug-hint-desktop">X: ${xWinLabel}</span><span class="debug-hint-mobile">X: ${xWinShort}</span>`}</span>
         </button>
         <button type="button" class="debug-axis-pill-arrow" data-axis-act="toggle-menu" data-menu="rssi-x" aria-expanded="${this.openAxisMenu === "rssi-x"}" title="Choose X-axis time window">
@@ -3778,14 +3934,18 @@ export class PilotRssiChart extends Component {
           this.openAxisMenu === "rssi-x"
             ? `<div class="debug-axis-menu" role="menu" aria-label="X-axis time window">
                 <button type="button" class="debug-axis-menu-item ${this.autoX ? "is-active" : ""}" data-axis-act="auto-x" role="menuitem">
-                  <span>Auto X</span><span class="note">15 s</span>
+                  <span>Auto X</span><span class="note">${this.lapWindow ? `Full lap (${autoWinLabel})` : autoWinLabel}</span>
                 </button>
-                <div class="debug-axis-menu-sep"></div>
-                ${WINDOWS_SEC.map((w) => {
-                  const active = !this.autoX && Math.abs(winSec - w) < 0.05;
-                  const label = w >= 120 ? `${w / 60} min` : `${w} s`;
-                  return `<button type="button" class="debug-axis-menu-item ${active ? "is-active" : ""}" data-window="${w}" role="menuitem"><span>${label}</span></button>`;
-                }).join("")}
+                ${
+                  visiblePresets.length > 0
+                    ? `<div class="debug-axis-menu-sep"></div>
+                       ${visiblePresets.map((w) => {
+                         const active = !this.autoX && Math.abs(winSec - w) < 0.05;
+                         const label = w >= 120 ? `${w / 60} min` : `${w} s`;
+                         return `<button type="button" class="debug-axis-menu-item ${active ? "is-active" : ""}" data-window="${w}" role="menuitem"><span>${label}</span></button>`;
+                       }).join("")}`
+                    : ""
+                }
               </div>`
             : ""
         }

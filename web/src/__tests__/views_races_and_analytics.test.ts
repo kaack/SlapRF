@@ -2720,43 +2720,42 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
 
       const editorModal = document.body.querySelector<HTMLElement>(".lap-editor-modal")!;
       expect(editorModal).not.toBeNull();
+      expect(editorModal.classList.contains("is-practice-signals-editor")).toBe(true);
       expect(editorModal.querySelector(".slaprf-modal-head")?.textContent ?? "").toContain(
         "OneEye (R7)"
       );
       expect(editorModal.querySelector(".slaprf-modal-head")?.textContent ?? "").toContain("L1");
-      // Single-lap locked editor has NO lap-switcher dropdown; defaults to `All` timers overlaid!
+      // Mounts the real `Signals` (`PilotRssiChart`) widget locked to Lap 1 (no lap-switcher, `Live` hidden)!
       expect(editorModal.querySelector("[data-lap-ed-lap-select]")).toBeNull();
-      const allGatesChip = editorModal.querySelector<HTMLButtonElement>('[data-lap-ed-gate="all"]')!;
-      expect(allGatesChip).not.toBeNull();
-      expect(allGatesChip.classList.contains("btn-armed")).toBe(true);
-      expect(editorModal.querySelector('[data-lap-ed-gate="1"]')).not.toBeNull();
-      expect(editorModal.querySelector('[data-lap-ed-gate="2"]')).not.toBeNull();
-      expect(editorModal.querySelector("line.lap-ed-rssi-line.is-synthetic")).not.toBeNull();
-      // Only Lap 1's 2 crossings (Start & Finish) appear in the crossings row — NOT Lap 2's crossings!
-      expect(editorModal.querySelectorAll("[data-lap-ed-row]").length).toBe(2);
+      expect(editorModal.querySelector(".scope-root.is-lap-locked")).not.toBeNull();
+      expect(editorModal.querySelector(".scope-canvas")).not.toBeNull();
+      expect(editorModal.querySelector<HTMLButtonElement>('[data-act="live"]')!.hidden).toBe(true);
 
-      // Select timer T1 (`gate="2"`) -> reveals Signals-style in-chart `[ + ]` + `[ lock ]` buttons!
-      editorModal.querySelector<HTMLButtonElement>('[data-lap-ed-gate="2"]')!.click();
+      const allTimersRow = editorModal.querySelector<HTMLButtonElement>('[data-focus="all"]')!;
+      expect(allTimersRow).not.toBeNull();
+      expect(allTimersRow.classList.contains("is-focus")).toBe(true);
+      expect(editorModal.querySelector('[data-focus="1"]')).not.toBeNull();
+      expect(editorModal.querySelector('[data-focus="2"]')).not.toBeNull();
+
+      // Select timer T1 (`[data-focus="2"]`) -> reveals Signals `[ + ]` + `[ lock ]` overlay actions!
+      editorModal.querySelector<HTMLButtonElement>('[data-focus="2"]')!.click();
       await flushMicrotasks();
+      const overlayActions = editorModal.querySelector<HTMLElement>('[data-slot="chart-actions"]')!;
+      expect(overlayActions.hidden).toBe(false);
       expect(
-        document.body.querySelector<HTMLButtonElement>(".lap-editor-modal [data-lap-ed-add-crossing]")!
-          .disabled
+        editorModal.querySelector<HTMLButtonElement>('[data-act="add-crossing"]')!.disabled
       ).toBe(true);
-      document.body
-        .querySelector<HTMLButtonElement>(".lap-editor-modal [data-lap-ed-toggle-lock]")!
-        .click();
+      editorModal.querySelector<HTMLButtonElement>('[data-act="toggle-chart-lock"]')!.click();
       await flushMicrotasks();
-      const addCrossBtn = document.body.querySelector<HTMLButtonElement>(
-        ".lap-editor-modal [data-lap-ed-add-crossing]"
+      const addCrossBtn = editorModal.querySelector<HTMLButtonElement>(
+        '[data-act="add-crossing"]'
       )!;
       expect(addCrossBtn.disabled).toBe(false);
       addCrossBtn.click();
       await flushMicrotasks();
-      expect(
-        document.body.querySelectorAll(".lap-editor-modal [data-lap-ed-row]").length
-      ).toBe(1);
+      expect(mock.calls.some((c) => c.method === "addCrossing")).toBe(true);
 
-      // Auto-Label triggers on-device teacher download on first tap, then stages single-lap dry-run crossings
+      // Auto-Label triggers on-device teacher download on first tap, then labels strictly this single lap
       const autoLabelBtn = document.body.querySelector<HTMLButtonElement>(
         ".lap-editor-modal [data-lap-ed-auto-label]"
       )!;
@@ -2776,14 +2775,12 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
         mock.calls.some(
           (c) =>
             c.method === "labelPracticeSession" &&
-            (c.args[1] as { dryRun?: boolean; startUs?: number; endUs?: number })?.dryRun === true &&
-            ((c.args[1] as { startUs?: number })?.startUs ?? 0) > 0
+            (c.args[1] as { dryRun?: boolean; startUs?: number; endUs?: number })?.dryRun === false &&
+            ((c.args[1] as { startUs?: number })?.startUs ?? 0) > 0 &&
+            ((c.args[1] as { endUs?: number })?.endUs ?? 0) >
+              ((c.args[1] as { startUs?: number })?.startUs ?? 0)
         )
       ).toBe(true);
-      expect(
-        document.body.querySelector<HTMLButtonElement>(".lap-editor-modal [data-lap-ed-save]")!
-          .disabled
-      ).toBe(false);
 
       // Clicking mobile TopBar `< Back` closes the RSSI editor modal and stays in the Practice session
       fakeBackBtn.click();
@@ -2989,10 +2986,16 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
 
       const modal = document.body.querySelector<HTMLElement>(".lap-editor-modal")!;
       expect(modal).not.toBeNull();
-      // Both H1 and T1 real SVG `<path class="lap-ed-rssi-line">` curves must render (zero synthetic fallback)!
-      const realPaths = modal.querySelectorAll("path.lap-ed-rssi-line");
-      expect(realPaths.length).toBe(2);
-      expect(modal.querySelector("line.lap-ed-rssi-line.is-synthetic")).toBeNull();
+      // Both H1 and T1 timer rows in `PilotRssiChart`'s `.channel-legend` display real `.rfbin` dBm readings!
+      const h1Dbm = modal.querySelector<HTMLElement>('[data-focus="1"] .channel-dbm')?.textContent ?? "";
+      const t1Dbm = modal.querySelector<HTMLElement>('[data-focus="2"] .channel-dbm')?.textContent ?? "";
+      expect(h1Dbm).toContain("-5");
+      expect(t1Dbm).toContain("-6");
+      const reviewView = store.forPracticeSessionReview(() =>
+        store.practiceSessions.find((s) => s.sessionId === "active-pack")
+      );
+      expect(reviewView.historyFor(1).length).toBeGreaterThanOrEqual(30);
+      expect(reviewView.historyFor(2).length).toBeGreaterThanOrEqual(30);
       modal.querySelector<HTMLButtonElement>("[data-lap-ed-close]")!.click();
     } finally {
       view.destroy();

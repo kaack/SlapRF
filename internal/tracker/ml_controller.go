@@ -1221,6 +1221,7 @@ func (e *Engine) LabelPracticeSession(ctx context.Context, sessionID string, req
 	sessSnap := clonePracticeSession(*target)
 	ts := e.ensureTraceStoreLocked()
 	tm := e.mlTeacher
+	activeTCN := e.resolveActiveTCNLocked().Clone()
 	prefPack := strings.TrimSpace(req.PackID)
 	if prefPack == "" {
 		prefPack = e.mlState.Config.TeacherPackID
@@ -1240,15 +1241,28 @@ func (e *Engine) LabelPracticeSession(ctx context.Context, sessionID string, req
 		return MLSessionLabelResponse{MLStatus: e.MLStatus()}, errors.New("no recorded RSSI waveform (.rfbin) available for this practice session")
 	}
 
-	labeler, resolvedPackID, err := tm.ResolveLabeler(prefPack)
-	if err != nil {
-		return MLSessionLabelResponse{MLStatus: e.MLStatus()}, err
+	isSingleLapWindow := req.EndUs > 0 && req.EndUs >= req.StartUs
+	var labeler ml.TeacherLabeler
+	var resolvedPackID string
+	if tm != nil {
+		var rErr error
+		labeler, resolvedPackID, rErr = tm.ResolveLabeler(prefPack)
+		if rErr != nil {
+			if !isSingleLapWindow {
+				return MLSessionLabelResponse{MLStatus: e.MLStatus()}, rErr
+			}
+			resolvedPackID = e.MLStatus().Config.ActiveModelID
+		}
+	} else if isSingleLapWindow {
+		resolvedPackID = e.MLStatus().Config.ActiveModelID
+	} else {
+		return MLSessionLabelResponse{MLStatus: e.MLStatus()}, errors.New("on-device AI labeler is unavailable in browser-only WASM mode; connect a SlapRF Portable or Android host")
 	}
 
 	// When `[StartUs, EndUs]` is specified (single-lap Auto-Label in RSSI Editor), slice `.rfbin`
 	// strictly to `[StartUs - 2.0s .. EndUs + 2.0s]` for noise-floor context and keep ONLY candidates
-	// inside `[StartUs .. EndUs]` so single-lap Auto-Label completes in `< 0.5s`!
-	if req.EndUs > 0 && req.EndUs >= req.StartUs {
+	// inside `[StartUs .. EndUs]` so single-lap Auto-Label completes in `< 15 ms`!
+	if isSingleLapWindow {
 		const floorPadUs = uint64(2_000_000)
 		loUs := uint64(0)
 		if req.StartUs > floorPadUs {
@@ -1265,13 +1279,13 @@ func (e *Engine) LabelPracticeSession(ctx context.Context, sessionID string, req
 	}
 
 	cands := ml.ExtractSessionCandidates(sessSnap, samples)
-	if req.SlotIndex > 0 || (req.EndUs > 0 && req.EndUs >= req.StartUs) {
+	if req.SlotIndex > 0 || isSingleLapWindow {
 		filtered := cands[:0]
 		for _, c := range cands {
 			if req.SlotIndex > 0 && c.SlotIndex != req.SlotIndex {
 				continue
 			}
-			if req.EndUs > 0 && req.EndUs >= req.StartUs && (c.AnchorTsUs < req.StartUs || c.AnchorTsUs > req.EndUs) {
+			if isSingleLapWindow && (c.AnchorTsUs < req.StartUs || c.AnchorTsUs > req.EndUs) {
 				continue
 			}
 			filtered = append(filtered, c)
@@ -1289,9 +1303,15 @@ func (e *Engine) LabelPracticeSession(ctx context.Context, sessionID string, req
 		}, nil
 	}
 
-	decisions, err := labeler.LabelCandidates(lblCtx, sessSnap, cands, nil)
-	if err != nil {
-		return MLSessionLabelResponse{MLStatus: e.MLStatus()}, err
+	var decisions []ml.CandidateDecision
+	_, isGGUF := labeler.(*ml.Qwen3GGUFLabeler)
+	if isSingleLapWindow && (labeler == nil || isGGUF) {
+		decisions = ml.LabelLapCandidatesFast(sessSnap, samples, cands, activeTCN)
+	} else {
+		decisions, err = labeler.LabelCandidates(lblCtx, sessSnap, cands, nil)
+		if err != nil {
+			return MLSessionLabelResponse{MLStatus: e.MLStatus()}, err
+		}
 	}
 
 	var crossCount, negCount int
@@ -1323,7 +1343,7 @@ func (e *Engine) LabelPracticeSession(ctx context.Context, sessionID string, req
 		e.mu.Unlock()
 		return MLSessionLabelResponse{MLStatus: st}, fmt.Errorf("practice session %q not found", sessSnap.SessionID)
 	}
-	e.applyTeacherDecisionsLocked(liveTarget, resolvedPackID, req.SlotIndex, decisions)
+	e.applyTeacherDecisionsLocked(liveTarget, resolvedPackID, req.SlotIndex, req.StartUs, req.EndUs, decisions)
 	practiceSnap := clonePracticeManagerState(e.practiceState)
 	mlSnap := e.buildMLStatusLocked()
 	subs := append([]EventSubscriber(nil), e.subscribers...)
@@ -1346,13 +1366,17 @@ func (e *Engine) LabelPracticeSession(ctx context.Context, sessionID string, req
 }
 
 // applyTeacherDecisionsLocked merges System 1 Teacher decisions into `target` while strictly
-// preserving all pilot manual crossings (`Manual == true`) and manual deletions (`ManualDeletedCrossings`).
+// preserving all pilot manual crossings (`Manual == true`), manual deletions (`ManualDeletedCrossings`),
+// and (when `endUs > 0 && endUs >= startUs`) all crossings outside `[startUs, endUs]`.
 func (e *Engine) applyTeacherDecisionsLocked(
 	target *domain.PracticeSession,
 	packID string,
 	slotFilter int,
+	startUs uint64,
+	endUs uint64,
 	decisions []ml.CandidateDecision,
 ) {
+	hasWindow := endUs > 0 && endUs >= startUs
 	orderedGates := e.orderedGatesForPracticeSessionLocked(target)
 	callsignBySlot := make(map[int]string, len(target.Pilots))
 	for _, sp := range target.Pilots {
@@ -1370,6 +1394,11 @@ func (e *Engine) applyTeacherDecisionsLocked(
 			keptCrossings = append(keptCrossings, c)
 			continue
 		}
+		if hasWindow && (c.TimestampUs < startUs || c.TimestampUs > endUs) {
+			keptCrossings = append(keptCrossings, c)
+			manualCrossings = append(manualCrossings, c)
+			continue
+		}
 		affectedSlots[c.SlotIndex] = true
 		if c.Manual {
 			keptCrossings = append(keptCrossings, c)
@@ -1380,6 +1409,10 @@ func (e *Engine) applyTeacherDecisionsLocked(
 	var keptHardNegs []domain.TeacherNegativeMark
 	for _, hn := range target.TeacherHardNegs {
 		if slotFilter > 0 && hn.SlotIndex != slotFilter {
+			keptHardNegs = append(keptHardNegs, hn)
+			continue
+		}
+		if hasWindow && (hn.TimestampUs < startUs || hn.TimestampUs > endUs) {
 			keptHardNegs = append(keptHardNegs, hn)
 		}
 	}
@@ -1765,7 +1798,7 @@ func (e *Engine) runMLTrainingWorker(
 
 				e.mu.Lock()
 				if live := e.findPracticeSessionLocked(s.SessionID); live != nil {
-					e.applyTeacherDecisionsLocked(live, resolvedPackID, 0, decs)
+					e.applyTeacherDecisionsLocked(live, resolvedPackID, 0, 0, 0, decs)
 					sessions[idx] = clonePracticeSession(*live)
 					anyUpdated = true
 				}

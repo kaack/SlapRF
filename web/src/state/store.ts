@@ -617,6 +617,7 @@ export class AppStore {
         this.sessionTraces.delete(firstKey);
       }
     }
+    this._stateRev = (this._stateRev + 1) | 0;
     this.emit("practice", "selection");
   }
 
@@ -1459,12 +1460,15 @@ export class AppStore {
     });
   }
 
-  /** Scoped store view for reviewing a specific Practice session's `.rfbin` trace in `AI Training`. */
+  /** Scoped store view for reviewing & editing a specific Practice session's `.rfbin` trace (`Review` / `AI Training`). */
   public forPracticeSessionReview(getSession: () => PracticeSession | null | undefined): AppStore {
     return this.createScopedView({
-      nodes: () => this.practiceSessionNodes(getSession() ?? undefined),
+      nodes: () => {
+        const res = this.practiceSessionNodes(getSession() ?? undefined);
+        return { nodes: res.nodes, historical: false };
+      },
       rules: () => this.practiceSessionRules(getSession() ?? undefined),
-      isScopeLive: () => Boolean(getSession()?.active),
+      isScopeLive: () => false,
       laps: () => getSession()?.laps ?? [],
       crossings: () => getSession()?.crossings ?? [],
       filtered: () => getSession()?.filtered ?? [],
@@ -1494,33 +1498,28 @@ export class AppStore {
       },
       historyFor: (gateId: number) => {
         const sess = getSession();
-        if (sess && !sess.active) {
-          const cached = this.sessionTraces.get(sess.sessionId);
-          if (cached && cached.maxTsUs > 0) {
-            return cached.byGate.get(gateId) ?? [];
-          }
-        }
-        return this.historyFor(gateId);
+        if (!sess) return [];
+        return this.sessionTraceHistoryFor(sess.sessionId, gateId, Boolean(sess.active));
       },
       latestTimestampUs: () => {
         const sess = getSession();
-        if (sess && !sess.active) {
-          const cached = this.sessionTraces.get(sess.sessionId);
-          if (cached && cached.maxTsUs > 0) {
-            return cached.maxTsUs;
-          }
-        }
-        return this.latestTimestampUs;
+        if (!sess) return 0;
+        const cachedMax = this.sessionTraces.get(sess.sessionId)?.maxTsUs ?? 0;
+        const lapMax =
+          (sess.laps ?? []).reduce((mx, l) => Math.max(mx, l.completedAtUs), 0) ||
+          (sess.crossings ?? []).reduce((mx, c) => Math.max(mx, c.timestampUs), 0);
+        const liveMax = sess.active ? this.latestTimestampUs : 0;
+        return Math.max(cachedMax, lapMax, liveMax);
       },
       smoothLatestTimestampUs: () => {
         const sess = getSession();
-        if (sess && !sess.active) {
-          const cached = this.sessionTraces.get(sess.sessionId);
-          if (cached && cached.maxTsUs > 0) {
-            return cached.maxTsUs;
-          }
-        }
-        return this.smoothLatestTimestampUs;
+        if (!sess) return 0;
+        const cachedMax = this.sessionTraces.get(sess.sessionId)?.maxTsUs ?? 0;
+        const lapMax =
+          (sess.laps ?? []).reduce((mx, l) => Math.max(mx, l.completedAtUs), 0) ||
+          (sess.crossings ?? []).reduce((mx, c) => Math.max(mx, c.timestampUs), 0);
+        const liveMax = sess.active ? this.smoothLatestTimestampUs : 0;
+        return Math.max(cachedMax, lapMax, liveMax);
       },
     });
   }

@@ -28957,11 +28957,42 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
   color: #ffffff;
 }
 
+@media (min-width: 861px) {
+  .slaprf-modal.lap-editor-modal.is-practice-signals-editor > .slaprf-modal-body.is-signals-editor-body {
+    padding: 12px 16px 16px;
+  }
+
+  .slaprf-modal.lap-editor-modal.is-practice-signals-editor .rc-signals-card-box {
+    border: 0;
+    box-shadow: none;
+    background: transparent;
+  }
+
+  .slaprf-modal.lap-editor-modal.is-practice-signals-editor .rc-panel-body.is-signals-body {
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+}
+
 @media (max-width: 860px) {
-  .slaprf-modal.lap-editor-modal .lap-ed-graph-card {
+  .slaprf-modal.lap-editor-modal:not(.is-practice-signals-editor) .lap-ed-graph-card {
     flex: 1 1 0;
     min-height: 240px;
     padding: 4px 2px 2px;
+  }
+
+  .slaprf-modal.lap-editor-modal.is-practice-signals-editor > .slaprf-modal-body.is-signals-editor-body,
+  .slaprf-modal.lap-editor-modal.is-practice-signals-editor .rc-panel-body.is-signals-body {
+    flex: 1 1 0;
+    min-height: 0;
+    padding: 0 !important;
+    background: transparent !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden !important;
   }
 }
 
