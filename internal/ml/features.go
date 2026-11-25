@@ -15,17 +15,18 @@ const (
 )
 
 // FeatureNormalizer computes causal 3-channel normalized features at each 20 ms step so offline
-// full-trace training and live real-time streaming produce identical inputs:
-//   - ch0: Excess above rolling ambient noise floor: clamp((rssi - floor) / 35.0, -0.2, 1.5)
-//   - ch1: Prominence vs pilot rolling peak envelope: clamp((rssi - peakEnv) / 20.0, -1.5, 0.5)
-//   - ch2: Local 60 ms slope: clamp((rssi[t] - rssi[t-3]) / 15.0, -1.5, 1.5)
+// full-trace training and live real-time streaming produce identical inputs with zero on-the-fly
+// peak-ceiling auto-calibration (loud passes on earlier laps never suppress softer/slower passes):
+//   - ch0: Excess above ambient noise floor: clamp((rssi - floor) / 35.0, -0.25, 1.6)
+//   - ch1: Contrast above trailing ~1.8s local average: clamp((rssi - slowEma) / 22.0, -1.2, 1.4)
+//   - ch2: Multi-step 120 ms slope: clamp((rssi[t] - rssi[t-6]) / 14.0, -1.5, 1.5)
 type FeatureNormalizer struct {
 	initialized bool
 	floorDbm    float32
-	peakEnvDbm  float32
+	slowEmaDbm  float32
 	medBuf      [3]float32
 	medCount    int
-	histRssi    [4]float32
+	histRssi    [6]float32
 	histCount   int
 }
 
@@ -70,12 +71,9 @@ func (n *FeatureNormalizer) Step(rawRssiDbm float32, reportedFloorDbm float32) (
 		n.floorDbm = -91.0
 	}
 
+	wasUninit := !n.initialized
 	if !n.initialized {
 		n.initialized = true
-		n.peakEnvDbm = n.floorDbm + 20.0
-		if rawRssiDbm > n.peakEnvDbm {
-			n.peakEnvDbm = rawRssiDbm
-		}
 	}
 
 	// 3-step (60 ms) median rejects single-sweep RF glitches before computing slope.
@@ -101,44 +99,36 @@ func (n *FeatureNormalizer) Step(rawRssiDbm float32, reportedFloorDbm float32) (
 		med = median3(n.medBuf[0], n.medBuf[1], n.medBuf[2])
 	}
 
-	// Gently track ambient baseline if raw signal sits below reported floor, and gently decay
-	// peakEnvDbm (tau ~ 40 s = 2000 steps) toward floor + 20 dB during lulls.
+	// Gently track ambient baseline if raw signal sits near or below reported floor.
 	if med < n.floorDbm {
 		n.floorDbm = 0.95*n.floorDbm + 0.05*med
 	} else if med < n.floorDbm+4.0 {
 		n.floorDbm = 0.998*n.floorDbm + 0.002*med
 	}
 
-	minPeakTarget := n.floorDbm + 20.0
-	if med > n.peakEnvDbm {
-		n.peakEnvDbm = 0.40*n.peakEnvDbm + 0.60*med
-	} else {
-		n.peakEnvDbm = 0.9992*n.peakEnvDbm + 0.0008*minPeakTarget
-		if n.peakEnvDbm < minPeakTarget {
-			n.peakEnvDbm = minPeakTarget
-		}
+	if wasUninit {
+		n.slowEmaDbm = n.floorDbm
 	}
+	prevSlow := n.slowEmaDbm
+	n.slowEmaDbm = 0.993*n.slowEmaDbm + 0.007*med
 
-	var prev3 float32
+	var prev6 float32
 	if n.histCount == 0 {
-		prev3 = med
-	} else if n.histCount < 3 {
-		prev3 = n.histRssi[0]
+		prev6 = med
 	} else {
-		prev3 = n.histRssi[0]
+		prev6 = n.histRssi[0]
 	}
-	if n.histCount < 3 {
+	if n.histCount < len(n.histRssi) {
 		n.histRssi[n.histCount] = med
 		n.histCount++
 	} else {
-		n.histRssi[0] = n.histRssi[1]
-		n.histRssi[1] = n.histRssi[2]
-		n.histRssi[2] = med
+		copy(n.histRssi[:], n.histRssi[1:])
+		n.histRssi[len(n.histRssi)-1] = med
 	}
 
 	ch0 := clamp32((med-n.floorDbm)/35.0, -0.25, 1.6)
-	ch1 := clamp32((med-n.peakEnvDbm)/20.0, -1.6, 0.6)
-	ch2 := clamp32((med-prev3)/15.0, -1.5, 1.5)
+	ch1 := clamp32((med-prevSlow)/22.0, -1.2, 1.4)
+	ch2 := clamp32((med-prev6)/14.0, -1.5, 1.5)
 	return [InputChannels]float32{ch0, ch1, ch2}, med, n.floorDbm
 }
 

@@ -20,7 +20,7 @@ var embeddedPretrainedBaseV0 []byte
 
 const (
 	// DetectProbThreshold is the default crossing probability threshold on p_cross[t].
-	DetectProbThreshold = float32(0.55)
+	DetectProbThreshold = float32(0.48)
 	// MatchToleranceUs is the maximum timestamp distance (+-400 ms) counted as a True Positive match
 	// during validation scoring (accommodating broad 500-600 ms takeoff/whoop passes while remaining
 	// strictly < 0.27 * minLockoutUs).
@@ -117,15 +117,50 @@ func BuildSequenceTargets(seq GridSequence, positives []CrossingLabel, hardNegs 
 		})
 	}
 
-	// 1. Paint low-weight don't-care shoulder collars (+-380 ms = +-19 steps) around both the
-	// human label and the physical crest so broad pass shoulders are never penalized as y=0 negatives.
+	// 1. Paint low-weight don't-care shoulder collars around both the human label and physical crest,
+	// expanding adaptively (up to +-1.30 s = +-65 steps) across the full continuous bell of slow passes
+	// (`>= 30%` of peak prominence) so broad slow-pass flanks are never mined as `y = 0` hard negatives!
 	for _, rp := range resolved {
 		lo := rp.origStep
 		hi := rp.crestStep
 		if lo > hi {
 			lo, hi = hi, lo
 		}
-		for t := lo - 19; t <= hi+19; t++ {
+		cs := rp.crestStep
+		if cs < 0 {
+			cs = 0
+		} else if cs >= T {
+			cs = T - 1
+		}
+		startL := lo
+		if startL >= T {
+			startL = T - 1
+		}
+		startR := hi
+		if startR < 0 {
+			startR = 0
+		}
+		pkProm := seq.MedRSSI[cs] - seq.FloorDbm[cs]
+		flankCut := seq.FloorDbm[cs] + 0.55*pkProm
+		colLo := lo - 19
+		for k := startL; k >= lo-32 && k >= 0; k-- {
+			if seq.MedRSSI[k] < flankCut {
+				break
+			}
+			if k < colLo {
+				colLo = k
+			}
+		}
+		colHi := hi + 19
+		for k := startR; k <= hi+32 && k < T; k++ {
+			if seq.MedRSSI[k] < flankCut {
+				break
+			}
+			if k > colHi {
+				colHi = k
+			}
+		}
+		for t := colLo; t <= colHi; t++ {
 			if t >= 0 && t < T {
 				tgt.SampleWt[t] = 0.05
 			}
@@ -1028,7 +1063,7 @@ var (
 )
 
 // PretrainedBaseSummary returns the metadata summary of built-in `SlapRF Base` (`ai-base-v0`),
-// trained on verified 4-gate 5.8 GHz SlapRF hardware telemetry across 44 laps / 184 passes (`96.99%` F1).
+// trained on verified 4-gate 5.8 GHz SlapRF hardware telemetry across 77 laps / 320 passes (`95.9%` F1).
 func PretrainedBaseSummary() domain.MLModelSummary {
 	if pretrainedTCN != nil {
 		return pretrainedSnapshot.MLModelSummary
@@ -1037,33 +1072,33 @@ func PretrainedBaseSummary() domain.MLModelSummary {
 		ModelID:       "ai-base-v0",
 		Name:          "SlapRF Base",
 		Version:       0,
-		CreatedAt:     "2026-11-25T20:55:00Z",
+		CreatedAt:     "2026-11-25T21:46:00Z",
 		BuiltIn:       true,
 		Ready:         true,
-		EpochsTrained: 64,
-		TrainPacks:    2,
-		ValPacks:      2,
-		TrainPasses:   184,
-		FinalLoss:     0.0907,
+		EpochsTrained: 72,
+		TrainPacks:    3,
+		ValPacks:      3,
+		TrainPasses:   320,
+		FinalLoss:     0.0964,
 		AIMetrics: domain.MLMetrics{
-			TotalPasses:    184,
-			DetectedPasses: 177,
-			MissedPasses:   7,
-			FalseTriggers:  4,
-			Precision:      0.9779,
-			Recall:         0.9620,
-			F1:             0.9699,
-			MeanJitterMs:   49.3,
+			TotalPasses:    320,
+			DetectedPasses: 307,
+			MissedPasses:   13,
+			FalseTriggers:  13,
+			Precision:      0.9594,
+			Recall:         0.9594,
+			F1:             0.9594,
+			MeanJitterMs:   49.8,
 		},
 		ClassicMetrics: domain.MLMetrics{
-			TotalPasses:    184,
-			DetectedPasses: 59,
-			MissedPasses:   125,
-			FalseTriggers:  11,
-			Precision:      0.8429,
-			Recall:         0.3207,
-			F1:             0.4647,
-			MeanJitterMs:   68.4,
+			TotalPasses:    320,
+			DetectedPasses: 126,
+			MissedPasses:   194,
+			FalseTriggers:  1,
+			Precision:      0.9921,
+			Recall:         0.3938,
+			F1:             0.5638,
+			MeanJitterMs:   62.1,
 		},
 	}
 }

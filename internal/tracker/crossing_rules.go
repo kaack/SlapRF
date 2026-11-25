@@ -63,10 +63,15 @@ func (e *Engine) applyCrossingLocked(pilot domain.PilotSlot, gate domain.TrackGa
 		}}
 	}
 
-	// 1. Minimum crossing time, area-under-curve, and learned pass-curve spike rejection.
-	slotPos := e.pilotPosLocked(pilot.SlotIndex)
-	if spikeDetail := e.checkSpikeRejectionLocked(pilot, gate, slotPos, ev, r); spikeDetail != "" {
-		return reject(domain.FilterSpike, "%s", spikeDetail)
+	// 1. Minimum crossing time, area-under-curve, and learned pass-curve spike rejection (Classic DSP only;
+	// in AI mode the 1D-TCN directly classifies the 29-step waveform without Classic threshold/profile gates).
+	useAIDetector := domain.IsSlapRFMode(domain.NormalizeTimingHardwareMode(e.timingHardwareMode)) &&
+		e.mlState.Config.DetectorMode == domain.DetectorModeAI
+	if !useAIDetector {
+		slotPos := e.pilotPosLocked(pilot.SlotIndex)
+		if spikeDetail := e.checkSpikeRejectionLocked(pilot, gate, slotPos, ev, r); spikeDetail != "" {
+			return reject(domain.FilterSpike, "%s", spikeDetail)
+		}
 	}
 
 	ckey := detectorKey(gate.GateID, pilot.SlotIndex)
@@ -144,8 +149,8 @@ func (e *Engine) applyCrossingLocked(pilot domain.PilotSlot, gate domain.TrackGa
 		}
 		if prevEv := e.findAcceptedCrossingLocked(gate.GateID, pilot.SlotIndex, e.lastAcceptedUs[ckey]); prevEv != nil &&
 			ev.PeakRSSIDbm < 0 && prevEv.PeakRSSIDbm < 0 &&
-			ev.PeakRSSIDbm >= prevEv.PeakRSSIDbm+5.5 &&
-			ev.PassAreaDbSec >= 1.5*math.Max(0.5, prevEv.PassAreaDbSec) {
+			(ev.PeakRSSIDbm >= prevEv.PeakRSSIDbm+6.5 ||
+				(ev.PeakRSSIDbm >= prevEv.PeakRSSIDbm+4.5 && ev.PassAreaDbSec >= 1.35*math.Max(0.5, prevEv.PassAreaDbSec))) {
 			if prog.lapStartUs != 0 && prevEv.TimestampUs < prog.lapStartUs {
 				supersededID = prevEv.EventID
 				supersededNote = &domain.FilteredDetection{
@@ -206,7 +211,9 @@ func (e *Engine) applyCrossingLocked(pilot domain.PilotSlot, gate domain.TrackGa
 
 	// ---- accepted ----
 	e.lastAcceptedUs[ckey] = ev.TimestampUs
-	e.recordPassProfileLocked(pilot, gate, ev)
+	if !useAIDetector {
+		e.recordPassProfileLocked(pilot, gate, ev)
+	}
 	out := crossingOutcome{
 		note:              supersededNote,
 		supersededEventID: supersededID,
