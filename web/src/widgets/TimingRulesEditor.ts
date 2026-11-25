@@ -398,7 +398,7 @@ export class TimingRulesEditor extends Component {
       const editing = active instanceof HTMLInputElement && this.el.contains(active);
       if (!editing) this.render();
     };
-    this.onDispose(store.subscribe(["rules", "config", "status", "practice", "race"], refreshIfIdle));
+    this.onDispose(store.subscribe(["rules", "config", "status", "practice", "race", "ml"], refreshIfIdle));
     const unsubPool = usbPool.onChange(refreshIfIdle);
     const unsubSlots = usbPool.slots.map((c) =>
       c.subscribe({
@@ -443,12 +443,17 @@ export class TimingRulesEditor extends Component {
     ) {
       return;
     }
+    const isAiMode =
+      !this.store.simulatorRunning && this.store.mlStatus?.config?.detectorMode === "ai";
     if (this.scope === null) {
       const curMode = resolveCrossingBeepMode(this.store.rules.beepMode, this.store.rules.beepOnCross);
       this.optimisticallySelectBeepMode(nextMode);
       const previewGateId = this.store.nodes[0]?.gateId ?? 1;
       playPreviewCrossingBeep(this.store, previewGateId, nextMode);
-      if (nextMode === curMode) return;
+      const unchanged = isAiMode
+        ? (nextMode !== "off") === (curMode !== "off")
+        : nextMode === curMode;
+      if (unchanged) return;
       void this.api.updateRules({
         ...this.store.rules,
         beepMode: nextMode,
@@ -462,7 +467,10 @@ export class TimingRulesEditor extends Component {
     const globalMode = resolveCrossingBeepMode(this.store.rules.beepMode, this.store.rules.beepOnCross);
     this.optimisticallySelectBeepMode(nextMode);
     playPreviewCrossingBeep(this.store, this.scope, nextMode);
-    if (nextMode === globalMode) {
+    const sameAsGlobal = isAiMode
+      ? (nextMode !== "off") === (globalMode !== "off")
+      : nextMode === globalMode;
+    if (sameAsGlobal) {
       delete curOvr.beepMode;
       delete curOvr.beepOnCross;
     } else {
@@ -473,8 +481,14 @@ export class TimingRulesEditor extends Component {
   }
 
   private optimisticallySelectBeepMode(nextMode: CrossingBeepMode): void {
+    const isAiMode =
+      !this.store.simulatorRunning && this.store.mlStatus?.config?.detectorMode === "ai";
     this.el.querySelectorAll<HTMLButtonElement>("[data-beep-mode]").forEach((btn) => {
-      const active = btn.dataset.beepMode === nextMode;
+      const active = isAiMode
+        ? btn.dataset.beepMode === "off"
+          ? nextMode === "off"
+          : nextMode !== "off"
+        : btn.dataset.beepMode === nextMode;
       btn.classList.toggle("is-active", active);
       btn.setAttribute("aria-checked", String(active));
     });
@@ -902,29 +916,53 @@ export class TimingRulesEditor extends Component {
   }
 
   private renderBeepModeSegHtml(activeMode: CrossingBeepMode, disAttr = ""): string {
+    const isAiMode =
+      !this.store.simulatorRunning && this.store.mlStatus?.config?.detectorMode === "ai";
+    const opts = isAiMode
+      ? [
+          { mode: "off" as CrossingBeepMode, label: "Off", title: "No crossing beep" },
+          {
+            mode: "peak" as CrossingBeepMode,
+            label: "On",
+            title: "Play confirmation beep when the AI detector confirms a crossing",
+          },
+        ]
+      : BEEP_MODES;
     return `<div class="scope-tune-seg beep-mode-seg" role="radiogroup" aria-label="Beep on crossing">
-      ${BEEP_MODES.map(
-        (opt) => `<button
+      ${opts
+        .map((opt) => {
+          const isActive = isAiMode
+            ? opt.mode === "off"
+              ? activeMode === "off"
+              : activeMode !== "off"
+            : activeMode === opt.mode;
+          return `<button
           type="button"
           role="radio"
-          aria-checked="${activeMode === opt.mode}"
-          class="scope-tune-seg-btn ${activeMode === opt.mode ? "is-active" : ""}"
+          aria-checked="${isActive}"
+          class="scope-tune-seg-btn ${isActive ? "is-active" : ""}"
           data-beep-mode="${opt.mode}"
           title="${opt.title}"
           ${disAttr}
-        >${opt.label}</button>`
-      ).join("")}
+        >${opt.label}</button>`;
+        })
+        .join("")}
     </div>`;
   }
 
   private renderGlobalBeepRow(r: TimingRules): string {
+    const isAiMode =
+      !this.store.simulatorRunning && this.store.mlStatus?.config?.detectorMode === "ai";
     const effMode = resolveCrossingBeepMode(r.beepMode, r.beepOnCross);
     const isCustom = effMode !== "off";
+    const helpText = isAiMode
+      ? "Plays a confirmation beep when the AI detector confirms a crossing for all timers."
+      : "Plays a single beep on gate enter, at the signal peak, or on gate exit for all timers.";
     return `
       <div class="rule-row ${isCustom ? "is-overridden" : ""}">
         <div class="rule-text">
           <div class="rule-label">Beep on crossing</div>
-          <div class="rule-help">Plays a single beep on gate enter, at the signal peak, or on gate exit for all timers.</div>
+          <div class="rule-help">${helpText}</div>
         </div>
         <div class="rule-input rule-switch-wrap">
           ${this.renderBeepModeSegHtml(effMode)}
@@ -938,15 +976,22 @@ export class TimingRulesEditor extends Component {
   }
 
   private renderGateBeepRow(_gate: TrackNode, r: TimingRules, overrides: GateRuleOverrides): string {
+    const isAiMode =
+      !this.store.simulatorRunning && this.store.mlStatus?.config?.detectorMode === "ai";
     const globalMode = resolveCrossingBeepMode(r.beepMode, r.beepOnCross);
     const ovrMode = gateOverrideBeepMode(overrides);
-    const hasOwn = ovrMode !== undefined && ovrMode !== globalMode;
+    const hasOwn =
+      ovrMode !== undefined &&
+      (isAiMode ? (ovrMode !== "off") !== (globalMode !== "off") : ovrMode !== globalMode);
     const effMode = ovrMode !== undefined ? ovrMode : globalMode;
+    const helpText = isAiMode
+      ? "Plays a confirmation beep when the AI detector confirms a crossing at this timer."
+      : "Plays a single beep on gate enter, at the signal peak, or on gate exit at this timer.";
     return `
       <div class="rule-row ${hasOwn ? "is-overridden" : ""}">
         <div class="rule-text">
           <div class="rule-label">Beep on crossing</div>
-          <div class="rule-help">Plays a single beep on gate enter, at the signal peak, or on gate exit at this timer.</div>
+          <div class="rule-help">${helpText}</div>
         </div>
         <div class="rule-input rule-switch-wrap">
           ${this.renderBeepModeSegHtml(effMode)}

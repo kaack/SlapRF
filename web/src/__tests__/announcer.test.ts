@@ -1023,6 +1023,23 @@ describe("services/announcer — Phonetic Names, Lap Formatting, Queue Dedup & W
       store.ingestTelemetry({ timerId: 2, seqNum: 39, timestampUs: 9_225_000, rssi: [-37.2] });
       store.ingestTelemetry({ timerId: 2, seqNum: 40, timestampUs: 9_250_000, rssi: [-39.0] });
       expect(nonKeepAwake().length).toBe(4);
+
+      // 6. AI detector mode: bypasses Classic enter/exit telemetry threshold gate so a -56 dBm 25mW pass
+      //    on T2 (inside [-58..-68 dBm]) ALWAYS plays the crossing beep when AI confirms the crossing!
+      store.ingestMLStatus({
+        ...store.mlStatus,
+        config: {
+          ...store.mlStatus.config,
+          detectorMode: "ai",
+          activeModelId: "ai-base-v0",
+          liveTuneEnabled: false,
+        },
+      });
+      store.ingestTelemetry({ timerId: 2, seqNum: 50, timestampUs: 12_000_000, rssi: [-56.0] });
+      store.ingestTelemetry({ timerId: 2, seqNum: 51, timestampUs: 12_280_000, rssi: [-62.0] });
+      expect(nonKeepAwake().length).toBe(4); // Silent until AI crossing event arrives
+      store.ingestCrossing(makeCrossing(99, 2, 1, 12_000_000, { isStartFinish: false }));
+      expect(nonKeepAwake().length).toBe(5); // Plays immediately even while RSSI is -62 dBm!
     } finally {
       ann.stop();
     }

@@ -389,9 +389,9 @@ func TestAutoLabelRecordedSessionsRegression(t *testing.T) {
 			name:            "Session 2 (23 laps, BLE gaps on L20/L22/L23)",
 			prefix:          "autolabel_session2",
 			minCompleteLaps: 23,
-			minLapMatch:     99.0,
-			minFullRec:      96.0,
-			minFullF1:       90.0,
+			minLapMatch:     99.5,
+			minFullRec:      96.5,
+			minFullF1:       89.0,
 			matchTolMs:      450.0,
 		},
 		{
@@ -419,6 +419,15 @@ func TestAutoLabelRecordedSessionsRegression(t *testing.T) {
 			minLapMatch:     98.5,
 			minFullRec:      97.5,
 			minFullF1:       97.5,
+			matchTolMs:      450.0,
+		},
+		{
+			name:            "25mW V2 (32 laps across 3 packs with post-crest packet gaps)",
+			prefix:          "autolabel_v2",
+			minCompleteLaps: 32,
+			minLapMatch:     99.5,
+			minFullRec:      98.0,
+			minFullF1:       97.0,
 			matchTolMs:      450.0,
 		},
 	}

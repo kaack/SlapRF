@@ -254,3 +254,39 @@ func TestBuildTracesFromSessionSlicesActiveFlightStintsAndCancel(t *testing.T) {
 		t.Fatalf("expected training to stop right at epoch 2 after cancel(), ran %d epochs", epochsRun)
 	}
 }
+
+func TestStreamDetectorFlushesPostCrestPacketGapAndToleratesJitter(t *testing.T) {
+	model, _ := PretrainedBaseModel()
+	det := NewStreamDetector(2, 1, model)
+
+	var detected []uint64
+	// Feed ambient baseline (10s..12s) -> clean -52 dBm pass peaking at t=12.50s -> stop 120 ms after crest (t=12.62s)
+	// with a 35 ms backward BLE timestamp jitter right before the crest!
+	for step := 0; step <= 131; step++ {
+		ts := uint64(10_000_000 + step*20_000)
+		dt := float64(ts)/1e6 - 12.50
+		rssi := float32(-91.0 + 39.0/(1.0+(dt/0.20)*(dt/0.20)))
+		if cand := det.ProcessSample(rssi, -91.0, ts, -58, -68, 300_000, nil); cand != nil {
+			detected = append(detected, cand.TimestampUs)
+		}
+		if step == 122 { // t=12.44s: inject out-of-order BLE packet 35 ms earlier!
+			if cand := det.ProcessSample(rssi-1.0, -91.0, ts-35_000, -58, -68, 300_000, nil); cand != nil {
+				detected = append(detected, cand.TimestampUs)
+			}
+		}
+	}
+	if len(detected) != 0 {
+		t.Fatalf("expected crest at 12.50s to still be inside 280ms lookahead at 12.62s, got %v", detected)
+	}
+
+	// Simulate a 3.5 s ESP-NOW/BLE packet gap resuming at t=16.12s (matching 25mW V2 L8 & L32):
+	// ProcessSample must flush the pending 12.50s crest before resetting!
+	cand := det.ProcessSample(-90.5, -91.0, 16_120_000, -58, -68, 300_000, nil)
+	if cand == nil {
+		t.Fatalf("expected post-crest packet gap to flush and emit the 12.50s crossing")
+	}
+	diffMs := math.Abs(float64(int64(cand.TimestampUs)-12_500_000)) / 1000.0
+	if diffMs > 120.0 {
+		t.Fatalf("expected flushed crossing near 12.50s, got %.3fs (diff=%.1fms)", float64(cand.TimestampUs)/1e6, diffMs)
+	}
+}

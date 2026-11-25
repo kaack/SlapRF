@@ -241,8 +241,11 @@ export class Announcer {
       })
     );
     this.unsubscribers.push(
-      store.subscribe(["config", "rules", "practice", "race"], () => {
+      store.subscribe(["config", "rules", "practice", "race", "ml"], () => {
         this.beepConfigDirty = true;
+        if (this.store.mlStatus?.config?.detectorMode === "ai") {
+          this.telemetryBeepStates.clear();
+        }
         const nextCfg = this.resolveBeepScope();
         if (hasAnyBeepOnCrossConfigured(nextCfg.scopedStore)) {
           ensureCrossingBeepGestureUnlock();
@@ -781,6 +784,7 @@ export class Announcer {
       }
     >;
   } | null = null;
+  private readonly crossingBeepWallMs = new Map<string, number>();
   private readonly telemetryBeepStates = new Map<
     string,
     {
@@ -909,6 +913,12 @@ export class Announcer {
    * - `"exit"`: single beep the instant RSSI drops below `exitThreshold`.
    */
   private onTelemetryBeep(frame: TimerTelemetryFrame): void {
+    // In AI detector mode (on real hardware), `enterDbm`/`exitDbm` Classic thresholds are inactive;
+    // let authoritative AI `GateCrossingEvent`s (`onCrossingBeep`) drive 100% of crossing beeps so
+    // passes peaking near/below Classic `enterDbm + 4.2 dB` (e.g. -55..-65 dBm on 25mW) never go silent!
+    if (!this.store.simulatorRunning && this.store.mlStatus?.config?.detectorMode === "ai") {
+      return;
+    }
     const cfg = this.resolveBeepScope();
     if (!cfg.active) return;
     const gateCfg = cfg.gatesByFrameTimerId.get(frame.timerId);
@@ -1071,17 +1081,30 @@ export class Announcer {
   }
 
   /**
-   * Fallback crossing beep for pass-only external hardware (e.g. LapRF 8-Way or RotorHazard when
-   * live RSSI streaming is off). Skips if real-time telemetry already sounded.
+   * Authoritative crossing beep for AI detector mode and pass-only external hardware (e.g. LapRF 8-Way
+   * or RotorHazard), plus safety fallback when Classic client-side telemetry did not already sound.
    */
   private onCrossingBeep(ev: GateCrossingEvent): void {
+    if (ev.invalidReason) return;
     const scopedStore = this.getActiveCrossingScopeStore();
     const eff = pilotGateRulesAt(scopedStore, ev.gateId, ev.slotIndex);
     if (!eff.beepOnCross || eff.beepMode === "off") return;
     const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
-    const st = this.telemetryBeepStates.get(`${ev.gateId}:${ev.slotIndex}`);
-    if (st && (st.inGate || nowMs - st.lastAudioWallMs < 3000)) {
+    const key = `${ev.gateId}:${ev.slotIndex}`;
+    const lastCrossWall = this.crossingBeepWallMs.get(key) ?? -1e9;
+    if (nowMs - lastCrossWall < 450) {
       return;
+    }
+    const isAiMode = !this.store.simulatorRunning && this.store.mlStatus?.config?.detectorMode === "ai";
+    if (!isAiMode) {
+      const st = this.telemetryBeepStates.get(key);
+      if (st && (st.peakBeepFired || (st.lastAudioWallMs > 0 && nowMs - st.lastAudioWallMs < 3000))) {
+        return;
+      }
+      if (st) {
+        st.peakBeepFired = true;
+        st.lastAudioWallMs = nowMs;
+      }
     }
     const liveHit = this.getLiveRunningRaceHeatContext();
     if (liveHit) {
@@ -1090,6 +1113,7 @@ export class Announcer {
       );
       if (!inHeat) return;
     }
+    this.crossingBeepWallMs.set(key, nowMs);
     const vol = this.prefs.volume > 0 ? this.prefs.volume : 0.9;
     playShortCrossingBeep(scopedStore, ev.gateId, vol);
   }

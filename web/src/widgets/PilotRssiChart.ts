@@ -89,18 +89,29 @@ const TUNE_BEEP_MODES: ReadonlyArray<{ mode: CrossingBeepMode; label: string; ti
   { mode: "exit", label: "Exit", title: "Beep on Exit — as signal drops below exit threshold" },
 ];
 
-function renderTuneBeepModeSegHtml(activeMode: CrossingBeepMode): string {
+const AI_TUNE_BEEP_MODES: ReadonlyArray<{ mode: CrossingBeepMode; label: string; title: string }> = [
+  { mode: "off", label: "Off", title: "No crossing beep" },
+  { mode: "peak", label: "On", title: "Play confirmation beep when the AI detector confirms a crossing" },
+];
+
+function renderTuneBeepModeSegHtml(activeMode: CrossingBeepMode, isAiMode = false): string {
+  const opts = isAiMode ? AI_TUNE_BEEP_MODES : TUNE_BEEP_MODES;
   return `<div class="scope-tune-seg beep-mode-seg" role="radiogroup" aria-label="Beep on crossing">
-    ${TUNE_BEEP_MODES.map(
-      (opt) => `<button
+    ${opts.map((opt) => {
+      const isActive = isAiMode
+        ? opt.mode === "off"
+          ? activeMode === "off"
+          : activeMode !== "off"
+        : activeMode === opt.mode;
+      return `<button
         type="button"
         role="radio"
-        aria-checked="${activeMode === opt.mode}"
-        class="scope-tune-seg-btn ${activeMode === opt.mode ? "is-active" : ""}"
+        aria-checked="${isActive}"
+        class="scope-tune-seg-btn ${isActive ? "is-active" : ""}"
         data-tune-beep-mode="${opt.mode}"
         title="${opt.title}"
-      >${opt.label}</button>`
-    ).join("")}
+      >${opt.label}</button>`;
+    }).join("")}
   </div>`;
 }
 
@@ -5014,13 +5025,18 @@ export class PilotRssiChart extends Component {
     ) {
       return;
     }
+    const isAiMode =
+      !this.store.simulatorRunning && this.store.mlStatus?.config?.detectorMode === "ai";
     const targetGateId = this.activeTuneGateId;
     if (targetGateId === null) {
       const curMode = resolveCrossingBeepMode(this.store.rules.beepMode, this.store.rules.beepOnCross);
       this.optimisticallySelectTuneBeepMode(nextMode);
       const previewGateId = this.store.nodes[0]?.gateId ?? 1;
       playPreviewCrossingBeep(this.store, previewGateId, nextMode);
-      if (nextMode === curMode) return;
+      const unchanged = isAiMode
+        ? (nextMode !== "off") === (curMode !== "off")
+        : nextMode === curMode;
+      if (unchanged) return;
       await this.api
         .updateRules({
           ...this.store.rules,
@@ -5035,7 +5051,10 @@ export class PilotRssiChart extends Component {
     const gateOvr = { ...(gate?.ruleOverrides ?? {}) };
     this.optimisticallySelectTuneBeepMode(nextMode);
     playPreviewCrossingBeep(this.store, targetGateId, nextMode);
-    if (nextMode === globalMode) {
+    const sameAsGlobal = isAiMode
+      ? (nextMode !== "off") === (globalMode !== "off")
+      : nextMode === globalMode;
+    if (sameAsGlobal) {
       delete gateOvr.beepMode;
       delete gateOvr.beepOnCross;
     } else {
@@ -5046,8 +5065,14 @@ export class PilotRssiChart extends Component {
   }
 
   private optimisticallySelectTuneBeepMode(nextMode: CrossingBeepMode): void {
+    const isAiMode =
+      !this.store.simulatorRunning && this.store.mlStatus?.config?.detectorMode === "ai";
     this.tuneDrawerEl.querySelectorAll<HTMLButtonElement>("[data-tune-beep-mode]").forEach((btn) => {
-      const active = btn.dataset.tuneBeepMode === nextMode;
+      const active = isAiMode
+        ? btn.dataset.tuneBeepMode === "off"
+          ? nextMode === "off"
+          : nextMode !== "off"
+        : btn.dataset.tuneBeepMode === nextMode;
       btn.classList.toggle("is-active", active);
       btn.setAttribute("aria-checked", String(active));
     });
@@ -5182,6 +5207,8 @@ export class PilotRssiChart extends Component {
         : gateEffRules
       : this.store.rules;
 
+    const isAiMode =
+      !this.store.simulatorRunning && this.store.mlStatus?.config?.detectorMode === "ai";
     const globalBeepMode = resolveCrossingBeepMode(
       this.store.rules.beepMode,
       this.store.rules.beepOnCross
@@ -5189,12 +5216,17 @@ export class PilotRssiChart extends Component {
     const gateOvrBeepMode = gateOverrideBeepMode(gateOverrides);
     const beepOverridden = isGlobalScope
       ? globalBeepMode !== "off"
-      : gateOvrBeepMode !== undefined && gateOvrBeepMode !== globalBeepMode;
+      : gateOvrBeepMode !== undefined &&
+        (isAiMode
+          ? (gateOvrBeepMode !== "off") !== (globalBeepMode !== "off")
+          : gateOvrBeepMode !== globalBeepMode);
     const beepEffMode: CrossingBeepMode = resolveCrossingBeepMode(
       gateEffRules.beepMode,
       gateEffRules.beepOnCross
     );
-    const beepHelpText = `Plays a single beep on gate enter, at the signal peak, or on gate exit ${isGlobalScope ? "for all timers" : "at this timer"}.`;
+    const beepHelpText = isAiMode
+      ? `Plays a confirmation beep when the AI detector confirms a crossing ${isGlobalScope ? "for all timers" : "at this timer"}.`
+      : `Plays a single beep on gate enter, at the signal peak, or on gate exit ${isGlobalScope ? "for all timers" : "at this timer"}.`;
 
     const beepCardHtml = `
       <div class="scope-tune-card is-beep-card ${beepOverridden ? "is-overridden" : ""}" data-tune-card="beepOnCross">
@@ -5210,7 +5242,7 @@ export class PilotRssiChart extends Component {
           <div class="scope-tune-card-help">${beepHelpText}</div>
         </div>
         <div class="scope-tune-card-controls">
-          ${renderTuneBeepModeSegHtml(beepEffMode)}
+          ${renderTuneBeepModeSegHtml(beepEffMode, isAiMode)}
           ${
             beepOverridden
               ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-tune-act="reset-beep" title="Restore default Beep on crossing" aria-label="Restore default Beep on crossing">${icons.reset(13)}</button>`
@@ -5348,7 +5380,7 @@ export class PilotRssiChart extends Component {
           <div class="rule-help">${beepHelpText}</div>
         </div>
         <div class="rule-input rule-switch-wrap">
-          ${renderTuneBeepModeSegHtml(beepEffMode)}
+          ${renderTuneBeepModeSegHtml(beepEffMode, isAiMode)}
           ${
             beepOverridden
               ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-tune-act="reset-beep" title="Restore default Beep on crossing" aria-label="Restore default Beep on crossing">${icons.reset(13)}</button>`

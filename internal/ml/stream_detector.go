@@ -131,8 +131,45 @@ func (d *StreamDetector) ProcessSample(
 		noiseFloorDbm = -91.0
 	}
 
+	// Absorb small out-of-order BLE batch timestamp jitter (<= 1.5 s) into the current bin without
+	// wiping the normalizer or 29-step lookahead ring!
+	if d.hasSmoothed && timestampUs < d.prevRawTsUs && d.prevRawTsUs-timestampUs <= 1_500_000 {
+		if !d.binHasSample || rawRSSIDbm > d.binMaxRssi {
+			d.binMaxRssi = rawRSSIDbm
+			d.binFloor = noiseFloorDbm
+			d.binHasSample = true
+		}
+		return nil
+	}
+
 	// Maintain clean display EMA for live Signals chart curve
 	if !d.hasSmoothed || timestampUs < d.prevRawTsUs || timestampUs-d.prevRawTsUs > 1_500_000 {
+		var flushed *dsp.CrossingCandidate
+		// Before resetting across a > 1.5 s telemetry packet gap, flush up to `LookaheadSteps + 3`
+		// (340 ms) of ambient decay so a pass crest that occurred right before an ESP-NOW/BLE
+		// packet dropout (e.g. 120-250 ms post-crest) still completes its 280 ms lookahead + NMS!
+		if d.hasSmoothed && timestampUs > d.prevRawTsUs {
+			flushTs := d.nextGridUs
+			if d.binHasSample {
+				if cand := d.pushGridStep(flushTs, d.binMaxRssi, d.binFloor, enterThresholdDbm, exitThresholdDbm, minLockoutUs, liveTune); cand != nil {
+					flushed = cand
+				}
+				d.lastRssi = d.binMaxRssi
+				d.lastFloor = d.binFloor
+				d.binHasSample = false
+				flushTs += StepUs
+			}
+			tailRssi := d.lastRssi
+			tailFloor := d.lastFloor
+			for k := 0; k < LookaheadSteps+3; k++ {
+				tailRssi = 0.55*tailRssi + 0.45*tailFloor
+				if cand := d.pushGridStep(flushTs, tailRssi, tailFloor, enterThresholdDbm, exitThresholdDbm, minLockoutUs, liveTune); cand != nil && flushed == nil {
+					flushed = cand
+				}
+				flushTs += StepUs
+			}
+		}
+
 		d.norm.Reset()
 		d.smoothedRSSI = rawRSSIDbm
 		d.hasSmoothed = true
@@ -161,7 +198,7 @@ func (d *StreamDetector) ProcessSample(
 		d.tsRing[LookaheadSteps] = timestampUs
 		d.ringCount = LookaheadSteps + 1
 		d.probCount = 0
-		return nil
+		return flushed
 	}
 
 	dtUs := timestampUs - d.prevRawTsUs
