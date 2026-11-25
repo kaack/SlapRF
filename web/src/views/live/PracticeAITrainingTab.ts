@@ -1,5 +1,4 @@
 import { Component } from "../../core/component";
-import { scanCustomSelects } from "../../core/custom_select";
 import { esc } from "../../core/format";
 import { icons } from "../../core/icons";
 import { ApiClient } from "../../services/api_client";
@@ -33,6 +32,9 @@ export class PracticeAITrainingTab extends Component {
   private includeOthersForNew = true;
   private includeOthersForFineTune = false;
   private selectedModelId = "";
+  private editingModelName = false;
+  private renameDraft = "";
+  private pendingFocusRename = false;
   private lastCompletedId = "";
   private startingTraining = false;
   private startingEpochs = 28;
@@ -54,6 +56,8 @@ export class PracticeAITrainingTab extends Component {
     this.listen(el, "click", this.handleClick);
     this.listen(el, "change", this.handleChange);
     this.listen(el, "input", this.handleInput);
+    this.listen(el, "keydown", this.handleKeyDown);
+    this.listen(el, "focusout", this.handleFocusOut);
 
     this.onDispose(
       store.subscribe(["practice", "ml", "config", "laps", "crossings"], () => {
@@ -61,7 +65,7 @@ export class PracticeAITrainingTab extends Component {
         if (
           active instanceof HTMLInputElement &&
           this.el.contains(active) &&
-          active.hasAttribute("data-ai-model-name")
+          (active.hasAttribute("data-ai-model-name") || active.hasAttribute("data-ai-rename-input"))
         ) {
           return;
         }
@@ -165,6 +169,7 @@ export class PracticeAITrainingTab extends Component {
       this.includeOthersForNew ? 1 : 0,
       this.includeOthersForFineTune ? 1 : 0,
       this.selectedModelId,
+      this.editingModelName ? 1 : 0,
       this.startingTraining ? 1 : 0,
       this.startingEpochs,
       ml.config.detectorMode,
@@ -199,6 +204,8 @@ export class PracticeAITrainingTab extends Component {
       this.lastSessionId = sess.sessionId;
       this.trainMode = null;
       this.selectedModelId = "";
+      this.editingModelName = false;
+      this.renameDraft = "";
       this.newModelNameDraft = this.defaultNewModelName(sess);
     } else if (!this.newModelNameDraft && sess) {
       this.newModelNameDraft = this.defaultNewModelName(sess);
@@ -268,22 +275,39 @@ export class PracticeAITrainingTab extends Component {
            </div>`
         : "";
 
+    const targetFineTuneModel = selectedModel ?? customModels[0] ?? null;
     const controlsRowHtml =
-      mode === "finetune" && customModels.length > 0
+      mode === "finetune" && targetFineTuneModel
         ? `<div class="ai-train-controls-row">
-             <select class="input ai-finetune-select" data-ai-finetune-select aria-label="Model to fine-tune" ${isBusy ? "disabled" : ""}>
-               ${customModels
-                 .map(
-                   (m) =>
-                     `<option value="${esc(m.modelId)}" ${selectedModel?.modelId === m.modelId ? "selected" : ""}>${esc(m.name)} (${(m.aiMetrics.f1 * 100).toFixed(0)}%)</option>`
-                 )
-                 .join("")}
-             </select>
+             ${
+               this.editingModelName
+                 ? `<input
+                      type="text"
+                      class="input ai-name-input"
+                      data-ai-rename-input
+                      data-model-id="${esc(targetFineTuneModel.modelId)}"
+                      aria-label="Edit model name"
+                      value="${esc(this.renameDraft)}"
+                      maxlength="64"
+                    />`
+                 : `<div class="ai-name-readonly-field" data-ai-readonly-field>
+                      <span class="ai-name-readonly-text">${esc(targetFineTuneModel.name)}</span>
+                      <button
+                        type="button"
+                        class="ai-name-pencil-btn"
+                        data-ai-act="edit-model-name"
+                        data-model-id="${esc(targetFineTuneModel.modelId)}"
+                        title="Rename model"
+                        aria-label="Rename model"
+                        ${isBusy ? "disabled" : ""}
+                      >${icons.pencil(13)}</button>
+                    </div>`
+             }
              <button
                type="button"
                class="btn btn-sm"
                data-ai-act="train-more"
-               data-model-id="${esc(selectedModel?.modelId ?? customModels[0].modelId)}"
+               data-model-id="${esc(targetFineTuneModel.modelId)}"
                ${isBusy ? "disabled" : ""}
              >${isBusy ? "Training…" : "Fine-Tune"}</button>
            </div>`
@@ -380,8 +404,9 @@ export class PracticeAITrainingTab extends Component {
               .map((m) => {
                 const isActive =
                   ml.config.detectorMode === "ai" && ml.config.activeModelId === m.modelId;
+                const isSelected = mode === "finetune" && targetFineTuneModel?.modelId === m.modelId;
                 return `
-                  <div class="ai-model-row ${isActive ? "is-active" : ""}">
+                  <div class="ai-model-row ${isActive ? "is-active" : ""} ${isSelected ? "is-selected" : ""}">
                     <button
                       type="button"
                       class="ai-model-main"
@@ -463,7 +488,14 @@ export class PracticeAITrainingTab extends Component {
         ${savedModelsHtml}
       </div>`;
 
-    scanCustomSelects(this.el);
+    if (this.pendingFocusRename) {
+      this.pendingFocusRename = false;
+      const inp = this.el.querySelector<HTMLInputElement>("[data-ai-rename-input]");
+      if (inp) {
+        inp.focus();
+        inp.select();
+      }
+    }
   }
 
   private selectedSessionIds(mode: AITrainMode): string[] {
@@ -481,8 +513,52 @@ export class PracticeAITrainingTab extends Component {
     const target = e.target;
     if (target instanceof HTMLInputElement && target.hasAttribute("data-ai-model-name")) {
       this.newModelNameDraft = target.value;
+    } else if (target instanceof HTMLInputElement && target.hasAttribute("data-ai-rename-input")) {
+      this.renameDraft = target.value;
     }
   };
+
+  private readonly handleKeyDown = (e: KeyboardEvent): void => {
+    const target = e.target;
+    if (!(target instanceof HTMLInputElement) || !target.hasAttribute("data-ai-rename-input")) {
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      target.blur();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      this.editingModelName = false;
+      this.renameDraft = "";
+      this.render(true);
+    }
+  };
+
+  private readonly handleFocusOut = (e: FocusEvent): void => {
+    const target = e.target;
+    if (!(target instanceof HTMLInputElement) || !target.hasAttribute("data-ai-rename-input")) {
+      return;
+    }
+    if (!this.editingModelName) return;
+    const modelId = target.dataset.modelId || "";
+    this.commitModelRename(modelId, target.value);
+  };
+
+  private commitModelRename(modelId: string, rawName: string): void {
+    this.editingModelName = false;
+    const mod = this.customModels().find((m) => m.modelId === modelId);
+    const trimmed = rawName.trim();
+    if (!mod || !trimmed || trimmed === mod.name) {
+      this.render(true);
+      return;
+    }
+    void this.api
+      .updateMLModel(modelId, { name: trimmed })
+      .then(() => {
+        this.render(true);
+      })
+      .catch((err: unknown) => this.setErr(err));
+  }
 
   private readonly handleChange = (e: Event): void => {
     const target = e.target;
@@ -495,12 +571,6 @@ export class PracticeAITrainingTab extends Component {
       } else {
         this.includeOthersForFineTune = target.checked;
       }
-      this.render(true);
-      return;
-    }
-
-    if (target instanceof HTMLSelectElement && target.hasAttribute("data-ai-finetune-select")) {
-      this.selectedModelId = target.value;
       this.render(true);
       return;
     }
@@ -541,6 +611,7 @@ export class PracticeAITrainingTab extends Component {
     if (modeBtn) {
       const next = modeBtn.dataset.aiTrainMode === "finetune" ? "finetune" : "new";
       this.trainMode = next;
+      this.editingModelName = false;
       if (next === "new" && !this.newModelNameDraft.trim()) {
         this.newModelNameDraft = this.defaultNewModelName(this.store.selectedPracticeSession);
       }
@@ -563,12 +634,25 @@ export class PracticeAITrainingTab extends Component {
         this.onOpenTab("track");
         break;
 
+      case "edit-model-name": {
+        const id = btn.dataset.modelId || "";
+        const mod = this.customModels().find((m) => m.modelId === id);
+        if (!mod) return;
+        this.selectedModelId = mod.modelId;
+        this.editingModelName = true;
+        this.renameDraft = mod.name;
+        this.pendingFocusRename = true;
+        this.render(true);
+        break;
+      }
+
       case "focus-model": {
         const id = btn.dataset.modelId || "";
         const mod = this.customModels().find((m) => m.modelId === id);
         if (mod) {
           this.selectedModelId = mod.modelId;
           this.trainMode = "finetune";
+          this.editingModelName = false;
           this.render(true);
         }
         break;

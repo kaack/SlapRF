@@ -2660,8 +2660,22 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       expect(aiPane.textContent ?? "").not.toContain("AI Training");
       expect(aiPane.textContent ?? "").toContain("Pack 1 Model");
 
-      // 4. Fine-Tune mode picks existing model -> immediately shows progress & disables button synchronously!
-      expect(host.querySelector('[data-ai-finetune-select]')).not.toBeNull();
+      // 4. Fine-Tune mode shows non-editable model field with pencil button to rename on blur!
+      expect(host.querySelector("[data-ai-readonly-field]")).not.toBeNull();
+      host.querySelector<HTMLButtonElement>('[data-ai-act="edit-model-name"]')!.click();
+      await flushMicrotasks();
+      const renameInput = host.querySelector<HTMLInputElement>("[data-ai-rename-input]")!;
+      expect(renameInput).not.toBeNull();
+      renameInput.value = "Indoor Track Model";
+      renameInput.dispatchEvent(new Event("input", { bubbles: true }));
+      renameInput.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+      await flushMicrotasks();
+      expect(store.mlStatus.models[0].name).toBe("Indoor Track Model");
+      expect(host.querySelector("[data-ai-readonly-field]")?.textContent ?? "").toContain(
+        "Indoor Track Model"
+      );
+
+      // Clicking Fine-Tune immediately shows progress & disables button synchronously!
       const trainMoreBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="train-more"]')!;
       expect(trainMoreBtn).not.toBeNull();
       expect(trainMoreBtn.classList.contains("btn-primary")).toBe(false);
