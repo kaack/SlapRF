@@ -2,11 +2,13 @@ package tracker
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	"slaprf/internal/domain"
+	"slaprf/internal/ml"
 	"slaprf/internal/tracestore"
 )
 
@@ -261,5 +263,172 @@ func TestHandsFreePackLoopTraceReplayAndOnDeviceMLTraining(t *testing.T) {
 	frames2, err := eng2.SessionTraceFrames(pack1ID)
 	if err != nil || len(frames2) != len(replayFrames) {
 		t.Fatalf("expected imported trace frames (%d) to match exported (%d), err=%v", len(frames2), len(replayFrames), err)
+	}
+}
+
+type stubSystem1Teacher struct{}
+
+func (stubSystem1Teacher) LabelCandidates(
+	_ context.Context,
+	_ domain.PracticeSession,
+	cands []ml.CandidatePeak,
+	onProgress func(done, total int),
+) ([]ml.CandidateDecision, error) {
+	out := make([]ml.CandidateDecision, 0, len(cands))
+	for i, c := range cands {
+		lbl := "crossing"
+		conf := float32(0.95)
+		if c.ProminenceDb < 22.0 {
+			lbl = "bleed"
+			conf = 0.91
+		}
+		out = append(out, ml.CandidateDecision{
+			ID:         c.ID,
+			GateID:     c.GateID,
+			SlotIndex:  c.SlotIndex,
+			Label:      lbl,
+			AnchorTsUs: c.AnchorTsUs,
+			DeltaMs:    c.MDipOffsetMs,
+			FinalTsUs:  c.AnchorTsUs,
+			PeakDbm:    c.PeakRSSIDbm,
+			Confidence: conf,
+		})
+		if onProgress != nil {
+			onProgress(i+1, len(cands))
+		}
+	}
+	return out, nil
+}
+
+func TestSystem1TeacherDistillationAndDryRunLabeling(t *testing.T) {
+	eng := NewRealEngine()
+	eng.SetTimingHardwareMode(domain.HardwareModeSlapRFBLE, false)
+	fs, err := tracestore.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	defer fs.Close()
+	eng.SetTraceStore(fs)
+
+	tm := ml.NewTeacherManager(t.TempDir(), nil)
+	tm.SetCustomLabeler(stubSystem1Teacher{})
+	eng.SetTeacherManager(tm)
+
+	if _, err := eng.ProvisionGate(ProvisionRequest{Role: "hub", Label: "H1", Fingerprint: "EFE44224", FromHubHello: true}); err != nil {
+		t.Fatalf("ProvisionGate H1: %v", err)
+	}
+	t1TimerID, err := eng.ProvisionGate(ProvisionRequest{Role: "spoke", Label: "T1", Fingerprint: "D3FEDE5D"})
+	if err != nil {
+		t.Fatalf("ProvisionGate T1: %v", err)
+	}
+	if _, err := eng.AddGate("T1", t1TimerID); err != nil {
+		t.Fatalf("AddGate T1: %v", err)
+	}
+
+	enable := true
+	quietSec := 12
+	ps, err := eng.PracticeAction(PracticeActionPayload{
+		Action:           "set_pack_loop",
+		PackLoopEnabled:  &enable,
+		PackLoopQuietSec: &quietSec,
+	})
+	if err != nil {
+		t.Fatalf("set_pack_loop: %v", err)
+	}
+	sessID := ps.ActiveSessionID
+
+	var tsUs uint64 = 2_000_000
+	var seq uint32
+	feed := func(rH1, rT1 float32, n int) {
+		for i := 0; i < n; i++ {
+			seq++
+			tsUs += 20_000
+			var a1, a2 [domain.MaxPilotPoolSize]float32
+			for k := range a1 {
+				a1[k] = -127
+				a2[k] = -127
+			}
+			a1[0] = rH1
+			a2[0] = rT1
+			eng.IngestTelemetryFrame(domain.TimerTelemetryFrame{TimerID: 1, SeqNum: seq, TimestampUs: tsUs, BatteryMv: 4100, NoiseFloorDbm: -90, RSSI: a1})
+			eng.IngestTelemetryFrame(domain.TimerTelemetryFrame{TimerID: t1TimerID, SeqNum: seq, TimestampUs: tsUs + 5_000, BatteryMv: 4100, NoiseFloorDbm: -90, RSSI: a2})
+		}
+	}
+	pass := func(h1 bool) {
+		for k := -10; k <= 10; k++ {
+			u := float32(k) / 4.0
+			mainDbm := -90.0 + 40.0/(1.0+u*u)
+			bleedDbm := -90.0 + 14.0/(1.0+u*u)
+			if h1 {
+				feed(mainDbm, bleedDbm, 1)
+			} else {
+				feed(bleedDbm, mainDbm, 1)
+			}
+		}
+	}
+	feed(-90, -90, 20)
+	pass(true)
+	feed(-90, -90, 140)
+	pass(false)
+	feed(-90, -90, 140)
+	pass(true)
+	feed(-90, -90, 30)
+
+	if _, err := eng.PracticeAction(PracticeActionPayload{Action: "stop_session"}); err != nil {
+		t.Fatalf("stop_session: %v", err)
+	}
+
+	// Clear crossings so session starts completely unlabeled before System 1 distillation
+	if _, err := eng.PracticeAction(PracticeActionPayload{Action: "clear_pilot_laps", SessionID: sessID, SlotIndex: 1}); err != nil {
+		t.Fatalf("clear_pilot_laps: %v", err)
+	}
+
+	// 1. Dry-run preview does not mutate stored crossings
+	dryRes, err := eng.LabelPracticeSession(context.Background(), sessID, MLSessionLabelRequest{DryRun: true, SlotIndex: 1})
+	if err != nil {
+		t.Fatalf("LabelPracticeSession dryRun: %v", err)
+	}
+	if !dryRes.DryRun || dryRes.CrossingsCount != 3 || dryRes.HardNegsCount != 3 {
+		t.Fatalf("expected 3 crossings + 3 bleed hardNegs in dryRun, got %+v", dryRes)
+	}
+	if len(eng.PracticeSnapshot().Sessions[len(eng.PracticeSnapshot().Sessions)-1].Crossings) != 0 {
+		t.Fatalf("expected dryRun to leave stored crossings untouched")
+	}
+
+	// 2. StartMLTraining with autoLabel=true automatically labels the unlabeled `.rfbin` session,
+	// recomputes its laps, and trains the 1D TCN student!
+	created, err := eng.CreateMLModel("Distilled Model")
+	if err != nil {
+		t.Fatalf("CreateMLModel: %v", err)
+	}
+	modID := created.Models[0].ModelID
+	autoTrue := true
+	if _, err := eng.StartMLTraining(MLTrainRequest{
+		Epochs:          6,
+		AutoLabel:       &autoTrue,
+		SessionIDs:      []string{sessID},
+		ContinueModelID: modID,
+	}); err != nil {
+		t.Fatalf("StartMLTraining autoLabel: %v", err)
+	}
+	deadline := time.Now().Add(12 * time.Second)
+	for time.Now().Before(deadline) {
+		st := eng.MLStatus()
+		if !st.Training.Running && st.Training.CompletedModelID == modID {
+			break
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+
+	var labeledSess *domain.PracticeSession
+	for _, s := range eng.PracticeSnapshot().Sessions {
+		if s.SessionID == sessID {
+			cp := s
+			labeledSess = &cp
+			break
+		}
+	}
+	if labeledSess == nil || labeledSess.TeacherLabeledAt == "" || len(labeledSess.Crossings) != 3 || len(labeledSess.Laps) != 1 || len(labeledSess.TeacherHardNegs) != 3 {
+		t.Fatalf("expected session auto-labeled with 3 crossings, 1 lap, and 3 hardNegs; got %+v", labeledSess)
 	}
 }

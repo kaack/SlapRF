@@ -3,6 +3,7 @@ package tracker
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -75,6 +76,31 @@ func (e *Engine) TraceStore() tracestore.Store {
 	return ts
 }
 
+// SetTeacherManager attaches an on-device System 1 `.gguf` teacher model manager to `e`.
+func (e *Engine) SetTeacherManager(tm *ml.TeacherManager) {
+	e.mu.Lock()
+	e.mlTeacher = tm
+	e.mu.Unlock()
+}
+
+// TeacherManager returns the attached on-device System 1 teacher model manager (or nil in pure WASM).
+func (e *Engine) TeacherManager() *ml.TeacherManager {
+	e.mu.RLock()
+	tm := e.mlTeacher
+	e.mu.RUnlock()
+	return tm
+}
+
+// BroadcastMLStatus notifies all registered subscribers with a fresh `MLStatus` snapshot (used when
+// background teacher model download progress ticks).
+func (e *Engine) BroadcastMLStatus() {
+	e.mu.Lock()
+	st := e.buildMLStatusLocked()
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+	e.notifyMLUpdated(st, subs)
+}
+
 // SessionTraceFrames returns the saved raw telemetry frames for `sessionID` (decoded from `.rfbin`)
 // so past Practice sessions render interactive `Signals` curves even after app restarts.
 func (e *Engine) SessionTraceFrames(sessionID string) ([]domain.TimerTelemetryFrame, error) {
@@ -103,6 +129,9 @@ func (e *Engine) ensureMLInitializedLocked() {
 	}
 	if e.mlState.Config.ActiveModelID == "" {
 		e.mlState.Config.ActiveModelID = "ai-base-v0"
+	}
+	if e.mlState.Config.TeacherPackID == "" {
+		e.mlState.Config.TeacherPackID = ml.DefaultTeacherPackID
 	}
 }
 
@@ -210,9 +239,11 @@ func (e *Engine) buildMLStatusLocked() domain.MLStatus {
 	}
 
 	e.syncLiveTuneSliceLocked()
+	teacherSt := e.mlTeacher.Status(e.mlState.Config.TeacherPackID)
 	return domain.MLStatus{
 		Config:             e.mlState.Config,
 		Training:           e.mlTraining,
+		Teacher:            teacherSt,
 		Models:             models,
 		VerifiedPacks:      verifiedPacks,
 		UnverifiedPacks:    unverifiedPacks,
@@ -232,12 +263,14 @@ func (e *Engine) MLStatus() domain.MLStatus {
 	return st
 }
 
-// MLConfigPayload updates the active detector mode, model ID, or live 2-lap tuning toggle.
+// MLConfigPayload updates the active detector mode, model ID, live 2-lap tuning toggle, or Teacher settings.
 type MLConfigPayload struct {
-	DetectorMode    *string `json:"detectorMode,omitempty"`
-	ActiveModelID   *string `json:"activeModelId,omitempty"`
-	LiveTuneEnabled *bool   `json:"liveTuneEnabled,omitempty"`
-	ResetLiveTunes  bool    `json:"resetLiveTunes,omitempty"`
+	DetectorMode     *string `json:"detectorMode,omitempty"`
+	ActiveModelID    *string `json:"activeModelId,omitempty"`
+	LiveTuneEnabled  *bool   `json:"liveTuneEnabled,omitempty"`
+	TeacherPackID    *string `json:"teacherPackId,omitempty"`
+	AutoLabelOnTrain *bool   `json:"autoLabelOnTrain,omitempty"`
+	ResetLiveTunes   bool    `json:"resetLiveTunes,omitempty"`
 }
 
 // UpdateMLConfig applies changes to `MLConfig` and hot-swaps the active TCN weights if needed.
@@ -295,6 +328,18 @@ func (e *Engine) UpdateMLConfig(req MLConfigPayload) (domain.MLStatus, error) {
 
 	if req.LiveTuneEnabled != nil {
 		e.mlState.Config.LiveTuneEnabled = *req.LiveTuneEnabled
+	}
+	if req.TeacherPackID != nil {
+		tp := strings.TrimSpace(*req.TeacherPackID)
+		if _, ok := ml.FindTeacherPack(tp); !ok {
+			st := e.buildMLStatusLocked()
+			e.mu.Unlock()
+			return st, fmt.Errorf("unknown teacherPackId %q", tp)
+		}
+		e.mlState.Config.TeacherPackID = tp
+	}
+	if req.AutoLabelOnTrain != nil {
+		e.mlState.Config.AutoLabelOnTrain = *req.AutoLabelOnTrain
 	}
 	if req.ResetLiveTunes {
 		e.mlLiveTunes = make(map[detKey]domain.MLLiveGateTune)
@@ -918,13 +963,344 @@ func (e *Engine) fallbackActiveReadyModelLocked() {
 }
 
 // ---------------------------------------------------------------------------
+// On-Device System 1 Teacher Management & RSSI Auto-Labeling
+// ---------------------------------------------------------------------------
+
+// StartTeacherDownload starts or resumes downloading an on-device `.gguf` teacher pack.
+func (e *Engine) StartTeacherDownload(packID string) (domain.MLStatus, error) {
+	e.mu.Lock()
+	e.ensureMLInitializedLocked()
+	tm := e.mlTeacher
+	trimmed := strings.TrimSpace(packID)
+	if trimmed == "" {
+		trimmed = e.mlState.Config.TeacherPackID
+	}
+	if _, ok := ml.FindTeacherPack(trimmed); ok {
+		e.mlState.Config.TeacherPackID = trimmed
+	}
+	e.mu.Unlock()
+
+	if tm == nil {
+		return e.MLStatus(), errors.New("on-device AI labeler download requires SlapRF Android or SlapRF Portable")
+	}
+	if err := tm.StartDownload(trimmed); err != nil {
+		return e.MLStatus(), err
+	}
+	st := e.MLStatus()
+	return st, nil
+}
+
+// CancelTeacherDownload cancels an active `.gguf` download while retaining `.part` bytes for resume.
+func (e *Engine) CancelTeacherDownload() domain.MLStatus {
+	e.mu.RLock()
+	tm := e.mlTeacher
+	e.mu.RUnlock()
+	if tm != nil {
+		tm.CancelDownload()
+	}
+	return e.MLStatus()
+}
+
+// DeleteTeacherPack removes a cached `.gguf` teacher model pack from local storage.
+func (e *Engine) DeleteTeacherPack(packID string) (domain.MLStatus, error) {
+	e.mu.RLock()
+	tm := e.mlTeacher
+	e.mu.RUnlock()
+	if tm == nil {
+		return e.MLStatus(), nil
+	}
+	err := tm.DeletePack(packID)
+	return e.MLStatus(), err
+}
+
+// MLSessionLabelRequest configures `POST /v1/ml/sessions/{sessionId}:label`.
+type MLSessionLabelRequest struct {
+	DryRun    bool   `json:"dryRun"`
+	SlotIndex int    `json:"slotIndex,omitempty"`
+	PackID    string `json:"packId,omitempty"`
+}
+
+// MLSessionLabelResponse returns the System 1 Teacher's decisions and (when `!DryRun`) the updated state.
+type MLSessionLabelResponse struct {
+	SessionID      string                        `json:"sessionId"`
+	PackID         string                        `json:"packId"`
+	DryRun         bool                          `json:"dryRun"`
+	CandidateCount int                           `json:"candidateCount"`
+	CrossingsCount int                           `json:"crossingsCount"`
+	HardNegsCount  int                           `json:"hardNegsCount"`
+	Decisions      []ml.CandidateDecision        `json:"decisions"`
+	Practice       *domain.PracticeManagerState  `json:"practice,omitempty"`
+	MLStatus       domain.MLStatus               `json:"mlStatus"`
+}
+
+// LabelPracticeSession runs the on-device System 1 Qwen3 Teacher on `sessionID`'s `.rfbin` trace.
+// When `req.DryRun == true`, decisions are returned without mutating stored crossings so the RSSI
+// Editor can stage them interactively; when `false`, unedited crossings and `TeacherHardNegs` are
+// updated while preserving any human manual pins (`+`/drag) and deletions (`x`).
+func (e *Engine) LabelPracticeSession(ctx context.Context, sessionID string, req MLSessionLabelRequest) (MLSessionLabelResponse, error) {
+	e.mu.Lock()
+	e.ensureMLInitializedLocked()
+	e.ensurePracticeStateInitializedLocked()
+
+	targetID := strings.TrimSpace(sessionID)
+	if targetID == "" || strings.EqualFold(targetID, "current") {
+		targetID = e.practiceState.SelectedSessionID
+		if targetID == "" {
+			targetID = e.practiceState.ActiveSessionID
+		}
+	}
+	target := e.findPracticeSessionLocked(targetID)
+	if target == nil {
+		st := e.buildMLStatusLocked()
+		e.mu.Unlock()
+		return MLSessionLabelResponse{MLStatus: st}, fmt.Errorf("practice session %q not found", sessionID)
+	}
+	if target.Active && e.practiceState.ActiveSessionID == target.SessionID && !e.isLiveRaceHeatActiveLocked() && len(e.crossings) > len(target.Crossings) {
+		e.syncActivePracticeRecordsLocked()
+	}
+
+	sessSnap := clonePracticeSession(*target)
+	ts := e.ensureTraceStoreLocked()
+	tm := e.mlTeacher
+	prefPack := strings.TrimSpace(req.PackID)
+	if prefPack == "" {
+		prefPack = e.mlState.Config.TeacherPackID
+	}
+	e.mu.Unlock()
+
+	samples, err := ts.ReadSession(sessSnap.SessionID)
+	if err != nil || len(samples) < 16 {
+		return MLSessionLabelResponse{MLStatus: e.MLStatus()}, errors.New("no recorded RSSI waveform (.rfbin) available for this practice session")
+	}
+
+	labeler, resolvedPackID, err := tm.ResolveLabeler(prefPack)
+	if err != nil {
+		return MLSessionLabelResponse{MLStatus: e.MLStatus()}, err
+	}
+
+	cands := ml.ExtractSessionCandidates(sessSnap, samples)
+	if req.SlotIndex > 0 {
+		filtered := cands[:0]
+		for _, c := range cands {
+			if c.SlotIndex == req.SlotIndex {
+				filtered = append(filtered, c)
+			}
+		}
+		cands = filtered
+	}
+	if len(cands) == 0 {
+		st := e.MLStatus()
+		return MLSessionLabelResponse{
+			SessionID: sessSnap.SessionID,
+			PackID:    resolvedPackID,
+			DryRun:    req.DryRun,
+			Decisions: []ml.CandidateDecision{},
+			MLStatus:  st,
+		}, nil
+	}
+
+	decisions, err := labeler.LabelCandidates(ctx, sessSnap, cands, nil)
+	if err != nil {
+		return MLSessionLabelResponse{MLStatus: e.MLStatus()}, err
+	}
+
+	var crossCount, negCount int
+	for _, d := range decisions {
+		if d.Label == "crossing" {
+			crossCount++
+		} else {
+			negCount++
+		}
+	}
+
+	if req.DryRun {
+		return MLSessionLabelResponse{
+			SessionID:      sessSnap.SessionID,
+			PackID:         resolvedPackID,
+			DryRun:         true,
+			CandidateCount: len(cands),
+			CrossingsCount: crossCount,
+			HardNegsCount:  negCount,
+			Decisions:      decisions,
+			MLStatus:       e.MLStatus(),
+		}, nil
+	}
+
+	e.mu.Lock()
+	liveTarget := e.findPracticeSessionLocked(sessSnap.SessionID)
+	if liveTarget == nil {
+		st := e.buildMLStatusLocked()
+		e.mu.Unlock()
+		return MLSessionLabelResponse{MLStatus: st}, fmt.Errorf("practice session %q not found", sessSnap.SessionID)
+	}
+	e.applyTeacherDecisionsLocked(liveTarget, resolvedPackID, req.SlotIndex, decisions)
+	practiceSnap := clonePracticeManagerState(e.practiceState)
+	mlSnap := e.buildMLStatusLocked()
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	e.notifyPracticeUpdated(practiceSnap, subs)
+	e.notifyMLUpdated(mlSnap, subs)
+
+	return MLSessionLabelResponse{
+		SessionID:      sessSnap.SessionID,
+		PackID:         resolvedPackID,
+		DryRun:         false,
+		CandidateCount: len(cands),
+		CrossingsCount: crossCount,
+		HardNegsCount:  negCount,
+		Decisions:      decisions,
+		Practice:       &practiceSnap,
+		MLStatus:       mlSnap,
+	}, nil
+}
+
+// applyTeacherDecisionsLocked merges System 1 Teacher decisions into `target` while strictly
+// preserving all pilot manual crossings (`Manual == true`) and manual deletions (`ManualDeletedCrossings`).
+func (e *Engine) applyTeacherDecisionsLocked(
+	target *domain.PracticeSession,
+	packID string,
+	slotFilter int,
+	decisions []ml.CandidateDecision,
+) {
+	orderedGates := e.orderedGatesForPracticeSessionLocked(target)
+	callsignBySlot := make(map[int]string, len(target.Pilots))
+	for _, sp := range target.Pilots {
+		if sp.SlotIndex > 0 && sp.Callsign != "" {
+			callsignBySlot[sp.SlotIndex] = sp.Callsign
+		}
+	}
+
+	var keptCrossings []domain.GateCrossingEvent
+	var manualCrossings []domain.GateCrossingEvent
+	affectedSlots := make(map[int]bool)
+
+	for _, c := range target.Crossings {
+		if slotFilter > 0 && c.SlotIndex != slotFilter {
+			keptCrossings = append(keptCrossings, c)
+			continue
+		}
+		affectedSlots[c.SlotIndex] = true
+		if c.Manual {
+			keptCrossings = append(keptCrossings, c)
+			manualCrossings = append(manualCrossings, c)
+		}
+	}
+
+	var keptHardNegs []domain.TeacherNegativeMark
+	for _, hn := range target.TeacherHardNegs {
+		if slotFilter > 0 && hn.SlotIndex != slotFilter {
+			keptHardNegs = append(keptHardNegs, hn)
+		}
+	}
+
+	for _, dec := range decisions {
+		if slotFilter > 0 && dec.SlotIndex != slotFilter {
+			continue
+		}
+		affectedSlots[dec.SlotIndex] = true
+		if dec.Label == "crossing" {
+			if dec.Confidence < 0.50 {
+				continue
+			}
+			// Respect explicit human `x` deletions and manual `+` pins!
+			blocked := false
+			for _, del := range target.ManualDeletedCrossings {
+				if del.GateID == dec.GateID && del.SlotIndex == dec.SlotIndex && absDiffUs(del.TimestampUs, dec.FinalTsUs) <= 180_000 {
+					blocked = true
+					break
+				}
+			}
+			if !blocked {
+				for _, mc := range manualCrossings {
+					if mc.GateID == dec.GateID && mc.SlotIndex == dec.SlotIndex && absDiffUs(mc.TimestampUs, dec.FinalTsUs) <= 220_000 {
+						blocked = true
+						break
+					}
+				}
+			}
+			if blocked {
+				continue
+			}
+			pk := dec.PeakDbm
+			ev, err := e.newManualCrossingEventLocked(orderedGates, dec.GateID, dec.SlotIndex, dec.FinalTsUs, &pk, callsignBySlot[dec.SlotIndex])
+			if err != nil {
+				continue
+			}
+			ev.Manual = false // AI-labeled rather than human manual override
+			for _, c := range keptCrossings {
+				if c.EventID >= ev.EventID {
+					ev.EventID = c.EventID + 1
+					e.nextEventID = ev.EventID
+				}
+			}
+			keptCrossings = append(keptCrossings, ev)
+		} else {
+			keptHardNegs = append(keptHardNegs, domain.TeacherNegativeMark{
+				GateID:      dec.GateID,
+				SlotIndex:   dec.SlotIndex,
+				TimestampUs: dec.FinalTsUs,
+				Label:       dec.Label,
+				Confidence:  dec.Confidence,
+				PeakRSSIDbm: dec.PeakDbm,
+			})
+		}
+	}
+
+	sort.Slice(keptCrossings, func(i, j int) bool {
+		return keptCrossings[i].TimestampUs < keptCrossings[j].TimestampUs
+	})
+	target.Crossings = keptCrossings
+	target.TeacherHardNegs = keptHardNegs
+	target.TeacherLabeledAt = nowISO()
+	target.TeacherPackID = packID
+
+	sessionRules := e.rules
+	if target.Rules != nil {
+		sessionRules = target.Rules.Normalized()
+	}
+
+	slotsList := make([]int, 0, len(affectedSlots))
+	for sl := range affectedSlots {
+		if sl > 0 {
+			slotsList = append(slotsList, sl)
+		}
+	}
+	sort.Ints(slotsList)
+	for _, sl := range slotsList {
+		target.Crossings, target.Laps = e.replayPilotCrossingsLocked(
+			target.Crossings,
+			target.Laps,
+			orderedGates,
+			e.detected,
+			sessionRules,
+			sl,
+			callsignBySlot[sl],
+		)
+	}
+	e.recomputePracticeSessionLapsLocked(target)
+	target.UpdatedAt = nowISO()
+	target.Summaries = e.computePracticeSessionSummariesLocked(target)
+
+	isActive := target.Active && e.practiceState.ActiveSessionID == target.SessionID && !e.isLiveRaceHeatActiveLocked()
+	if isActive {
+		e.crossings = append([]domain.GateCrossingEvent(nil), target.Crossings...)
+		e.syncActivePracticeLapsLocked(target)
+		for _, sl := range slotsList {
+			e.rebuildPilotLiveProgressFromCrossingsLocked(sl, orderedGates)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Background Pure-Go Base Model Trainer (`POST /v1/ml:train`)
 // ---------------------------------------------------------------------------
 
-// MLTrainRequest customizes epochs, source Practice sessions, model name, or continued fine-tuning.
+// MLTrainRequest customizes epochs, source Practice sessions, model name, continued fine-tuning, or pre-training AI labeling.
 type MLTrainRequest struct {
 	Epochs            int      `json:"epochs,omitempty"`
 	IncludeUnverified bool     `json:"includeUnverified,omitempty"`
+	AutoLabel         *bool    `json:"autoLabel,omitempty"`
 	SessionIDs        []string `json:"sessionIds,omitempty"`
 	ContinueModelID   string   `json:"continueModelId,omitempty"`
 	ModelName         string   `json:"modelName,omitempty"`
@@ -1019,6 +1395,12 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 	}
 	pilotsCopy := append([]domain.PilotSlot(nil), e.pilots...)
 	ts := e.ensureTraceStoreLocked()
+	tm := e.mlTeacher
+	prefTeacherPack := e.mlState.Config.TeacherPackID
+	wantAutoLabel := e.mlState.Config.AutoLabelOnTrain
+	if req.AutoLabel != nil {
+		wantAutoLabel = *req.AutoLabel
+	}
 
 	nextVer := 1
 	for _, m := range e.mlState.Models {
@@ -1045,6 +1427,9 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 		sessionsCopy,
 		pilotsCopy,
 		ts,
+		tm,
+		prefTeacherPack,
+		wantAutoLabel,
 		initTCN,
 		nextVer,
 		epochs,
@@ -1064,6 +1449,9 @@ func (e *Engine) runMLTrainingWorker(
 	sessions []domain.PracticeSession,
 	pilots []domain.PilotSlot,
 	ts tracestore.Store,
+	tm *ml.TeacherManager,
+	prefTeacherPack string,
+	wantAutoLabel bool,
 	initTCN *ml.TCN,
 	nextVer int,
 	epochs int,
@@ -1093,12 +1481,70 @@ func (e *Engine) runMLTrainingWorker(
 		}
 	}
 
+	// Stage 0 (Optional On-Device System 1 Distillation): Auto-label unlabeled `.rfbin` packs before TCN training!
+	if wantAutoLabel && tm != nil {
+		if labeler, resolvedPackID, lErr := tm.ResolveLabeler(prefTeacherPack); lErr == nil && labeler != nil {
+			var toLabelIdx []int
+			for idx, s := range sessions {
+				if len(selectedSet) > 0 && !selectedSet[s.SessionID] {
+					continue
+				}
+				if s.TrainingVerified || s.TeacherLabeledAt != "" {
+					continue
+				}
+				if samples, rErr := ts.ReadSession(s.SessionID); rErr == nil && len(samples) >= 25 {
+					toLabelIdx = append(toLabelIdx, idx)
+				}
+			}
+
+			var anyUpdated bool
+			for stepIdx, idx := range toLabelIdx {
+				s := sessions[idx]
+				e.mu.Lock()
+				e.mlTraining.Message = fmt.Sprintf("Auto-labeling %s (%d / %d) on device...", s.Name, stepIdx+1, len(toLabelIdx))
+				progSt := e.buildMLStatusLocked()
+				progSubs := append([]EventSubscriber(nil), e.subscribers...)
+				e.mu.Unlock()
+				e.notifyMLUpdated(progSt, progSubs)
+
+				samples, rErr := ts.ReadSession(s.SessionID)
+				if rErr != nil || len(samples) < 25 {
+					continue
+				}
+				cands := ml.ExtractSessionCandidates(s, samples)
+				if len(cands) == 0 {
+					continue
+				}
+				decs, dErr := labeler.LabelCandidates(context.Background(), s, cands, nil)
+				if dErr != nil || len(decs) == 0 {
+					continue
+				}
+
+				e.mu.Lock()
+				if live := e.findPracticeSessionLocked(s.SessionID); live != nil {
+					e.applyTeacherDecisionsLocked(live, resolvedPackID, 0, decs)
+					sessions[idx] = clonePracticeSession(*live)
+					anyUpdated = true
+				}
+				e.mu.Unlock()
+			}
+
+			if anyUpdated {
+				e.mu.Lock()
+				pSnap := clonePracticeManagerState(e.practiceState)
+				subs := append([]EventSubscriber(nil), e.subscribers...)
+				e.mu.Unlock()
+				e.notifyPracticeUpdated(pSnap, subs)
+			}
+		}
+	}
+
 	for _, s := range sessions {
 		if len(selectedSet) > 0 {
 			if !selectedSet[s.SessionID] {
 				continue
 			}
-		} else if !s.TrainingVerified && !includeUnverified {
+		} else if !s.TrainingVerified && s.TeacherLabeledAt == "" && !includeUnverified {
 			continue
 		}
 		samples, err := ts.ReadSession(s.SessionID)

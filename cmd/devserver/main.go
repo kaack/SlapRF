@@ -58,11 +58,12 @@ func main() {
 		})
 		defer appLogger.Close()
 		pSrv := portable.NewServer(portable.Config{
-			Version:  "dev",
-			LogPath:  logPath,
-			LogLevel: *logLevelFlag,
-			AppLog:   appLogger,
-			Log:      appLogger.StdLogger(),
+			Version:    "dev",
+			TeacherDir: filepath.Join(repoRoot, ".cache", "teacher_models"),
+			LogPath:    logPath,
+			LogLevel:   *logLevelFlag,
+			AppLog:     appLogger,
+			Log:        appLogger.StdLogger(),
 		})
 		pSrv.RegisterAPIRoutes(mux)
 	}

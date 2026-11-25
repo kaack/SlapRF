@@ -120,6 +120,7 @@ type Engine struct {
 	mlActiveTCN            *ml.TCN
 	mlActiveModelID        string
 	mlTraining             domain.MLTrainingProgress
+	mlTeacher              *ml.TeacherManager
 	subscribers            []EventSubscriber
 }
 

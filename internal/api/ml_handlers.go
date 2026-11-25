@@ -155,6 +155,80 @@ func (s *Server) handleStartMLTraining(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, st)
 }
 
+func (s *Server) handleGetMLTeacher(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.activeEngine().MLStatus().Teacher)
+}
+
+func (s *Server) handleDownloadMLTeacher(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		PackID string `json:"packId,omitempty"`
+	}
+	if err := decodeOptionalJSONBody(r, &body); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	st, err := s.activeEngine().StartTeacherDownload(body.PackID)
+	if err != nil {
+		writeErrorJSON(w, http.StatusConflict, err.Error())
+		return
+	}
+	s.logUserAction("ML", "Started on-device AI labeler model download (pack=%s)", st.Config.TeacherPackID)
+	writeJSON(w, http.StatusAccepted, st)
+}
+
+func (s *Server) handleCancelMLTeacher(w http.ResponseWriter, r *http.Request) {
+	if err := decodeOptionalJSONBody(r, &struct{}{}); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	st := s.activeEngine().CancelTeacherDownload()
+	s.logUserAction("ML", "Canceled on-device AI labeler model download")
+	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) handleDeleteMLTeacherPack(w http.ResponseWriter, r *http.Request) {
+	packID := strings.TrimSpace(r.PathValue("packId"))
+	if !rejectColonInPathValue(w, packID) {
+		return
+	}
+	st, err := s.activeEngine().DeleteTeacherPack(packID)
+	if err != nil {
+		writeErrorJSON(w, http.StatusNotFound, err.Error())
+		return
+	}
+	s.logUserAction("ML", "Deleted cached AI labeler pack %s", packID)
+	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) handleMLSessionCustomAction(w http.ResponseWriter, r *http.Request) {
+	rawID, customVerb, ok := cutCustomActionPathValue(w, r, "sessionId", "POST")
+	if !ok {
+		return
+	}
+	if customVerb != "label" {
+		writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("unknown ML session action %q (expected \":label\")", customVerb))
+		return
+	}
+	var body tracker.MLSessionLabelRequest
+	if err := decodeOptionalJSONBody(r, &body); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	res, err := s.activeEngine().LabelPracticeSession(r.Context(), rawID, body)
+	if err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "not found") {
+			writeErrorJSON(w, http.StatusNotFound, msg)
+		} else {
+			writeErrorJSON(w, http.StatusConflict, msg)
+		}
+		return
+	}
+	s.logUserAction("ML", "Labeled practice session %s with on-device AI (%s, dryRun=%v, crossings=%d, hardNegs=%d)",
+		res.SessionID, res.PackID, res.DryRun, res.CrossingsCount, res.HardNegsCount)
+	writeJSON(w, http.StatusOK, res)
+}
+
 func (s *Server) handleCreateMLModel(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
