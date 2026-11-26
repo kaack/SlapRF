@@ -523,7 +523,10 @@ func bootAndRunSimulator(appPath, bundleID, simDevice string) {
 		log.Fatalf("[build-ios] No available iOS/iPadOS Simulator found in `xcrun simctl list devices available`")
 	}
 	_ = exec.Command("xcrun", "simctl", "boot", target).Run()
-	_ = exec.Command("open", "-a", "Simulator").Run()
+	if err := exec.Command("open", "-a", "Simulator").Run(); err != nil {
+		// Xcode 27+ unified Simulator.app into DeviceHub.app under Xcode.app/Contents/Applications.
+		_ = exec.Command("open", "-a", "/Applications/Xcode.app/Contents/Applications/DeviceHub.app").Run()
+	}
 	runCmd(nil, "xcrun", "simctl", "bootstatus", target, "-b")
 	runCmd(nil, "xcrun", "simctl", "install", target, appPath)
 	runCmd(nil, "xcrun", "simctl", "launch", "--console-pty", "--terminate-running-process", target, bundleID)
