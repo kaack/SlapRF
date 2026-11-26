@@ -44,10 +44,10 @@
 
 ## Overview
 
-SlapRF has two parts. You can use them together or separately:
+SlapRF combines native race control software with low-cost wireless field timers:
 
-1. **SlapRF App**: Timing and race control software for Android, Windows, macOS, and Linux. It runs as a single file and needs no external runtime or database. Connect it to SlapRF DIY timers, RotorHazard timers, or ImmersionRC LapRF 8-Way timers.
-2. **SlapRF DIY Timers (~$25 per field timer)**: Wireless `5.8 GHz` timers built on the Seeed Studio XIAO ESP32-C5 with no soldering. Place one Hub (`H1`) at the Start/Finish gate to time laps. Add up to 6 battery-powered Spokes (`T1`-`T6`) on the track to record `S1`, `S2`, and `S3` section splits over `2.4 GHz` ESP-NOW.
+1. **SlapRF App**: Timing and race control software for Android, Windows, macOS, and Linux. It runs as a single file with no external runtime or database, and connects to your Hub (`H1`) over Bluetooth LE, USB-C, or Power over Ethernet (PoE).
+2. **SlapRF DIY Timers (~$25 per field timer, recommended)**: Wireless `5.8 GHz` timers built on the Seeed Studio XIAO ESP32-C5 with no soldering. Place one Hub (`H1`) at the Start/Finish gate to time laps. Add up to 6 battery-powered Spokes (`T1`-`T6`) on the track to record `S1`, `S2`, and `S3` section splits over `2.4 GHz` ESP-NOW.
 
 ## Quick Start
 
@@ -55,7 +55,7 @@ SlapRF has two parts. You can use them together or separately:
 | :--- | :--- |
 | **Try the browser demo** | Open **[slaprf.app](https://slaprf.app)** to test the track simulator, practice splits, and race brackets (demo only; install the app to time live flights). |
 | **Build a ~$25 field timer** | Attach the included antenna to a Seeed XIAO ESP32-C5. Connect the board over USB-C and flash Hub or Spoke firmware from the **[Web Firmware Flasher](https://slaprf.app/docs/hardware/flashing/)**. |
-| **Connect RotorHazard or LapRF** | Download the app from **[GitHub Releases](https://github.com/kaack/SlapRF/releases/latest)**. Open **Network**, select RotorHazard or LapRF 8-Way (`Network` or `USB`), and connect. |
+| **Connect and fly** | Download the app from **[GitHub Releases](https://github.com/kaack/SlapRF/releases/latest)**. Open **Network** and connect your Hub (`H1`) over Bluetooth LE, USB-C, or a **[PoE Ethernet Bridge](https://slaprf.app/docs/hardware/poe-bridge/)**. |
 
 ---
 
@@ -84,6 +84,21 @@ Each SlapRF timer uses the `2.4 GHz` and `5 GHz` radio on a Seeed Studio XIAO ES
 | <a href="docs-site/static/images/slaprf-setup-ble-dark.jpg?raw=1#gh-dark-mode-only"><img src="docs-site/static/images/slaprf-setup-ble-dark.jpg#gh-dark-mode-only" alt="SlapRF Bluetooth Mode Setup" /></a><a href="docs-site/static/images/slaprf-setup-ble.jpg?raw=1#gh-light-mode-only"><img src="docs-site/static/images/slaprf-setup-ble.jpg#gh-light-mode-only" alt="SlapRF Bluetooth Mode Setup" /></a> | <a href="docs-site/static/images/slaprf-setup-dark.jpg?raw=1#gh-dark-mode-only"><img src="docs-site/static/images/slaprf-setup-dark.jpg#gh-dark-mode-only" alt="SlapRF USB Mode Setup" /></a><a href="docs-site/static/images/slaprf-setup.jpg?raw=1#gh-light-mode-only"><img src="docs-site/static/images/slaprf-setup.jpg#gh-light-mode-only" alt="SlapRF USB Mode Setup" /></a> |
 | Power `H1` from a battery at the Start/Finish gate and connect over Bluetooth LE. | Connect `H1` over USB-C at the flight line while wireless Spokes (`T1`-`T6`) stay on the track. |
 
+### Power over Ethernet (PoE Bridge)
+
+To place Hub `H1` up to `100 m` (`328 ft`) away at the Start/Finish gate with no battery at the gate, connect `H1` to a separate **[Waveshare ESP32-P4 PoE Bridge](https://slaprf.app/docs/hardware/poe-bridge/)**. An `802.3af` PoE switch or injector powers the bridge over Ethernet, and the bridge powers `H1` and bridges serial data through its USB-A port.
+
+<div align="center">
+  <a href="docs-site/static/images/slaprf-setup-poe-dark.jpg?raw=1#gh-dark-mode-only">
+    <img src="docs-site/static/images/slaprf-setup-poe-dark.jpg#gh-dark-mode-only" width="760" alt="SlapRF PoE Ethernet Bridge Setup" />
+  </a>
+  <a href="docs-site/static/images/slaprf-setup-poe.jpg?raw=1#gh-light-mode-only">
+    <img src="docs-site/static/images/slaprf-setup-poe.jpg#gh-light-mode-only" width="760" alt="SlapRF PoE Ethernet Bridge Setup" />
+  </a>
+</div>
+
+### Board Guide
+
 <div align="center">
   <a href="docs-site/static/images/xiao-c5-board-guide-dark.jpg?raw=1#gh-dark-mode-only">
     <img src="docs-site/static/images/xiao-c5-board-guide-dark.jpg#gh-dark-mode-only" width="760" alt="Seeed Studio XIAO ESP32-C5 Board Guide" />
@@ -94,8 +109,15 @@ Each SlapRF timer uses the `2.4 GHz` and `5 GHz` radio on a Seeed Studio XIAO ES
 </div>
 
 - **[Parts and Assembly](https://slaprf.app/docs/hardware/parts-and-assembly/)**: Bill of materials, antenna installation, 3D-printable cases, and track placement.
-- **[Web Firmware Flasher](https://slaprf.app/docs/hardware/flashing/)**: Flash Bluetooth Hub, USB Hub, or Spoke (`T1`-`T6`) firmware from Chrome, Edge, Opera, or the SlapRF app.
+- **[PoE Ethernet Bridge](https://slaprf.app/docs/hardware/poe-bridge/)**: Bill of materials, browser flashing, and setup for wired `802.3af` PoE gates.
+- **[Web Firmware Flasher](https://slaprf.app/docs/hardware/flashing/)**: Flash Bluetooth Hub, USB Hub, Spoke (`T1`-`T6`), or PoE Bridge firmware from Chrome, Edge, Opera, or the SlapRF app.
 - **[Status LED Guide](https://slaprf.app/docs/hardware/status-leds/)**: LED blink patterns for boot, channel scan, Bluetooth connection, and ESP-NOW link state.
+
+---
+
+## LapRF 8-Way and RotorHazard Lap Timers
+
+SlapRF DIY timers are the recommended hardware for SlapRF, including wireless multi-gate section splits and on-device AI crossing detection. The SlapRF app also supports **ImmersionRC LapRF 8-Way** and **RotorHazard** lap timers over Ethernet, Wi-Fi, or USB serial; see **[RotorHazard and LapRF 8-Way](https://slaprf.app/docs/journeys/external-timers/)** for connection settings.
 
 ---
 
@@ -105,8 +127,8 @@ Download prebuilt releases from **[GitHub Releases](https://github.com/kaack/Sla
 
 | Platform | Release File | Notes |
 | :--- | :--- | :--- |
-| **Android** (`ARM64`) | `slaprf-android-arm64.apk` | USB-C serial, Bluetooth LE Hub, voice callouts, and `-lan` Wi-Fi server |
-| **Windows** (`x86_64`) | `slaprf-windows-amd64.exe` | Portable executable with USB serial and Bluetooth LE support |
+| **Android** (`ARM64`) | `slaprf-android-arm64.apk` | USB-C serial, Bluetooth LE Hub, PoE Bridge over LAN, voice callouts, and `-lan` Wi-Fi server |
+| **Windows** (`x86_64`) | `slaprf-windows-amd64.exe` | Portable executable with USB serial, Bluetooth LE, and PoE Bridge support |
 | **macOS** (`Apple Silicon` / `Intel`) | `slaprf-macos-arm64` / `slaprf-macos-amd64` | Single binary for Apple Silicon and Intel Macs |
 | **Linux and Raspberry Pi** (`x86_64` / `ARM64`) | `slaprf-linux-amd64` / `slaprf-linux-arm64` | Desktop app or headless LAN server (`./slaprf -lan -addr 0.0.0.0:8090`) |
 
@@ -117,7 +139,7 @@ See **[Installation and LAN Sharing](https://slaprf.app/docs/getting-started/ins
 ## Documentation
 
 - **Getting Started**: [Overview](https://slaprf.app/docs/) · [Architecture and Modes](https://slaprf.app/docs/getting-started/architecture/) · [Installation and LAN Sharing](https://slaprf.app/docs/getting-started/installation/)
-- **Hardware**: [Parts and Assembly](https://slaprf.app/docs/hardware/parts-and-assembly/) · [Web Firmware Flasher](https://slaprf.app/docs/hardware/flashing/) · [Status LED Guide](https://slaprf.app/docs/hardware/status-leds/)
+- **Hardware**: [Parts and Assembly](https://slaprf.app/docs/hardware/parts-and-assembly/) · [PoE Ethernet Bridge](https://slaprf.app/docs/hardware/poe-bridge/) · [Web Firmware Flasher](https://slaprf.app/docs/hardware/flashing/) · [Status LED Guide](https://slaprf.app/docs/hardware/status-leds/)
 - **Guides**: [Practice](https://slaprf.app/docs/journeys/practice/) · [Multi-Gate Section Splits](https://slaprf.app/docs/journeys/multi-gate-splits/) · [AI Detection and Training](https://slaprf.app/docs/journeys/ai-crossing-detection/) · [Race Events](https://slaprf.app/docs/journeys/race-events/) · [RotorHazard and LapRF 8-Way](https://slaprf.app/docs/journeys/external-timers/)
 - **Reference**: [UI Reference](https://slaprf.app/docs/reference/ui-reference/) · [REST API (OpenAPI 3.1)](https://slaprf.app/docs/reference/api-reference/rest/) · [Stream API (AsyncAPI 3.0)](https://slaprf.app/docs/reference/api-reference/async/) · [Troubleshooting](https://slaprf.app/docs/reference/troubleshooting/)
 

@@ -66,4 +66,4 @@ A SlapRF track uses one Hub timer (`H1`) and up to 6 optional Spoke timers (`T1`
 | Transport Latency | Low (ideal for solo & club practice) | Lowest (`< 0.2 ms` USB) | Sub-millisecond (`< 0.5 ms` wired LAN) |
 
 > [!TIP]
-> For everyday practice, Bluetooth Mode is the fastest field setup: place one battery-powered Hub at the Start / Finish gate, connect from your phone at the bench, and fly. For formal race heats where lowest wired latency matters most, use a USB Hub.
+> For everyday practice, Bluetooth Mode is the fastest field setup: place one battery-powered Hub at the Start / Finish gate, connect from your phone at the bench, and fly. For formal race heats where lowest wired latency matters most, use a USB Hub or a PoE Bridge.

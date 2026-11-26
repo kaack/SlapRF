@@ -46,4 +46,4 @@ Connect your laptop or phone to the same network (wired Ethernet or Wi-Fi router
 {{% /steps %}}
 
 > [!TIP]
-> Selecting **`SlapRF (Network)`** adds a **PoE Bridge** tab to the main navigation so you can inspect Ethernet link speed, switch between DHCP and a static IPv4 address, change USB-A baud rate, or reboot the bridge remotely with no serial commands.
+> Connecting to a bridge in **`SlapRF (Network)`** adds a **PoE Bridge** tab to the main navigation so you can inspect Ethernet link speed, switch between DHCP and a static IPv4 address, change USB-A baud rate, restart the attached USB timer, or reboot the bridge remotely with no serial commands.
