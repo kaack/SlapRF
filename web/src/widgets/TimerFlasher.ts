@@ -742,7 +742,7 @@ export class TimerFlasher extends Component {
             <h3 class="flasher-pane-title">What are you flashing?</h3>
             <span class="note flasher-step-count">Step 1 of ${totalSteps}</span>
           </div>
-          <p>Select the board connected over USB-C. Flash <strong>Gate Timers</strong> for 5.8 GHz race timing, or flash an optional <strong>PoE Bridge</strong> to power and connect Hub H1 over a single Ethernet cable.</p>
+          <p>Select the board connected over USB-C.</p>
         </div>
 
         <div class="flasher-pictorial-grid" role="radiogroup" aria-label="Target device">
@@ -764,7 +764,7 @@ export class TimerFlasher extends Component {
               ${this.renderPictorialDeviceTimer()}
             </div>
             <p class="flasher-pictorial-desc">
-              Seeed Studio XIAO ESP32-C5 5.8 GHz timer board. Next step picks Hub (H1) or Spoke (T1-T6).
+              Seeed Studio XIAO ESP32-C5 timer board.
             </p>
           </button>
 
@@ -784,7 +784,7 @@ export class TimerFlasher extends Component {
               ${this.renderPictorialRolePoeBridge()}
             </div>
             <p class="flasher-pictorial-desc">
-              Waveshare ESP32-P4-WIFI6-POE-ETH board. Powers Hub H1 on USB-A and streams over PoE Ethernet.
+              Waveshare ESP32-P4-WIFI6-POE-ETH board.
             </p>
           </button>
         </div>
@@ -934,27 +934,35 @@ export class TimerFlasher extends Component {
         </div>`;
   }
 
-  /** Pictorial for the Gate Timer device card: Spoke (T1) ──▶ Hub (H1) + 5.8 GHz RSSI waves. */
+  /** Pictorial for the Gate Timer device card: Spokes ──▶ C5 ◀── Laptop (C5 circle highlighted). */
   private renderPictorialDeviceTimer(): string {
     return `
       <svg class="flasher-pic-svg" viewBox="0 0 280 68" fill="none" aria-hidden="true">
         <defs>
-          <marker id="pic-arrow-dev-timer" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <marker id="pic-arrow-dev-c5" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
             <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="currentColor" />
           </marker>
         </defs>
-        <line x1="92" y1="38" x2="164" y2="38" class="flasher-pic-link" marker-end="url(#pic-arrow-dev-timer)" />
-        <text x="128" y="30" text-anchor="middle" class="flasher-pic-link-label">5.8 GHz</text>
-        <g transform="translate(68, 38)">
-          <circle r="20" class="flasher-pic-node is-dim-node" />
-          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title is-dim">T1</text>
-        </g>
-        <g transform="translate(192, 38)">
+
+        <line x1="52" y1="14" x2="114" y2="30" class="flasher-pic-link is-dim" marker-end="url(#pic-arrow-dev-c5)" />
+        <line x1="52" y1="34" x2="114" y2="34" class="flasher-pic-link is-dim" marker-end="url(#pic-arrow-dev-c5)" />
+        <line x1="52" y1="54" x2="114" y2="38" class="flasher-pic-link is-dim" marker-end="url(#pic-arrow-dev-c5)" />
+        <line x1="214" y1="34" x2="166" y2="34" class="flasher-pic-link" marker-end="url(#pic-arrow-dev-c5)" />
+
+        <g transform="translate(40, 14)"><circle r="9" class="flasher-pic-node is-dim-node" /></g>
+        <g transform="translate(40, 34)"><circle r="9" class="flasher-pic-node is-dim-node" /></g>
+        <g transform="translate(40, 54)"><circle r="9" class="flasher-pic-node is-dim-node" /></g>
+
+        <g transform="translate(140, 34)">
           <circle r="22" class="flasher-pic-node is-hub-node is-host-node" />
-          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title">H1</text>
+          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title is-host-title">C5</text>
         </g>
-        <path d="M 183 11 Q 192 4 201 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.65" />
-        <path d="M 178 7 Q 192 -2 206 7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" opacity="0.38" />
+
+        <g transform="translate(238, 34)">
+          <rect x="-22" y="-20" width="44" height="40" rx="8" class="flasher-pic-node" />
+          <rect x="-11" y="-8" width="22" height="13" rx="1.5" stroke="currentColor" stroke-width="1.5" />
+          <path d="M-15 8 H15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+        </g>
       </svg>`;
   }
 
@@ -979,7 +987,7 @@ export class TimerFlasher extends Component {
 
         <g transform="translate(140, 34)">
           <circle r="22" class="flasher-pic-node is-hub-node is-host-node" />
-          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title">Hub</text>
+          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title is-host-title">Hub</text>
         </g>
 
         <g transform="translate(238, 34)">
@@ -1005,7 +1013,7 @@ export class TimerFlasher extends Component {
 
         <g transform="translate(72, 34)">
           <circle r="20" class="flasher-pic-node is-host-node" />
-          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title">Spoke</text>
+          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title is-host-title">Spoke</text>
         </g>
 
         <g transform="translate(208, 34)">
@@ -1033,7 +1041,7 @@ export class TimerFlasher extends Component {
         </g>
         <g transform="translate(140, 34)">
           <rect x="-24" y="-19" width="48" height="38" rx="8" class="flasher-pic-node is-host-node" />
-          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title">P4</text>
+          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title is-host-title">P4</text>
         </g>
         <g transform="translate(238, 34)">
           <rect x="-22" y="-20" width="44" height="40" rx="8" class="flasher-pic-node" />

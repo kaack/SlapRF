@@ -5225,14 +5225,20 @@ html[data-theme="light"] .scope-tune-custom-icon {
   stroke-width: 1.6;
   stroke-dasharray: 4 3;
 }
-.flasher-pictorial-card.is-active .flasher-pic-link {
-  color: var(--accent);
-  stroke: var(--accent);
-}
 .flasher-pic-node {
   fill: var(--surface-2);
   stroke: var(--border-strong);
   stroke-width: 1.5;
+}
+.flasher-pic-node.is-host-node {
+  stroke: var(--accent);
+  stroke-width: 1.85;
+  stroke-opacity: 0.72;
+}
+.flasher-pictorial-card.is-active .flasher-pic-node.is-host-node {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-opacity: 1;
 }
 .flasher-pic-node-title {
   font-family: var(--font-mono);
@@ -5240,6 +5246,9 @@ html[data-theme="light"] .scope-tune-custom-icon {
   font-weight: 700;
   fill: var(--text);
   letter-spacing: 0.01em;
+}
+.flasher-pictorial-card.is-active .flasher-pic-node-title.is-host-title {
+  fill: var(--accent);
 }
 .flasher-pic-node-role {
   font-family: var(--font-mono);
