@@ -13,11 +13,17 @@ Download the latest native SlapRF release from [GitHub Releases](https://github.
 | Platform / Device | Bluetooth Hub | USB-C Hub | USB Flasher | LAN Timers | Verified Environment & Notes |
 | :--- | :---: | :---: | :---: | :---: | :--- |
 | Android (`ARM64` Phone / Tablet) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Android (`arm64-v8a` APK); use a USB-C OTG data cable for USB Hub and in-app Flasher. |
-| iOS / iPadOS (`ARM64` iPhone / iPad) | {{< yes >}} | {{< no >}} | {{< no >}} | {{< yes >}} | Free sideload (`slaprf-ios-arm64.ipa` on iOS/iPadOS 16.0+ via Sideloadly or SideStore); supports Bluetooth Hub, PoE Bridge (`:5480`), LapRF (`:5403`), and RotorHazard over Wi-Fi or Ethernet. |
+| iOS / iPadOS (`ARM64` iPhone / iPad) | {{< unverified >}} | {{< no >}} | {{< no >}} | {{< unverified >}} | Free sideload (`slaprf-ios-arm64.ipa` on iOS/iPadOS 16.0+ via Sideloadly or SideStore); verified in iOS Simulator, pending physical iPhone/iPad test. |
 | Windows 11 (`x86_64`) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Windows 11 (`slaprf-windows-amd64.exe`, `WinRT` Bluetooth LE and `COM` serial). |
 | macOS (`Apple Silicon`) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Apple Silicon (`slaprf-macos-arm64`, `CoreBluetooth` and `/dev/cu.usbmodem*`); Intel (`amd64`) binary also built in CI. |
 | Linux Desktop (`x86_64`) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Ubuntu `x86_64` (`slaprf-linux-amd64`, `BlueZ` and `/dev/ttyACM*`). |
 | Raspberry Pi 4 (`ARM64`) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Raspberry Pi 4 Model B (`Raspberry Pi OS 64-bit`); requires `5 GHz` Wi-Fi or Ethernet for Bluetooth Hub. |
+
+<div class="doc-status-legend not-prose" aria-label="Platform support legend">
+  <span class="doc-status-legend-item">{{< yes >}} <span>Verified on physical hardware</span></span>
+  <span class="doc-status-legend-item">{{< unverified >}} <span>Built (pending physical hardware test)</span></span>
+  <span class="doc-status-legend-item">{{< no >}} <span>Not supported</span></span>
+</div>
 
 ## Platform Setup
 

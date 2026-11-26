@@ -710,6 +710,38 @@ html.dark .doc-status-badge.is-no {
   border-color: rgba(248, 113, 113, 0.24);
 }
 
+.doc-status-badge.is-info {
+  background-color: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+  border: 1px solid rgba(59, 130, 246, 0.28);
+}
+
+html.dark .doc-status-badge.is-info {
+  background-color: rgba(56, 189, 248, 0.14);
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.3);
+}
+
+.doc-status-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem 1.25rem;
+  margin-top: 0.65rem;
+  font-size: 0.84rem;
+  color: var(--doc-muted, #64748b);
+}
+
+html.dark .doc-status-legend {
+  color: #94a3b8;
+}
+
+.doc-status-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
 /* =========================================================
    5. Modern Navigation Cards (.hextra-card)
    ========================================================= */
