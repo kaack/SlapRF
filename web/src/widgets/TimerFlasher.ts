@@ -955,7 +955,7 @@ export class TimerFlasher extends Component {
 
         <g transform="translate(140, 34)">
           <circle r="22" class="flasher-pic-node is-hub-node is-host-node" />
-          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title is-host-title">C5</text>
+          <text y="3.8" text-anchor="middle" class="flasher-pic-node-title is-host-title">C5</text>
         </g>
 
         <g transform="translate(238, 34)">
@@ -1041,7 +1041,7 @@ export class TimerFlasher extends Component {
         </g>
         <g transform="translate(140, 34)">
           <rect x="-24" y="-19" width="48" height="38" rx="8" class="flasher-pic-node is-host-node" />
-          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title is-host-title">P4</text>
+          <text y="3.8" text-anchor="middle" class="flasher-pic-node-title is-host-title">P4</text>
         </g>
         <g transform="translate(238, 34)">
           <rect x="-22" y="-20" width="44" height="40" rx="8" class="flasher-pic-node" />

@@ -4941,13 +4941,23 @@ html[data-theme="light"] .scope-tune-custom-icon {
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  display: inline-grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  text-box-trim: trim-both;
+  text-box-edge: cap alphabetic;
   background: var(--surface-3);
   color: var(--text-3);
   font-size: 11px;
   font-weight: 700;
   flex-shrink: 0;
+}
+@supports not (text-box-trim: trim-both) {
+  .flasher-step-circle {
+    padding-top: 1px;
+  }
 }
 .flasher-step-pill.is-current .flasher-step-circle {
   background: var(--accent);
