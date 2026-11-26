@@ -1,0 +1,43 @@
+{
+  "name": "SlapRF",
+  "identifier": "app.slaprf.source",
+  "subtitle": "5.8 GHz FPV Race \u0026 Practice Timing System",
+  "description": "Open-source 5.8 GHz FPV gate timer with native CoreBluetooth Hub, ESP32-P4 PoE Bridge (:5480), spoken callouts, and MultiGP tournament sync.",
+  "iconURL": "https://slaprf.app/icons/app-icon-1024.png",
+  "website": "https://slaprf.app",
+  "tintColor": "#D4FF3A",
+  "featuredApps": [
+    "app.slaprf.timer"
+  ],
+  "apps": [
+    {
+      "name": "SlapRF",
+      "bundleIdentifier": "app.slaprf.timer",
+      "developerName": "SlapRF (@OneEyeFPV)",
+      "subtitle": "5.8 GHz FPV Gate Timer \u0026 Race Director",
+      "localizedDescription": "Native iOS and iPadOS SlapRF timing engine supporting SlapRF Bluetooth Hubs, ESP32-P4 PoE Ethernet Bridges (:5480), LapRF 8-Way (:5403), RotorHazard, offline bbolt storage, low-latency gate crossing beeps, voice callouts, and Wi-Fi LAN multi-display sharing.",
+      "iconURL": "https://slaprf.app/icons/app-icon-1024.png",
+      "tintColor": "#D4FF3A",
+      "category": "utilities",
+      "versions": [
+        {
+          "version": "0.0.20",
+          "buildVersion": "20",
+          "date": "2026-11-26T15:07:48-08:00",
+          "localizedDescription": "SlapRF v0.0.20 native iOS and iPadOS release.",
+          "downloadURL": "https://github.com/kaack/SlapRF/releases/download/v0.0.20/slaprf-ios-arm64.ipa",
+          "size": 12582912,
+          "minOSVersion": "16.0"
+        }
+      ],
+      "appPermissions": {
+        "entitlements": [],
+        "privacy": {
+          "NSBluetoothAlwaysUsageDescription": "SlapRF uses Bluetooth LE to connect to your SlapRF Hub gate timer and stream live 5.8 GHz lap passes.",
+          "NSLocalNetworkUsageDescription": "SlapRF uses your local network to connect to SlapRF PoE Bridges, LapRF 8-Way, and RotorHazard timers, and to share live race results over Wi-Fi."
+        }
+      }
+    }
+  ],
+  "news": []
+}
