@@ -368,7 +368,7 @@ func TestAPI_SimRealEngineIsolationAndStorageExportImportReset(t *testing.T) {
 	h.APIPost("/v1/timers", map[string]any{
 		"role":        "hub",
 		"timerLabel":  "H1",
-		"fingerprint": "CAFEBABE11223344",
+		"fingerprint": "CAFEBABE",
 	}, &realSt)
 	h.MilestoneScreenshot("api-real-engine-customized")
 
