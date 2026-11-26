@@ -291,6 +291,41 @@ func TestWipeApplicationDataAndRestoreDemoData(t *testing.T) {
 		t.Fatalf("expected 3 showcase practice sessions with active session & laps, got sessions=%d active=%q laps=%d",
 			len(pm.Sessions), pm.ActiveSessionID, len(laps))
 	}
+	for _, sess := range pm.Sessions {
+		if sess.TraceSampleCount <= 0 {
+			t.Fatalf("expected non-zero TraceSampleCount for showcase session %q, got %d", sess.SessionID, sess.TraceSampleCount)
+		}
+		frames, err := eng.SessionTraceFrames(sess.SessionID)
+		if err != nil {
+			t.Fatalf("SessionTraceFrames(%q): %v", sess.SessionID, err)
+		}
+		if len(frames) == 0 {
+			t.Fatalf("expected non-empty RSSI trace frames for showcase session %q", sess.SessionID)
+		}
+		if len(sess.Crossings) > 0 {
+			c0 := sess.Crossings[0]
+			var bestPeak float32 = -127.0
+			for _, fr := range frames {
+				if fr.TimerID != c0.GateID {
+					continue
+				}
+				diff := int64(fr.TimestampUs) - int64(c0.TimestampUs)
+				if diff < 0 {
+					diff = -diff
+				}
+				if diff <= 150_000 {
+					val := fr.RSSI[c0.SlotIndex-1]
+					if val > bestPeak {
+						bestPeak = val
+					}
+				}
+			}
+			if bestPeak < -46.0 {
+				t.Fatalf("expected strong RSSI peak (> -46 dBm) near crossing ts=%d for session %q gate=%d slot=%d, got %.1f dBm",
+					c0.TimestampUs, sess.SessionID, c0.GateID, c0.SlotIndex, bestPeak)
+			}
+		}
+	}
 	if len(ev.Races) != 4 {
 		t.Fatalf("expected 4 showcase races, got %d", len(ev.Races))
 	}

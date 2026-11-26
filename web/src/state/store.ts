@@ -1539,17 +1539,14 @@ export class AppStore {
       rules: () => this.practiceSessionRules(this.selectedPracticeSession),
       historyFor: (gateId: number) => {
         const sess = this.selectedPracticeSession;
-        if (sess && !sess.active) {
-          const cached = this.sessionTraces.get(sess.sessionId);
-          if (cached && cached.maxTsUs > 0) {
-            return cached.byGate.get(gateId) ?? [];
-          }
+        if (sess) {
+          return this.sessionTraceHistoryFor(sess.sessionId, gateId, Boolean(sess.active));
         }
         return this.historyFor(gateId);
       },
       latestTimestampUs: () => {
         const sess = this.selectedPracticeSession;
-        if (sess && !sess.active) {
+        if (sess && (!sess.active || this.latestTimestampUs === 0)) {
           const cached = this.sessionTraces.get(sess.sessionId);
           if (cached && cached.maxTsUs > 0) {
             return cached.maxTsUs;
@@ -1559,7 +1556,7 @@ export class AppStore {
       },
       smoothLatestTimestampUs: () => {
         const sess = this.selectedPracticeSession;
-        if (sess && !sess.active) {
+        if (sess && (!sess.active || this.smoothLatestTimestampUs === 0)) {
           const cached = this.sessionTraces.get(sess.sessionId);
           if (cached && cached.maxTsUs > 0) {
             return cached.maxTsUs;
@@ -2043,6 +2040,7 @@ export class AppStore {
 
   public clearActiveHistory(): void {
     this.activeHistory.clear();
+    this.sessionTraces.clear();
     this._playheadUs = 0;
     this._streamAnchorBaseUs = 0;
     this._streamAnchorPerfMs = 0;

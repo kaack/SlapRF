@@ -3,9 +3,11 @@ package tracker
 import (
 	"encoding/json"
 	"math"
+	"sort"
 	"sync"
 
 	"slaprf/internal/domain"
+	"slaprf/internal/tracestore"
 )
 
 var (
@@ -838,4 +840,277 @@ func showcaseDemoEngineState() PersistedEngineState {
 	var st PersistedEngineState
 	_ = json.Unmarshal(demoShowcaseJSON, &st)
 	return st
+}
+
+func isShowcaseDemoPracticeSession(sess domain.PracticeSession) bool {
+	switch sess.SessionID {
+	case "session-1":
+		return sess.CreatedAt == "2026-11-15T18:10:00Z"
+	case "session-2":
+		return sess.CreatedAt == "2026-11-15T17:15:00Z"
+	case "session-3":
+		return sess.CreatedAt == "2026-11-15T16:20:00Z"
+	default:
+		return false
+	}
+}
+
+// buildDemoPracticeTraceSamples synthesizes multi-gate 40 Hz `.rfbin` RSSI samples aligned with
+// every crossing, sector pass, and filtered spike in `sess` so clicking any lap in a showcase
+// Practice session renders full per-timer RSSI waveforms in `PracticeLapEditorModal` and `Signals`.
+func buildDemoPracticeTraceSamples(sess domain.PracticeSession, minEndUs uint64) []tracestore.Sample {
+	if len(sess.Pilots) == 0 || (len(sess.Crossings) == 0 && len(sess.Laps) == 0) {
+		return nil
+	}
+
+	var gateIDs []uint8
+	for _, g := range sess.TrackSnapshot {
+		if g.GateID > 0 {
+			gateIDs = append(gateIDs, g.GateID)
+		}
+	}
+	if len(gateIDs) == 0 {
+		seenGate := make(map[uint8]bool, 4)
+		for _, c := range sess.Crossings {
+			if c.GateID > 0 && !seenGate[c.GateID] {
+				seenGate[c.GateID] = true
+				gateIDs = append(gateIDs, c.GateID)
+			}
+		}
+		sort.Slice(gateIDs, func(i, j int) bool { return gateIDs[i] < gateIDs[j] })
+	}
+	if len(gateIDs) == 0 {
+		gateIDs = []uint8{1}
+	}
+
+	slotIndices := make([]uint8, 0, len(sess.Pilots))
+	seenSlot := make(map[uint8]bool, len(sess.Pilots))
+	for _, p := range sess.Pilots {
+		if p.SlotIndex >= 1 && p.SlotIndex <= domain.MaxPilotPoolSize {
+			u := uint8(p.SlotIndex)
+			if !seenSlot[u] {
+				seenSlot[u] = true
+				slotIndices = append(slotIndices, u)
+			}
+		}
+	}
+	sort.Slice(slotIndices, func(i, j int) bool { return slotIndices[i] < slotIndices[j] })
+	if len(slotIndices) == 0 {
+		return nil
+	}
+
+	var minTsUs, maxTsUs uint64
+	noteTs := func(ts uint64) {
+		if ts == 0 {
+			return
+		}
+		if minTsUs == 0 || ts < minTsUs {
+			minTsUs = ts
+		}
+		if ts > maxTsUs {
+			maxTsUs = ts
+		}
+	}
+	for _, c := range sess.Crossings {
+		noteTs(c.TimestampUs)
+	}
+	for _, l := range sess.Laps {
+		noteTs(l.CompletedAtUs)
+		durUs := uint64(math.Round(math.Max(0, l.LapTimeSec) * 1e6))
+		if l.CompletedAtUs > durUs {
+			noteTs(l.CompletedAtUs - durUs)
+		}
+	}
+	for _, f := range sess.Filtered {
+		noteTs(f.TimestampUs)
+	}
+	if maxTsUs == 0 {
+		return nil
+	}
+
+	startUs := uint64(500_000)
+	if minTsUs > 3_500_000 {
+		startUs = minTsUs - 3_500_000
+	}
+	endUs := maxTsUs + 3_500_000
+	if sess.Active && minEndUs > endUs && minEndUs <= maxTsUs+18_000_000 {
+		endUs = minEndUs
+	}
+
+	type gsKey struct {
+		gateID uint8
+		slot   uint8
+	}
+	crossByGS := make(map[gsKey][]domain.GateCrossingEvent, len(gateIDs)*len(slotIndices))
+	crossBySlot := make(map[uint8][]domain.GateCrossingEvent, len(slotIndices))
+	for _, c := range sess.Crossings {
+		if c.SlotIndex < 1 || c.SlotIndex > domain.MaxPilotPoolSize {
+			continue
+		}
+		su := uint8(c.SlotIndex)
+		crossByGS[gsKey{gateID: c.GateID, slot: su}] = append(crossByGS[gsKey{gateID: c.GateID, slot: su}], c)
+		crossBySlot[su] = append(crossBySlot[su], c)
+	}
+	filtByGS := make(map[gsKey][]domain.FilteredDetection, 4)
+	for _, f := range sess.Filtered {
+		if f.SlotIndex < 1 || f.SlotIndex > domain.MaxPilotPoolSize {
+			continue
+		}
+		su := uint8(f.SlotIndex)
+		filtByGS[gsKey{gateID: f.GateID, slot: su}] = append(filtByGS[gsKey{gateID: f.GateID, slot: su}], f)
+	}
+
+	const stepUs = uint64(25_000) // 40 Hz per gate
+	estCount := int((endUs-startUs)/stepUs+2) * len(gateIDs)
+	out := make([]tracestore.Sample, 0, estCount)
+	seqByGate := make(map[uint8]uint32, len(gateIDs))
+
+	// Pre-compensate ~30 ms causal 2-pole envelope lag in `dsp.ChannelDetector.FilterSample`
+	// so smoothed replay peaks align with recorded `GateCrossingEvent.TimestampUs` markers.
+	const filterLeadUs = 30_000.0
+
+	for tsUs := startUs; tsUs <= endUs; tsUs += stepUs {
+		tF := float64(tsUs)
+		for gOrd, gateID := range gateIDs {
+			seqByGate[gateID]++
+			noiseFloor := float32(-92.0 - 0.3*float64(gOrd%3))
+			baseFloor := float64(noiseFloor)
+			rssis := make([]float32, len(slotIndices))
+
+			for sIdx, slot := range slotIndices {
+				rssi := baseFloor +
+					1.05*math.Sin(tF/420_000.0+float64(slot)*1.73+float64(gateID)*0.91) +
+					0.55*math.Cos(tF/185_000.0+float64(slot)*2.31+float64(gateID)*1.37)
+
+				for _, c := range crossByGS[gsKey{gateID: gateID, slot: slot}] {
+					dist := math.Abs(tF - (float64(c.TimestampUs) - filterLeadUs))
+					if dist < 2_200_000.0 {
+						peakTop := float64(c.PeakRSSIDbm) + 1.4
+						if peakTop < -54.0 || peakTop > -15.0 {
+							peakTop = -39.5
+						}
+						const sigmaMain = 220_000.0
+						lobe := baseFloor + (peakTop-baseFloor)*math.Exp(-(dist*dist)/(2*sigmaMain*sigmaMain))
+						const sigmaSkirt = 660_000.0
+						skirt := baseFloor + (-74.0-baseFloor)*math.Exp(-(dist*dist)/(2*sigmaSkirt*sigmaSkirt))
+						if lobe > rssi {
+							rssi = lobe
+						}
+						if skirt > rssi {
+							rssi = skirt
+						}
+					}
+				}
+
+				if len(gateIDs) > 1 {
+					for _, c := range crossBySlot[slot] {
+						if c.GateID == gateID {
+							continue
+						}
+						dist := math.Abs(tF - (float64(c.TimestampUs) - filterLeadUs))
+						if dist < 1_600_000.0 {
+							const sigmaFar = 480_000.0
+							farBleed := baseFloor + (-81.5-baseFloor)*math.Exp(-(dist*dist)/(2*sigmaFar*sigmaFar))
+							if farBleed > rssi {
+								rssi = farBleed
+							}
+						}
+					}
+				}
+
+				for _, f := range filtByGS[gsKey{gateID: gateID, slot: slot}] {
+					lead := filterLeadUs
+					sigma := 200_000.0
+					peakBoost := 1.4
+					if f.Reason == domain.FilterSpike {
+						lead = 15_000.0
+						sigma = 42_000.0
+						peakBoost = 6.5
+					}
+					dist := math.Abs(tF - (float64(f.TimestampUs) - lead))
+					if dist < 1_600_000.0 {
+						peakTop := float64(f.PeakRSSIDbm) + peakBoost
+						bump := baseFloor + (peakTop-baseFloor)*math.Exp(-(dist*dist)/(2*sigma*sigma))
+						if bump > rssi {
+							rssi = bump
+						}
+					}
+				}
+
+				rssis[sIdx] = float32(rssi)
+			}
+
+			slotsCopy := make([]uint8, len(slotIndices))
+			copy(slotsCopy, slotIndices)
+			out = append(out, tracestore.Sample{
+				GateID:        gateID,
+				SeqNum:        seqByGate[gateID],
+				TimestampUs:   tsUs,
+				NoiseFloorDbm: noiseFloor,
+				SlotIndices:   slotsCopy,
+				RSSIDbm:       rssis,
+			})
+		}
+	}
+	return out
+}
+
+func (e *Engine) hydrateShowcasePracticeTracesLocked(minActiveEndUs uint64) {
+	if len(e.practiceState.Sessions) == 0 {
+		return
+	}
+	hasDemo := false
+	for i := range e.practiceState.Sessions {
+		if isShowcaseDemoPracticeSession(e.practiceState.Sessions[i]) {
+			hasDemo = true
+			break
+		}
+	}
+	if !hasDemo {
+		return
+	}
+	ts := e.ensureTraceStoreLocked()
+	for i := range e.practiceState.Sessions {
+		sess := &e.practiceState.Sessions[i]
+		if !isShowcaseDemoPracticeSession(*sess) {
+			continue
+		}
+		existing, _ := ts.ReadSession(sess.SessionID)
+		firstCrossUs := uint64(0)
+		for _, c := range sess.Crossings {
+			if c.TimestampUs > 0 && (firstCrossUs == 0 || c.TimestampUs < firstCrossUs) {
+				firstCrossUs = c.TimestampUs
+			}
+		}
+		if len(existing) > 0 && (firstCrossUs == 0 || existing[0].TimestampUs <= firstCrossUs) {
+			if sess.TraceSampleCount < len(existing) {
+				sess.TraceSampleCount = len(existing)
+			}
+			continue
+		}
+
+		demoSamples := buildDemoPracticeTraceSamples(*sess, minActiveEndUs)
+		if len(demoSamples) == 0 {
+			continue
+		}
+		_ = ts.DeleteSession(sess.SessionID)
+		if len(existing) > 0 {
+			cutoffUs := existing[0].TimestampUs
+			for _, ds := range demoSamples {
+				if ds.TimestampUs < cutoffUs {
+					ts.Append(sess.SessionID, ds)
+				}
+			}
+			for _, ex := range existing {
+				ts.Append(sess.SessionID, ex)
+			}
+		} else {
+			for _, ds := range demoSamples {
+				ts.Append(sess.SessionID, ds)
+			}
+		}
+		sum := ts.SealSession(sess.SessionID)
+		sess.TraceSampleCount = sum.SampleCount
+		sess.TraceDurationSec = sum.DurationSec
+	}
 }

@@ -118,6 +118,7 @@ type Server struct {
 	tempDBPath    string
 	store          *storage.BoltStore
 	realTraceStore tracestore.Store
+	simTraceStore  tracestore.Store
 	persistWorker  *storage.PersistenceWorker
 
 	simEngine  *tracker.Engine
@@ -221,12 +222,19 @@ func NewServer(cfg Config) *Server {
 	simEngine := tracker.NewEngine()
 	realEngine := tracker.NewRealEngine()
 	var realTraces tracestore.Store
+	var simTraces tracestore.Store
 	if tempDB == "" && dbPath != "" {
 		if fs, fErr := tracestore.NewFileStore(filepath.Join(filepath.Dir(dbPath), "traces")); fErr == nil {
 			realTraces = fs
 			realEngine.SetTraceStore(fs)
 		} else {
 			appLogger.Warnf("[TraceStore] Failed to open traces directory: %v", fErr)
+		}
+		if simFS, sErr := tracestore.NewFileStore(filepath.Join(filepath.Dir(dbPath), "sim_traces")); sErr == nil {
+			simTraces = simFS
+			simEngine.SetTraceStore(simFS)
+		} else {
+			appLogger.Warnf("[TraceStore] Failed to open sim_traces directory: %v", sErr)
 		}
 	}
 	if !cfg.DisableTeacher {
@@ -258,6 +266,7 @@ func NewServer(cfg Config) *Server {
 		tempDBPath:     tempDB,
 		store:          store,
 		realTraceStore: realTraces,
+		simTraceStore:  simTraces,
 		simEngine:      simEngine,
 		realEngine: realEngine,
 		sim:        sim,
@@ -665,6 +674,9 @@ func (s *Server) Close() {
 	}
 	if s.realTraceStore != nil {
 		_ = s.realTraceStore.Close()
+	}
+	if s.simTraceStore != nil {
+		_ = s.simTraceStore.Close()
 	}
 	if s.store != nil {
 		_ = s.store.Close()

@@ -673,12 +673,18 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 		}
 		domain.PruneTrackGateRuleOverrides(e.eventState.Races[ri].TrackSnapshot, rBase)
 	}
+	e.hydrateShowcasePracticeTracesLocked(s.ElapsedUs)
 }
 
 // ResetToFactoryDefaults wipes all user data (pilots, track gates, detected timers, races,
 // practice sessions, and recorded laps) while restoring clean settings and timing rule defaults.
 func (e *Engine) ResetToFactoryDefaults(_ bool) {
 	e.mu.Lock()
+	if e.traceStore != nil {
+		for _, id := range e.traceStore.ListSessionIDs() {
+			_ = e.traceStore.DeleteSession(id)
+		}
+	}
 	if e.bootTime.IsZero() {
 		e.bootTime = time.Now()
 	}
@@ -723,6 +729,10 @@ func (e *Engine) ResetToFactoryDefaults(_ bool) {
 // RestoreDemoData populates the engine with the showcase demo dataset: Bay Area pilots,
 // a 3-gate SlapRF track (Hub H1 + 3 Spoke timers T1..T3), 3 practice sessions, and 4 races.
 func (e *Engine) RestoreDemoData() {
+	ts := e.TraceStore()
+	for _, id := range []string{"session-1", "session-2", "session-3"} {
+		_ = ts.DeleteSession(id)
+	}
 	e.RestoreState(showcaseDemoEngineState(), true)
 }
 
