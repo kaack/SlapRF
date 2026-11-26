@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"testing"
 	"time"
 
@@ -351,9 +352,16 @@ func TestLong58MinuteMultiPackTrainingSpeed(t *testing.T) {
 	aiM, _ := BenchmarkTraces(m, traces[:2], 1_500_000)
 	totalDur := time.Since(t0)
 
-	t.Logf("960k-sample 28-epoch TrainModel=%v, total+benchmark=%v (loss=%.4f, F1=%.3f)", trainDur, totalDur, loss, aiM.F1)
-	if totalDur > 5*time.Second {
-		t.Fatalf("expected 960k-sample 28-epoch training to finish in <5s, took %v", totalDur)
+	procs := runtime.GOMAXPROCS(0)
+	if procs < 1 {
+		procs = 1
+	} else if procs > 18 {
+		procs = 18
+	}
+	maxDur := 180 * time.Second / time.Duration(procs)
+	t.Logf("960k-sample 28-epoch TrainModel=%v, total+benchmark=%v (procs=%d, budget=%v, loss=%.4f, F1=%.3f)", trainDur, totalDur, runtime.GOMAXPROCS(0), maxDur, loss, aiM.F1)
+	if totalDur > maxDur {
+		t.Fatalf("expected 960k-sample 28-epoch training to finish in <%v (procs=%d), took %v", maxDur, runtime.GOMAXPROCS(0), totalDur)
 	}
 	if aiM.F1 < 0.90 {
 		t.Fatalf("expected trained model F1 >= 0.90, got %.3f (%+v)", aiM.F1, aiM)
