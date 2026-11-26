@@ -66,6 +66,7 @@ func main() {
 	versionFlag := flag.String("version", "", "Version name stamped into APK (default: git describe or 0.0.6)")
 	versionCode := flag.Int("version-code", 7, "Integer Android versionCode")
 	skipWeb := flag.Bool("skip-web", false, "Skip rebuilding cmd/slaprf-android/site if already built")
+	bootLogDownloads := flag.Bool("boot-log-downloads", false, "Always flush startup diagnostics to Downloads/slaprf-startup-log.txt on every launch")
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags)
@@ -195,9 +196,14 @@ func main() {
 		log.Fatalf("[build-android] abs jar: %v", err)
 	}
 	rJava := filepath.Join(genJavaDir, "app", "slaprf", "R.java")
+	bootCfgJava := filepath.Join(genJavaDir, "app", "slaprf", "BootLogConfig.java")
+	bootCfgSrc := fmt.Sprintf("package app.slaprf;\nfinal class BootLogConfig {\n    static final boolean ALWAYS_EXPORT_BOOT_LOG = %v;\n}\n", *bootLogDownloads)
+	if err := os.WriteFile(bootCfgJava, []byte(bootCfgSrc), 0o644); err != nil {
+		log.Fatalf("[build-android] write BootLogConfig.java: %v", err)
+	}
 	cp := tc.androidJar + string(os.PathListSeparator) + usbJarAbs
 
-	log.Printf("[build-android] Compiling SlapRFHost.java, SlapRFUsbShim.java & SlapRFBleShim.java...")
+	log.Printf("[build-android] Compiling SlapRFApp.java, SlapRFHost.java, SlapRFUsbShim.java & SlapRFBleShim.java...")
 	runCmd(
 		tc.env(nil),
 		tc.javac,
@@ -205,9 +211,11 @@ func main() {
 		"-encoding", "UTF-8",
 		"-cp", cp,
 		"-d", classesDir,
+		filepath.FromSlash("android/java/app/slaprf/SlapRFApp.java"),
 		filepath.FromSlash("android/java/app/slaprf/SlapRFHost.java"),
 		filepath.FromSlash("android/java/app/slaprf/SlapRFUsbShim.java"),
 		filepath.FromSlash("android/java/app/slaprf/SlapRFBleShim.java"),
+		bootCfgJava,
 		rJava,
 	)
 

@@ -121,23 +121,35 @@ jobs:
           if-no-files-found: error
 
   android:
-    needs: [verify, web_bundle]
+    needs: [verify, firmware]
     name: Build SlapRF Android APK (arm64-v8a)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download built web bundle into cmd/slaprf-android/site
+      - name: Download compiled firmware image
         uses: actions/download-artifact@v4
         with:
-          name: web-site
-          path: cmd/slaprf-android/site
+          name: firmware
+          path: web/firmware
+
+      - name: Download compiled Bluetooth Hub firmware image
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-ble
+          path: web/firmware
+
+      - name: Download compiled PoE Bridge firmware image
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-poe-bridge
+          path: web/firmware
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: "go.mod"
+          go-version: "1.26.x"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -159,10 +171,9 @@ jobs:
 
       - name: Build signed SlapRF Android APK
         run: |
-          rm -rf cmd/slaprf-android/site/wasm cmd/slaprf-android/site/docs
           mkdir -p dist
           VER_CODE="$(echo "${GITHUB_REF_NAME}" | awk -F'[v.]' '{if (NF>=4) print ($2*10000 + $3*100 + $4); else print 6}')"
-          go run ./cmd/build-android -skip-web -version "${GITHUB_REF_NAME}" -version-code "${VER_CODE}" -out dist/slaprf-android-arm64.apk
+          go run ./cmd/build-android -version "${GITHUB_REF_NAME}" -version-code "${VER_CODE}" -out dist/slaprf-android-arm64.apk
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v4
@@ -172,29 +183,22 @@ jobs:
           if-no-files-found: error
 
   ios:
-    needs: [verify, web_bundle]
+    needs: [verify]
     name: Build SlapRF iOS / iPadOS IPA (arm64)
     runs-on: macos-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download built web bundle into cmd/slaprf-ios/site
-        uses: actions/download-artifact@v4
-        with:
-          name: web-site
-          path: cmd/slaprf-ios/site
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: "go.mod"
+          go-version: "1.26.x"
 
       - name: Build sideloadable SlapRF iOS / iPadOS IPA
         run: |
-          rm -rf cmd/slaprf-ios/site/wasm cmd/slaprf-ios/site/docs cmd/slaprf-ios/site/firmware
           mkdir -p dist
-          go run ./cmd/build-ios -skip-web -version "${GITHUB_REF_NAME}" -out dist/slaprf-ios-arm64.ipa
+          go run ./cmd/build-ios -version "${GITHUB_REF_NAME}" -out dist/slaprf-ios-arm64.ipa
 
       - name: Verify CoreBluetooth, WebKit & Info.plist inside IPA
         run: |

@@ -8,6 +8,8 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -16,6 +18,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.graphics.Color;
 import android.graphics.Insets;
+import android.graphics.Typeface;
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioTrack;
@@ -28,6 +31,8 @@ import android.os.PowerManager;
 import android.os.SystemClock;
 import android.speech.tts.TextToSpeech;
 import android.util.Base64;
+import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -37,13 +42,20 @@ import android.view.WindowInsetsAnimation;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
 
@@ -67,8 +79,27 @@ import java.util.concurrent.atomic.AtomicInteger;
  * - Bridges Android TextToSpeech, Keep-Screen-Awake, LAN Pocket Server toggle, and file import/export.
  */
 public final class SlapRFHost extends Activity {
-    static {
-        System.loadLibrary("slaprf");
+    private static volatile boolean nativeLoaded = false;
+    private static volatile Throwable nativeLoadError = null;
+
+    static synchronized Throwable ensureNativeLoaded(Context ctx) {
+        if (nativeLoaded) {
+            return null;
+        }
+        if (nativeLoadError != null) {
+            return nativeLoadError;
+        }
+        SlapRFApp.step(ctx, "BEFORE System.loadLibrary(\"slaprf\")");
+        try {
+            System.loadLibrary("slaprf");
+            nativeLoaded = true;
+            SlapRFApp.step(ctx, "AFTER System.loadLibrary(\"slaprf\") OK");
+            return null;
+        } catch (Throwable t) {
+            nativeLoadError = t;
+            SlapRFApp.recordError(ctx, "System.loadLibrary(\"slaprf\") failed", t, true);
+            return t;
+        }
     }
 
     static native String nativeStartServer(String filesDir, String version, boolean lanEnabled);
@@ -396,109 +427,304 @@ public final class SlapRFHost extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         activeActivity = this;
-
-        SlapRFUsbShim.init(this);
-        SlapRFBleShim.init(this);
-        // Bluetooth runtime permissions are requested lazily, the first time the Go engine lists
-        // or opens a Bluetooth hub port (see SlapRFBleShim.ensurePermissions).
-        SlapRFBleShim.setPermissionRequester(SlapRFHost::requestBlePermissionsFromActiveActivity);
-        ensureTtsInitialized(this);
-        requestNotificationPermissionIfNeeded();
-
-        // Start foreground service so USB/LAN timing survives screen lock & app switching.
-        Intent svcIntent = new Intent(this, EngineService.class);
-        if (Build.VERSION.SDK_INT >= 26) {
-            startForegroundService(svcIntent);
-        } else {
-            startService(svcIntent);
-        }
-
-        String serverUrl = nativeStartServer(
-                getFilesDir().getAbsolutePath(),
-                resolveVersionName(this),
-                isLanPrefEnabled(this));
+        SlapRFApp.step(this, "SlapRFHost.onCreate entered");
 
         rootLayout = new FrameLayout(this);
         rootLayout.setBackgroundColor(DARK_BG);
-        configureSystemBarsAndInsets(true);
+        try {
+            configureSystemBarsAndInsets(true);
+        } catch (Throwable t) {
+            SlapRFApp.recordError(this, "configureSystemBarsAndInsets", t, false);
+        }
+        setContentView(rootLayout);
 
-        webView = new WebView(this);
-        webView.setBackgroundColor(DARK_BG);
-        WebSettings ws = webView.getSettings();
-        ws.setJavaScriptEnabled(true);
-        ws.setDomStorageEnabled(true);
-        ws.setDatabaseEnabled(true);
-        ws.setMediaPlaybackRequiresUserGesture(false);
-        ws.setAllowFileAccess(false);
-        ws.setAllowContentAccess(false);
-        ws.setSupportZoom(false);
-        ws.setBuiltInZoomControls(false);
-        ws.setDisplayZoomControls(false);
-        ws.setTextZoom(100);
-        ws.setCacheMode(WebSettings.LOAD_NO_CACHE);
-        webView.clearCache(true);
+        try {
+            SlapRFUsbShim.init(this);
+            SlapRFBleShim.init(this);
+            // Bluetooth runtime permissions are requested lazily, the first time the Go engine lists
+            // or opens a Bluetooth hub port (see SlapRFBleShim.ensurePermissions).
+            SlapRFBleShim.setPermissionRequester(SlapRFHost::requestBlePermissionsFromActiveActivity);
+        } catch (Throwable t) {
+            SlapRFApp.recordError(this, "USB/BLE shim init", t, false);
+        }
+        try {
+            ensureTtsInitialized(this);
+        } catch (Throwable t) {
+            SlapRFApp.recordError(this, "ensureTtsInitialized", t, false);
+        }
+        try {
+            requestNotificationPermissionIfNeeded();
+        } catch (Throwable t) {
+            SlapRFApp.recordError(this, "requestNotificationPermissionIfNeeded", t, false);
+        }
 
-        webView.addJavascriptInterface(new JsBridge(), "SlapRFAndroid");
+        Throwable jniErr = ensureNativeLoaded(this);
+        if (jniErr != null) {
+            showFatalStartupScreen("Native library (libslaprf.so) failed to load", jniErr);
+            return;
+        }
 
-        webView.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                if (request == null || request.getUrl() == null) {
-                    return false;
-                }
-                Uri uri = request.getUrl();
-                String host = uri.getHost() != null ? uri.getHost() : "";
-                if ("127.0.0.1".equals(host) || "localhost".equals(host)) {
-                    return false;
-                }
-                try {
-                    Intent external = new Intent(Intent.ACTION_VIEW, uri);
-                    startActivity(external);
-                } catch (Exception ignored) {
-                }
-                return true;
+        // Start foreground service so USB/LAN timing survives screen lock & app switching.
+        // Guarded against Android 15–17+ Restricted Settings / ForegroundServiceStartNotAllowedException
+        // so browser-sideloaded APKs always boot the in-process Go server + WebView cleanly.
+        try {
+            SlapRFApp.step(this, "BEFORE startForegroundService(EngineService)");
+            Intent svcIntent = new Intent(this, EngineService.class);
+            if (Build.VERSION.SDK_INT >= 26) {
+                startForegroundService(svcIntent);
+            } else {
+                startService(svcIntent);
             }
-        });
+            SlapRFApp.step(this, "AFTER startForegroundService(EngineService) dispatched");
+        } catch (Throwable fgsErr) {
+            SlapRFApp.recordError(this, "startForegroundService(EngineService) blocked (continuing in-process)", fgsErr, false);
+        }
 
-        webView.setWebChromeClient(new WebChromeClient() {
-            @Override
-            public boolean onShowFileChooser(
-                    WebView view,
-                    ValueCallback<Uri[]> filePathCallback,
-                    FileChooserParams fileChooserParams) {
-                if (pendingFileChooser != null) {
-                    pendingFileChooser.onReceiveValue(null);
+        String serverUrl;
+        try {
+            SlapRFApp.step(this, "BEFORE nativeStartServer");
+            serverUrl = nativeStartServer(
+                    getFilesDir().getAbsolutePath(),
+                    resolveVersionName(this),
+                    isLanPrefEnabled(this));
+            SlapRFApp.step(this, "AFTER nativeStartServer -> " + serverUrl);
+        } catch (Throwable srvErr) {
+            SlapRFApp.recordError(this, "nativeStartServer threw", srvErr, true);
+            showFatalStartupScreen("Embedded timing server threw during startup", srvErr);
+            return;
+        }
+        if (serverUrl == null || serverUrl.isEmpty()) {
+            IllegalStateException emptyUrlErr = new IllegalStateException("nativeStartServer returned empty URL");
+            SlapRFApp.recordError(this, "nativeStartServer returned empty URL", emptyUrlErr, true);
+            showFatalStartupScreen("Embedded timing server failed to bind 127.0.0.1", emptyUrlErr);
+            return;
+        }
+
+        try {
+            SlapRFApp.step(this, "BEFORE new WebView");
+            webView = new WebView(this);
+            webView.setBackgroundColor(DARK_BG);
+            WebSettings ws = webView.getSettings();
+            ws.setJavaScriptEnabled(true);
+            ws.setDomStorageEnabled(true);
+            ws.setDatabaseEnabled(true);
+            ws.setMediaPlaybackRequiresUserGesture(false);
+            ws.setAllowFileAccess(false);
+            ws.setAllowContentAccess(false);
+            ws.setSupportZoom(false);
+            ws.setBuiltInZoomControls(false);
+            ws.setDisplayZoomControls(false);
+            ws.setTextZoom(100);
+            ws.setCacheMode(WebSettings.LOAD_NO_CACHE);
+            webView.clearCache(true);
+
+            webView.addJavascriptInterface(new JsBridge(), "SlapRFAndroid");
+
+            webView.setWebViewClient(new WebViewClient() {
+                @Override
+                public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                    super.onPageStarted(view, url, favicon);
+                    SlapRFApp.step(SlapRFHost.this, "WebView.onPageStarted: " + url);
                 }
-                pendingFileChooser = filePathCallback;
-                try {
-                    Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-                    pick.addCategory(Intent.CATEGORY_OPENABLE);
-                    pick.setType("*/*");
-                    startActivityForResult(Intent.createChooser(pick, "Select Backup File"), REQ_OPEN_DOCUMENT);
+
+                @Override
+                public void onPageFinished(WebView view, String url) {
+                    super.onPageFinished(view, url);
+                    SlapRFApp.step(SlapRFHost.this, "WebView.onPageFinished: " + url);
+                    SlapRFApp.appendGoLogSnapshot(SlapRFHost.this);
+                }
+
+                @Override
+                public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                    super.onReceivedError(view, request, error);
+                    if (request != null && request.isForMainFrame()) {
+                        String desc = (Build.VERSION.SDK_INT >= 23 && error != null)
+                                ? (error.getErrorCode() + " " + error.getDescription())
+                                : "main_frame_error";
+                        SlapRFApp.recordError(
+                                SlapRFHost.this,
+                                "WebView main-frame error (" + request.getUrl() + "): " + desc,
+                                null,
+                                true);
+                    }
+                }
+
+                @Override
+                public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                    boolean didCrash = Build.VERSION.SDK_INT >= 26 && detail != null && detail.didCrash();
+                    RuntimeException err = new RuntimeException("WebView renderer exited (didCrash=" + didCrash + ")");
+                    SlapRFApp.recordError(SlapRFHost.this, "WebView.onRenderProcessGone", err, true);
+                    showFatalStartupScreen("Android System WebView renderer crashed", err);
                     return true;
-                } catch (Exception e) {
-                    pendingFileChooser = null;
-                    return false;
                 }
+
+                @Override
+                public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                    if (request == null || request.getUrl() == null) {
+                        return false;
+                    }
+                    Uri uri = request.getUrl();
+                    String host = uri.getHost() != null ? uri.getHost() : "";
+                    if ("127.0.0.1".equals(host) || "localhost".equals(host)) {
+                        return false;
+                    }
+                    try {
+                        Intent external = new Intent(Intent.ACTION_VIEW, uri);
+                        startActivity(external);
+                    } catch (Exception ignored) {
+                    }
+                    return true;
+                }
+            });
+
+            webView.setWebChromeClient(new WebChromeClient() {
+                @Override
+                public boolean onShowFileChooser(
+                        WebView view,
+                        ValueCallback<Uri[]> filePathCallback,
+                        FileChooserParams fileChooserParams) {
+                    if (pendingFileChooser != null) {
+                        pendingFileChooser.onReceiveValue(null);
+                    }
+                    pendingFileChooser = filePathCallback;
+                    try {
+                        Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                        pick.addCategory(Intent.CATEGORY_OPENABLE);
+                        pick.setType("*/*");
+                        startActivityForResult(Intent.createChooser(pick, "Select Backup File"), REQ_OPEN_DOCUMENT);
+                        return true;
+                    } catch (Exception e) {
+                        pendingFileChooser = null;
+                        return false;
+                    }
+                }
+            });
+
+            rootLayout.addView(
+                    webView,
+                    new FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT));
+
+            if (Build.VERSION.SDK_INT >= 33) {
+                backCallback = this::handleBackNavigation;
+                getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                        OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
+            }
+
+            SlapRFApp.step(this, "Calling WebView.loadUrl(" + serverUrl + ")");
+            webView.loadUrl(serverUrl);
+        } catch (Throwable wvErr) {
+            SlapRFApp.recordError(this, "WebView initialization failed", wvErr, true);
+            showFatalStartupScreen("Android System WebView failed to initialize", wvErr);
+        }
+    }
+
+    private int dp(int v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+
+    private void showFatalStartupScreen(String headline, Throwable err) {
+        String dlStatus = SlapRFApp.exportNowToDownloads(this);
+        final String fullReport = SlapRFApp.snapshotText(this);
+
+        if (rootLayout == null) {
+            rootLayout = new FrameLayout(this);
+            rootLayout.setBackgroundColor(DARK_BG);
+            setContentView(rootLayout);
+        }
+        rootLayout.removeAllViews();
+
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setBackgroundColor(DARK_BG);
+        container.setPadding(dp(18), dp(24), dp(18), dp(18));
+
+        TextView title = new TextView(this);
+        title.setText("SlapRF Startup Diagnostic");
+        title.setTextColor(0xFFF87171);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 19);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        container.addView(title);
+
+        TextView sub = new TextView(this);
+        sub.setText(headline + "\nSaved log: " + dlStatus + " (check Files -> Downloads -> " + SlapRFApp.BOOT_LOG_FILENAME + ")");
+        sub.setTextColor(0xFFD1D5DB);
+        sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        sub.setPadding(0, dp(8), 0, dp(12));
+        container.addView(sub);
+
+        LinearLayout btnRow = new LinearLayout(this);
+        btnRow.setOrientation(LinearLayout.HORIZONTAL);
+        btnRow.setGravity(Gravity.START);
+
+        Button shareBtn = new Button(this);
+        shareBtn.setText("Share Log");
+        shareBtn.setOnClickListener(v -> {
+            try {
+                Intent send = new Intent(Intent.ACTION_SEND);
+                send.setType("text/plain");
+                send.putExtra(Intent.EXTRA_SUBJECT, "SlapRF Android Startup Log");
+                send.putExtra(Intent.EXTRA_TEXT, SlapRFApp.snapshotText(this));
+                startActivity(Intent.createChooser(send, "Send SlapRF Startup Log"));
+            } catch (Throwable ignored) {
             }
         });
+        btnRow.addView(shareBtn);
+
+        Button copyBtn = new Button(this);
+        copyBtn.setText("Copy Log");
+        copyBtn.setOnClickListener(v -> {
+            try {
+                ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null) {
+                    cm.setPrimaryClip(ClipData.newPlainText("SlapRF Startup Log", SlapRFApp.snapshotText(this)));
+                    Toast.makeText(this, "Copied startup log to clipboard", Toast.LENGTH_SHORT).show();
+                }
+            } catch (Throwable ignored) {
+            }
+        });
+        btnRow.addView(copyBtn);
+
+        Button saveAsBtn = new Button(this);
+        saveAsBtn.setText("Save File...");
+        saveAsBtn.setOnClickListener(v -> {
+            try {
+                pendingSaveBytes = SlapRFApp.snapshotText(this).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                Intent create = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                create.addCategory(Intent.CATEGORY_OPENABLE);
+                create.setType("text/plain");
+                create.putExtra(Intent.EXTRA_TITLE, SlapRFApp.BOOT_LOG_FILENAME);
+                startActivityForResult(create, REQ_CREATE_DOCUMENT);
+            } catch (Throwable ignored) {
+            }
+        });
+        btnRow.addView(saveAsBtn);
+
+        container.addView(btnRow);
+
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
+        scrollLp.topMargin = dp(12);
+        scroll.setLayoutParams(scrollLp);
+        scroll.setBackgroundColor(0xFF14171D);
+
+        TextView logView = new TextView(this);
+        logView.setText(fullReport);
+        logView.setTextColor(0xFFE5E7EB);
+        logView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        logView.setTypeface(Typeface.MONOSPACE);
+        logView.setTextIsSelectable(true);
+        logView.setPadding(dp(12), dp(12), dp(12), dp(12));
+        scroll.addView(logView);
+        container.addView(scroll);
 
         rootLayout.addView(
-                webView,
+                container,
                 new FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT));
-        setContentView(rootLayout);
-
-        if (Build.VERSION.SDK_INT >= 33) {
-            backCallback = this::handleBackNavigation;
-            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
-                    OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
-        }
-
-        if (serverUrl != null && !serverUrl.isEmpty()) {
-            webView.loadUrl(serverUrl);
-        }
     }
 
     @Override
@@ -840,12 +1066,18 @@ public final class SlapRFHost extends Activity {
 
         @JavascriptInterface
         public String getLanStatusJson() {
+            if (ensureNativeLoaded(SlapRFHost.this) != null) {
+                return "{\"enabled\":false,\"port\":0,\"urls\":[]}";
+            }
             return nativeGetLanStatusJson();
         }
 
         @JavascriptInterface
         public String setLanEnabled(boolean enabled) {
             saveLanPref(SlapRFHost.this, enabled);
+            if (ensureNativeLoaded(SlapRFHost.this) != null) {
+                return "{\"enabled\":false,\"port\":0,\"urls\":[]}";
+            }
             String res = nativeSetLanEnabled(enabled);
             EngineService.refreshNotification(SlapRFHost.this);
             return res;
@@ -927,19 +1159,21 @@ public final class SlapRFHost extends Activity {
 
             String subtitle = "Local timing engine active";
             try {
-                String lanJson = nativeGetLanStatusJson();
-                if (lanJson != null && !lanJson.isEmpty()) {
-                    JSONObject obj = new JSONObject(lanJson);
-                    if (obj.optBoolean("enabled", false)) {
-                        JSONArray urls = obj.optJSONArray("urls");
-                        if (urls != null && urls.length() > 0) {
-                            subtitle = "LAN server: " + urls.optString(0);
-                        } else {
-                            subtitle = "LAN server active on :" + obj.optInt("port", 8090);
+                if (ensureNativeLoaded(ctx) == null) {
+                    String lanJson = nativeGetLanStatusJson();
+                    if (lanJson != null && !lanJson.isEmpty()) {
+                        JSONObject obj = new JSONObject(lanJson);
+                        if (obj.optBoolean("enabled", false)) {
+                            JSONArray urls = obj.optJSONArray("urls");
+                            if (urls != null && urls.length() > 0) {
+                                subtitle = "LAN server: " + urls.optString(0);
+                            } else {
+                                subtitle = "LAN server active on :" + obj.optInt("port", 8090);
+                            }
                         }
                     }
                 }
-            } catch (Exception ignored) {
+            } catch (Throwable ignored) {
             }
 
             int immutableFlags = PendingIntent.FLAG_UPDATE_CURRENT
@@ -972,10 +1206,14 @@ public final class SlapRFHost extends Activity {
         @Override
         public void onCreate() {
             super.onCreate();
-            SlapRFUsbShim.init(this);
-            SlapRFBleShim.init(this);
-            ensureTtsInitialized(this);
-            acquireLocks();
+            try {
+                SlapRFUsbShim.init(this);
+                SlapRFBleShim.init(this);
+                ensureTtsInitialized(this);
+                acquireLocks();
+            } catch (Throwable t) {
+                SlapRFApp.recordError(this, "EngineService.onCreate", t, false);
+            }
         }
 
         @Override
@@ -985,26 +1223,51 @@ public final class SlapRFHost extends Activity {
                 if (act != null) {
                     act.runOnUiThread(act::finishAndRemoveTask);
                 }
-                nativeStopServer();
+                if (ensureNativeLoaded(this) == null) {
+                    try {
+                        nativeStopServer();
+                    } catch (Throwable ignored) {
+                    }
+                }
                 shutdownSharedBeepTrack();
                 shutdownSharedTts();
                 releaseLocks();
-                stopForeground(STOP_FOREGROUND_REMOVE);
+                try {
+                    stopForeground(STOP_FOREGROUND_REMOVE);
+                } catch (Throwable ignored) {
+                }
                 stopSelf();
                 return START_NOT_STICKY;
             }
 
-            Notification notif = buildEngineNotification(this);
-            if (Build.VERSION.SDK_INT >= 34) {
-                startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
-            } else {
-                startForeground(NOTIF_ID, notif);
+            if (ensureNativeLoaded(this) != null) {
+                stopSelf();
+                return START_NOT_STICKY;
             }
 
-            nativeStartServer(
-                    getFilesDir().getAbsolutePath(),
-                    resolveVersionName(this),
-                    isLanPrefEnabled(this));
+            try {
+                Notification notif = buildEngineNotification(this);
+                if (Build.VERSION.SDK_INT >= 34) {
+                    startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+                } else {
+                    startForeground(NOTIF_ID, notif);
+                }
+                SlapRFApp.step(this, "EngineService.startForeground OK");
+            } catch (Throwable fgsErr) {
+                SlapRFApp.recordError(this, "EngineService.startForeground denied (stopping background service; Activity server stays live)", fgsErr, false);
+                releaseLocks();
+                stopSelf();
+                return START_NOT_STICKY;
+            }
+
+            try {
+                nativeStartServer(
+                        getFilesDir().getAbsolutePath(),
+                        resolveVersionName(this),
+                        isLanPrefEnabled(this));
+            } catch (Throwable srvErr) {
+                SlapRFApp.recordError(this, "EngineService.nativeStartServer", srvErr, false);
+            }
             return START_STICKY;
         }
 

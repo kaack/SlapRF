@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="app.slaprf"
-    android:versionCode="7"
-    android:versionName="0.0.6">
+    package="app.slaprf">
 
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
@@ -24,9 +22,11 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
 
     <application
+        android:name=".SlapRFApp"
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
+        android:extractNativeLibs="false"
         android:usesCleartextTraffic="true"
         android:hardwareAccelerated="true"
         android:allowBackup="true"
