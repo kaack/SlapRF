@@ -28,19 +28,19 @@
 const PRECACHE = [
   {
     "url": "dist/app.js",
-    "rev": "fc6ca5b6b48b71b9"
+    "rev": "c4cef260381f1ae3"
   },
   {
     "url": "firmware/slaprf-p4-poe-bridge.bin",
-    "rev": "ad209949021ded74"
+    "rev": "8d33c1551e95b2b0"
   },
   {
     "url": "firmware/slaprf-xiao-c5-ble.bin",
-    "rev": "ff4c2e807050638f"
+    "rev": "bd264c4229114640"
   },
   {
     "url": "firmware/slaprf-xiao-c5.bin",
-    "rev": "518f07a6005b9d50"
+    "rev": "b44abb70ad10dfca"
   },
   {
     "url": "icons/icon.svg",
@@ -80,14 +80,14 @@ const PRECACHE = [
   },
   {
     "url": "wasm/slaprf.wasm",
-    "rev": "55303e7be1178cca"
+    "rev": "d36f8c6a01872d75"
   },
   {
     "url": "wasm/wasm_exec.js",
     "rev": "0c949f4996f9a896"
   }
 ];
-const VERSION = "25980c925baf8fb4";
+const VERSION = "9471e507bed33bdf";
 
 const CACHE_PREFIX = "slaprf-precache-";
 const CACHE_NAME = CACHE_PREFIX + VERSION;
