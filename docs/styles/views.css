@@ -28357,7 +28357,7 @@ html[data-theme="light"] .practice-review-lap-cell.is-missed {
 
 .ai-teacher-label {
   font-size: 12.5px;
-  color: var(--text-muted, rgba(255, 255, 255, 0.72));
+  color: var(--text-2);
 }
 
 .ai-teacher-actions,
@@ -28366,13 +28366,42 @@ html[data-theme="light"] .practice-review-lap-cell.is-missed {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  max-width: 100%;
 }
 
-.ai-teacher-pack-select {
+.ai-teacher-actions .custom-select {
+  min-width: 0;
+}
+
+.ai-teacher-pack-select,
+.ai-base-model-select {
   height: 28px;
   padding: 0 8px;
   font-size: 12px;
-  max-width: 210px;
+  max-width: 240px;
+}
+
+.ai-base-select-row .custom-select,
+.ai-base-select-row .ai-base-model-select {
+  width: auto;
+  min-width: 230px;
+  max-width: 300px;
+}
+
+@media (max-width: 560px) {
+  .ai-teacher-actions {
+    width: 100%;
+  }
+  .ai-teacher-actions .custom-select {
+    flex: 1 1 0;
+    max-width: none;
+  }
+  .ai-base-select-row .custom-select,
+  .ai-base-select-row .ai-base-model-select {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
 }
 
 .ai-teacher-dl-box {
