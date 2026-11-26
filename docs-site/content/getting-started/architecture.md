@@ -46,9 +46,11 @@ A SlapRF track uses one Hub timer (`H1`) and up to 6 optional Spoke timers (`T1`
   {{< themed-image light="/images/slaprf-setup.jpg" dark="/images/slaprf-setup-dark.jpg" alt="SlapRF USB Mode" >}}
   {{< /tab >}}
   {{< tab name="PoE Network Mode" >}}
-  PoE Network Mode (`slaprf-p4-poe-bridge.bin` + `slaprf-xiao-c5.bin`) runs both power and `100 Mbps` full-duplex Ethernet up to `100 m` over a single Cat5e or Cat6 cable to the Start / Finish gate.
+  PoE Network Mode (`slaprf-p4-poe-bridge.bin` + `slaprf-xiao-c5.bin`) runs both power and `100 Mbps` Ethernet up to `100 m` over a single Cat5e or Cat6 cable to the Start / Finish gate.
 
-  Plug a USB Hub (`H1`) into the USB-A Host port of a Waveshare `ESP32-P4-POE-ETH` board at the Start / Finish gate and feed it from an `802.3af` PoE switch or injector at the pilot bench. Neither board at the Start / Finish gate needs a battery, and optional Spoke timers (`T1` to `T6`) link to `H1` over `2.4 GHz` ESP-NOW. See [PoE Ethernet Bridge](../hardware/poe-bridge) for full wiring and flashing steps.
+  Plug a USB Hub (`H1`) into the USB-A port of a Waveshare `ESP32-P4-WIFI6-POE-ETH` board at the Start / Finish gate and feed it from an `802.3af` PoE switch or injector at the pilot bench. Neither board at the gate needs a battery, and optional Spoke timers (`T1` to `T6`) link to `H1` over `2.4 GHz` ESP-NOW. See [PoE Ethernet Bridge](../hardware/poe-bridge) for the bill of materials and setup steps.
+
+  {{< themed-image light="/images/slaprf-setup-poe.jpg" dark="/images/slaprf-setup-poe-dark.jpg" alt="SlapRF PoE Mode" >}}
   {{< /tab >}}
 {{< /tabs >}}
 

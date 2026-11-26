@@ -3,7 +3,7 @@ title: Flashing Firmware
 weight: 2
 ---
 
-Configure and flash Hub (`H1`) and Spoke (`T1` through `T6`) firmware onto Seeed Studio XIAO ESP32-C5 boards, or flash the optional [PoE Ethernet Bridge](poe-bridge) (`slaprf-p4-poe-bridge.bin`) onto a Waveshare `ESP32-P4-POE-ETH`, directly from your desktop browser below or from the built-in **Flasher** screen inside the SlapRF Android and desktop apps over USB-C. No ESP-IDF toolchain, Python install, or serial driver is needed.
+Configure and flash Hub (`H1`) and Spoke (`T1` through `T6`) firmware onto Seeed Studio XIAO ESP32-C5 boards, or flash the optional [PoE Ethernet Bridge](poe-bridge) (`slaprf-p4-poe-bridge.bin`) onto a Waveshare `ESP32-P4-WIFI6-POE-ETH`, directly from your desktop browser below or from the built-in **Flasher** screen inside the SlapRF Android and desktop apps over USB-C. No ESP-IDF toolchain, Python install, or serial driver is needed.
 
 ## Browser Flasher
 
@@ -28,15 +28,18 @@ Connect your XIAO ESP32-C5 with a USB-C data cable in Chrome, Edge, or Opera to 
 
 ### Open Flasher
 
-Click **Open Firmware Flasher** above to launch the 3-step firmware wizard.
+Click **Open Firmware Flasher** above to launch the firmware wizard.
 
-### Choose Role
+### Select Device and Role
 
-In Step 1, pick **Hub** (`H1`, one per course), **Spoke** (wireless split gates), or **PoE Bridge** (Waveshare `ESP32-P4-POE-ETH` USB-to-Ethernet adapter; see [PoE Ethernet Bridge](poe-bridge)). In Step 2, choose **Bluetooth** (`slaprf-xiao-c5-ble.bin`) or **USB cable** (`slaprf-xiao-c5.bin`) for a Hub, or pick timer slot `T1` through `T6` for a Spoke.
+In Step 1 (**What are you flashing?**), pick **Gate Timer** (`XIAO ESP32-C5`) or **PoE Bridge** (Waveshare `ESP32-P4-WIFI6-POE-ETH`; see [PoE Ethernet Bridge](poe-bridge)).
+
+- **PoE Bridge**: Advances straight to **Flash bridge** in Step 2.
+- **Gate Timer**: Pick **Hub** (`H1`, one per course) or **Spoke** (wireless split gates) in Step 2, then choose **Bluetooth** (`slaprf-xiao-c5-ble.bin`) or **USB cable** (`slaprf-xiao-c5.bin`) for a Hub, or timer label `T1` through `T6` for a Spoke in Step 3.
 
 ### Flash via USB
 
-In Step 3, click **Flash H1 to USB** (or `T1`-`T6`), select the `USB JTAG / serial debug unit` port in the browser chooser, and click **Connect**. Erasing, writing, and verification finish in about 20 seconds without holding the `BOOT` button.
+Click **Flash to USB**, select the USB serial port in the browser chooser, and click **Connect**. Erasing, writing, and verification finish in about 20 seconds without holding the `BOOT` button.
 
 {{% /steps %}}
 

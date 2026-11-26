@@ -153,7 +153,49 @@ describe("Flasher Hub connection: USB cable vs Bluetooth hub image", () => {
     resetBleFirmwareImageProbe();
   });
 
-  it("shows the Hub connection choice in Step 2 (Configure timer) only for the Hub, disables Bluetooth when the image is missing", async () => {
+  it("asks what device is being flashed in Step 1 (Gate Timer vs PoE Bridge) with a 2-step flow for PoE Bridge", async () => {
+    const base = await placeholderBase();
+    const stub = stubFirmwareFetch({ usb: base, ble: base, poeBridge: base });
+    resetBleFirmwareImageProbe();
+    resetPoeBridgeFirmwareImageProbe();
+    const prevBound = boundSimStore();
+    const store = makeStore({ simulatorRunning: false, timers: [] });
+    bindSimSerialStore(store);
+    const { api } = makeMockApiClient(store);
+    const root = mountHtml(`<div id="tf"></div>`);
+    const flasher = new TimerFlasher(root.querySelector("#tf")!, store, api);
+    try {
+      await settle();
+      expect(root.textContent || "").toContain("What are you flashing?");
+      expect(root.querySelector('[data-pick-device="timer"]')!.classList.contains("is-active")).toBe(true);
+      expect(root.querySelector('[data-pick-device="poe_bridge"]')).not.toBeNull();
+      expect(root.querySelectorAll(".flasher-step-pill").length).toBe(4);
+
+      // Selecting PoE Bridge switches to a concise 2-step wizard (Device -> Flash bridge).
+      root.querySelector<HTMLElement>('[data-pick-device="poe_bridge"]')!.click();
+      expect(root.querySelectorAll(".flasher-step-pill").length).toBe(2);
+      expect(flasher.selectedImageName).toBe("slaprf-p4-poe-bridge.bin");
+
+      root.querySelector<HTMLElement>("[data-wizard-next]")!.click();
+      expect(root.textContent || "").toContain("Ready to flash PoE Bridge");
+      expect(root.textContent || "").toContain("Step 2 of 2");
+      expect(root.textContent || "").not.toContain("\u2014");
+
+      // Contextual docs buttons via selectRole("poe_bridge") jump straight to Flash bridge.
+      root.querySelector<HTMLElement>("[data-wizard-prev]")!.click();
+      expect(root.textContent || "").toContain("What are you flashing?");
+      flasher.selectRole("poe_bridge");
+      expect(root.textContent || "").toContain("Ready to flash PoE Bridge");
+    } finally {
+      flasher.destroy();
+      if (prevBound) bindSimSerialStore(prevBound);
+      stub.restore();
+      resetBleFirmwareImageProbe();
+      resetPoeBridgeFirmwareImageProbe();
+    }
+  });
+
+  it("shows the Hub connection choice in Step 3 (Configure timer) only for the Hub, disables Bluetooth when the image is missing", async () => {
     const prev = window.localStorage.getItem(HUB_LINK_STORAGE_KEY);
     window.localStorage.setItem(HUB_LINK_STORAGE_KEY, "ble");
     const stub = stubFirmwareFetch({ ble: null });
@@ -167,10 +209,12 @@ describe("Flasher Hub connection: USB cable vs Bluetooth hub image", () => {
     try {
       await settle();
       expect(root.textContent || "").toContain("Configure timer");
-      // Step 1 (Select role) does not show the Hub connection toggle.
+      // Step 1 (Select device) and Step 2 (Select role) do not show the Hub connection toggle.
+      expect(root.querySelector("[data-hub-link-choice]")).toBeNull();
+      root.querySelector<HTMLElement>("[data-wizard-next]")!.click();
       expect(root.querySelector("[data-hub-link-choice]")).toBeNull();
 
-      // Advance to Step 2 (Configure timer): Hub shows fixed SlapRF version + Hub connection toggle.
+      // Advance to Step 3 (Configure timer): Hub shows fixed SlapRF version + Hub connection toggle.
       root.querySelector<HTMLElement>("[data-wizard-next]")!.click();
       const choice = root.querySelector("[data-hub-link-choice]");
       expect(choice).not.toBeNull();
@@ -184,7 +228,7 @@ describe("Flasher Hub connection: USB cable vs Bluetooth hub image", () => {
       expect(flasher.selectedImageName).toBe("slaprf-xiao-c5.bin");
       expect(root.textContent || "").not.toContain("\u2014");
 
-      // Spokes never see the choice in Step 2 either.
+      // Spokes never see the choice in Step 3 either.
       root.querySelector<HTMLElement>('[data-goto-step="network"]')!.click();
       root.querySelector<HTMLElement>('[data-pick-role="spoke"]')!.click();
       root.querySelector<HTMLElement>("[data-wizard-next]")!.click();
@@ -204,7 +248,7 @@ describe("Flasher Hub connection: USB cable vs Bluetooth hub image", () => {
     }
   });
 
-  it("persists the Bluetooth choice in Step 2 and flashes / downloads the BLE image for the Hub", async () => {
+  it("persists the Bluetooth choice in Step 3 and flashes / downloads the BLE image for the Hub", async () => {
     const prev = window.localStorage.getItem(HUB_LINK_STORAGE_KEY);
     window.localStorage.removeItem(HUB_LINK_STORAGE_KEY);
     const base = await placeholderBase();
@@ -224,7 +268,8 @@ describe("Flasher Hub connection: USB cable vs Bluetooth hub image", () => {
     let second: TimerFlasher | null = null;
     try {
       await settle();
-      // Advance to Step 2 (Configure timer) where the Hub connection toggle lives.
+      // Advance through Step 1 (Device) -> Step 2 (Role) -> Step 3 (Configure timer).
+      root.querySelector<HTMLElement>("#tf [data-wizard-next]")!.click();
       root.querySelector<HTMLElement>("#tf [data-wizard-next]")!.click();
       // Default is USB cable.
       expect(root.querySelector('#tf [data-hub-link="usb"]')!.classList.contains("is-active")).toBe(true);
@@ -238,7 +283,7 @@ describe("Flasher Hub connection: USB cable vs Bluetooth hub image", () => {
       );
       expect(flasher.selectedImageName).toBe("slaprf-xiao-c5-ble.bin");
 
-      // Step through to Flash (Step 3) and hit Download .bin: the API is asked for the BLE image.
+      // Step through to Flash (Step 4) and hit Download .bin: the API is asked for the BLE image.
       root.querySelector<HTMLElement>("#tf [data-wizard-next]")!.click();
       root.querySelector<HTMLElement>("#tf [data-download-bin]")!.click();
       await settle();
@@ -247,9 +292,10 @@ describe("Flasher Hub connection: USB cable vs Bluetooth hub image", () => {
       expect(fetchArgs[0][3]).toBe("ble");
       expect(root.querySelector("#tf")!.textContent).toContain("Bluetooth");
 
-      // A fresh flasher remembers the choice when entering Step 2.
+      // A fresh flasher remembers the choice when entering Step 3.
       second = new TimerFlasher(root.querySelector("#tf2")!, store, api);
       await settle();
+      root.querySelector<HTMLElement>("#tf2 [data-wizard-next]")!.click();
       root.querySelector<HTMLElement>("#tf2 [data-wizard-next]")!.click();
       expect(root.querySelector('#tf2 [data-hub-link="ble"]')!.classList.contains("is-active")).toBe(true);
       expect(second.selectedImageName).toBe("slaprf-xiao-c5-ble.bin");
