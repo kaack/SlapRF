@@ -4,6 +4,9 @@ import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import {
+  ANDROID_APK_URL,
+  IOS_IPA_URL,
+  IOS_SIDELOADLY_URL,
   PORTABLE_RELEASES_URL,
   capabilitiesSnapshot,
   orderedPortableAssets,
@@ -479,15 +482,18 @@ export class PoeBridgeView extends Component {
           <section class="settings-section" data-section-anchor="portable">
             <div class="settings-intro">
               <h2>SlapRF Server required for LAN hardware</h2>
-              <p>Browser tabs cannot open raw UDP or TCP sockets to a physical PoE Bridge directly. Run SlapRF Portable or the SlapRF Android app on your network, or enable Simulation active to preview PoE Bridge controls.</p>
+              <p>Browser tabs cannot open raw UDP or TCP sockets to a physical PoE Bridge directly. Run SlapRF Portable or the native Android / iOS app on your network, or enable Simulation active to preview PoE Bridge controls.</p>
             </div>
             <div class="card">
               <div class="option-row">
                 <div>
-                  <div class="option-title">Download SlapRF Portable</div>
-                  <div class="option-sub">Standalone single-file server with built-in PoE Ethernet discovery, TCP :5480 low-latency streaming, and live bridge management.</div>
+                  <div class="option-title">Download SlapRF</div>
+                  <div class="option-sub">Standalone desktop server or mobile app with built-in PoE Ethernet discovery, TCP :5480 low-latency streaming, and live bridge management.</div>
                   <div class="laprf-emulator-downloads" style="margin-top:12px;">
                     ${downloads}
+                    <a class="btn btn-sm btn-ghost" href="${ANDROID_APK_URL}" download title="slaprf-android-arm64.apk">Android APK</a>
+                    <a class="btn btn-sm btn-ghost" href="${IOS_SIDELOADLY_URL}" title="Install slaprf-ios-arm64.ipa via Sideloadly">iOS (Sideloadly)</a>
+                    <a class="btn btn-sm btn-ghost" href="${IOS_IPA_URL}" download title="slaprf-ios-arm64.ipa">iOS (.ipa)</a>
                     <a class="link-inline" href="${PORTABLE_RELEASES_URL}" target="_blank" rel="noopener">All releases</a>
                   </div>
                 </div>

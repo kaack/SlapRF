@@ -145,9 +145,13 @@ export class AppShell extends Component {
       })
     );
     this.onDispose(
-      subscribeCapabilities(() => {
+      subscribeCapabilities((caps) => {
         if (isServerDisconnectedLockout() && this.router.route !== "setup") {
           navigateToRouteSection("setup", "datasource");
+          return;
+        }
+        if (caps.portable && !caps.nativeUsb && this.router.route === "flasher") {
+          this.router.navigateSection("network");
         }
       })
     );
@@ -223,6 +227,7 @@ export class AppShell extends Component {
       if (r.hiddenFromNav) continue;
       if (r.simOnly && !simOn) continue;
       if (r.laprfEmulatorOnly && !emulOn) continue;
+      if (r.id === "flasher" && caps.portable && !caps.nativeUsb) continue;
       const poeOn =
         this.store.timingHardwareMode === "slaprf_net" &&
         (usbPool.mainConsole.connected || usbPool.mainConsole.reconnecting);
@@ -1057,6 +1062,11 @@ export class AppShell extends Component {
       this.store.timingHardwareMode === "slaprf_net" &&
       (usbPool.mainConsole.connected || usbPool.mainConsole.reconnecting);
     if (route === "poe" && this.store.hasHydrated && !poeActive) {
+      this.router.navigateSection("network");
+      return;
+    }
+    const caps = capabilitiesSnapshot();
+    if (route === "flasher" && caps.portable && !caps.nativeUsb) {
       this.router.navigateSection("network");
       return;
     }

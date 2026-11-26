@@ -23,6 +23,7 @@ import { Announcer } from "../services/announcer";
 import { BackendHttpTransport } from "../services/backend_transport";
 import { decodeTelemetryBatch } from "../services/wasm_transport";
 import { AppStore } from "../state/store";
+import { NetworkView } from "../views/NetworkView";
 import { SetupView } from "../views/SetupView";
 import { SimView } from "../views/SimView";
 import { DataSourceCard } from "../widgets/DataSourceCard";
@@ -435,6 +436,73 @@ describe("services/backend_transport & BackendConnectModal — Wire Telemetry & 
     } finally {
       document.body.querySelectorAll(".custom-select-popover").forEach((el) => el.remove());
       view.destroy();
+    }
+  });
+
+  it("hides direct USB modes and USB Flasher on nativeUsb=false (iOS) and renders Sideloadly + SideStore download links", async () => {
+    const store = makeStore({ simulatorRunning: false, timingHardwareMode: "slaprf" });
+    const { api } = makeMockApiClient(store);
+    const router = new Router();
+
+    // 1. Disconnected Server mode in DataSourceCard renders Android APK + iOS Sideloadly/SideStore/IPA links
+    const dsHost = mountHtml(`<div></div>`);
+    const dsCard = new DataSourceCard(dsHost, store, api);
+    try {
+      dsHost.querySelector<HTMLButtonElement>("[data-backend-mode='server']")!.click();
+      const sideloadlyLink = dsHost.querySelector<HTMLAnchorElement>("[data-ios-sideloadly-link]");
+      const sideStoreLink = dsHost.querySelector<HTMLAnchorElement>("[data-ios-sidestore-link]");
+      const ipaLink = dsHost.querySelector<HTMLAnchorElement>("[data-ios-ipa-link]");
+      expect(sideloadlyLink?.getAttribute("href")).toContain("sideloadly://?url=");
+      expect(sideloadlyLink?.getAttribute("href")).toContain("slaprf-ios-arm64.ipa");
+      expect(sideStoreLink?.getAttribute("href")).toContain("sidestore://source?url=");
+      expect(sideStoreLink?.getAttribute("href")).toContain("altstore-source.json");
+      expect(ipaLink?.getAttribute("href")).toContain("slaprf-ios-arm64.ipa");
+    } finally {
+      dsCard.destroy();
+      setDatasourceUiMode("demo");
+    }
+
+    // 2. Probing an iOS host (portable=true, nativeUsb=false) hides #/flasher and omits USB options in NetworkView
+    const fetchSpy = spyOn(window, "fetch" as keyof Window & string).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/v1/capabilities")) {
+        return new Response(
+          JSON.stringify({
+            portable: true,
+            version: "v0.0.20",
+            hostname: "SlapRF-iPad",
+            storageBackend: "bbolt",
+            nativeEngine: true,
+            nativeUsb: false,
+            lanIPs: ["192.168.1.33"],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+
+    const uiRoot = mountHtml(`<div><aside id="sb-ios"></aside><section id="net-ios"></section></div>`);
+    const sb = new Sidebar(uiRoot.querySelector("#sb-ios")!, store, router);
+    const netView = new NetworkView(uiRoot.querySelector("#net-ios")!, store, api, router);
+    try {
+      const caps = await probeCapabilities();
+      expect(caps.portable).toBe(true);
+      expect(caps.nativeUsb).toBe(false);
+
+      const flasherNav = uiRoot.querySelector<HTMLElement>('[data-route="flasher"]')!;
+      expect(flasherNav.style.display).toBe("none");
+
+      const modeSelect = uiRoot.querySelector<HTMLSelectElement>('[data-field="network-hardware-mode"]')!;
+      const optionValues = Array.from(modeSelect.options).map((o) => o.value);
+      expect(optionValues).toEqual(["slaprf_ble", "slaprf_net", "laprf", "rotorhazard"]);
+      expect(modeSelect.value).toBe("slaprf_ble");
+    } finally {
+      netView.destroy();
+      sb.destroy();
+      router.clearListeners();
+      fetchSpy.restore();
+      await probeCapabilities();
     }
   });
 });

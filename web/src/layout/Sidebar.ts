@@ -468,8 +468,9 @@ export class Sidebar extends Component {
     this.el.querySelectorAll<HTMLElement>("[data-poe-only]").forEach((a) => {
       a.style.display = poeOn ? "" : "none";
     });
+    const hideUsbFlasher = isPortable && !caps.nativeUsb;
     this.el.querySelectorAll<HTMLElement>('[data-route="flasher"]').forEach((a) => {
-      a.style.display = "";
+      a.style.display = hideUsbFlasher ? "none" : "";
     });
 
     this.el.querySelectorAll<HTMLAnchorElement>("a[data-route]").forEach((a) => {

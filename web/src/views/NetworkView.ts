@@ -2237,18 +2237,30 @@ export class NetworkView extends Component {
   }
 
   private renderTopConnectionControls(mode: TimingHardwareMode): void {
-    const isBleMode = mode === "slaprf_ble";
-    const isNetMode = mode === "slaprf_net";
-    const isLapRFNet = mode === "laprf";
-    const isLapRFUSB = mode === "laprf_usb";
+    const sim = this.store.simulatorRunning;
+    const caps = capabilitiesSnapshot();
+    const omitDirectUsb = caps.portable && !caps.nativeUsb && !sim;
+    const canUseExternal = sim || caps.portable;
+    let effectiveMode: TimingHardwareMode =
+      !canUseExternal && mode !== "slaprf" ? "slaprf" : mode;
+    if (omitDirectUsb) {
+      if (effectiveMode === "slaprf") effectiveMode = "slaprf_ble";
+      else if (effectiveMode === "laprf_usb") effectiveMode = "laprf";
+      else if (effectiveMode === "rotorhazard_usb") effectiveMode = "rotorhazard";
+    }
+
+    const isBleMode = effectiveMode === "slaprf_ble";
+    const isNetMode = effectiveMode === "slaprf_net";
+    const isLapRFNet = effectiveMode === "laprf";
+    const isLapRFUSB = effectiveMode === "laprf_usb";
     const isLapRF = isLapRFNet || isLapRFUSB;
-    const isRHNet = mode === "rotorhazard";
-    const isRHUSB = mode === "rotorhazard_usb";
+    const isRHNet = effectiveMode === "rotorhazard";
+    const isRHUSB = effectiveMode === "rotorhazard_usb";
     const isSlapRF = !isLapRF && !isRHNet && !isRHUSB;
 
     const connIntro = this.el.querySelector<HTMLElement>('[data-slot="connection-intro"]');
-    if (connIntro && connIntro.dataset.introMode !== mode) {
-      connIntro.dataset.introMode = mode;
+    if (connIntro && connIntro.dataset.introMode !== effectiveMode) {
+      connIntro.dataset.introMode = effectiveMode;
       connIntro.classList.remove("has-intro-collapse");
       const introText = isRHUSB
         ? "Select your timing device and connect RotorHazard USB serial nodes over USB-C / CDC (ESP32-C5, STM32, Arduino, or RP2040)."
@@ -2267,16 +2279,11 @@ export class NetworkView extends Component {
       scanSettingsIntroCollapse(connIntro);
     }
 
-    const sim = this.store.simulatorRunning;
-    const caps = capabilitiesSnapshot();
-    const canUseExternal = sim || caps.portable;
-    const effectiveMode: TimingHardwareMode =
-      !canUseExternal && mode !== "slaprf" ? "slaprf" : mode;
     const lock = this.connectionLockState();
 
     const modeHost = this.el.querySelector<HTMLElement>('[data-slot="network-mode-selector"]');
     if (modeHost && !isCustomSelectOpenWithin(modeHost)) {
-      const modeSig = `${effectiveMode}|${canUseExternal ? 1 : 0}|${lock.locked ? 1 : 0}`;
+      const modeSig = `${effectiveMode}|${canUseExternal ? 1 : 0}|${omitDirectUsb ? 1 : 0}|${lock.locked ? 1 : 0}`;
       if (modeSig !== this.lastModeSelectorSig || modeHost.childElementCount === 0) {
         this.lastModeSelectorSig = modeSig;
         const lockTitle = lock.locked
@@ -2290,13 +2297,13 @@ export class NetworkView extends Component {
             aria-label="Timing system"
             ${lock.locked ? `disabled ${lockTitle}` : ""}
           >
-            <option value="slaprf" ${effectiveMode === "slaprf" ? "selected" : ""}>SlapRF (USB)</option>
+            ${omitDirectUsb ? "" : `<option value="slaprf" ${effectiveMode === "slaprf" ? "selected" : ""}>SlapRF (USB)</option>`}
             <option value="slaprf_ble" ${effectiveMode === "slaprf_ble" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select SlapRF (Bluetooth)"'}>SlapRF (Bluetooth)</option>
             <option value="slaprf_net" ${effectiveMode === "slaprf_net" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select SlapRF (Network)"'}>SlapRF (Network)</option>
             <option value="laprf" ${effectiveMode === "laprf" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select LapRF 8-Way (Network)"'}>LapRF 8-Way (Network)</option>
-            <option value="laprf_usb" ${effectiveMode === "laprf_usb" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select LapRF 8-Way (USB)"'}>LapRF 8-Way (USB)</option>
+            ${omitDirectUsb ? "" : `<option value="laprf_usb" ${effectiveMode === "laprf_usb" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select LapRF 8-Way (USB)"'}>LapRF 8-Way (USB)</option>`}
             <option value="rotorhazard" ${effectiveMode === "rotorhazard" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select RotorHazard (Network)"'}>RotorHazard (Network)</option>
-            <option value="rotorhazard_usb" ${effectiveMode === "rotorhazard_usb" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select RotorHazard (USB)"'}>RotorHazard (USB)</option>
+            ${omitDirectUsb ? "" : `<option value="rotorhazard_usb" ${effectiveMode === "rotorhazard_usb" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select RotorHazard (USB)"'}>RotorHazard (USB)</option>`}
           </select>`;
         scanCustomSelects(modeHost);
       }

@@ -18,6 +18,11 @@
 import { appendAuthParamToWsUrl } from "./auth";
 
 export const PORTABLE_RELEASES_URL = "https://github.com/kaack/SlapRF/releases/latest";
+export const ANDROID_APK_URL = `${PORTABLE_RELEASES_URL}/download/slaprf-android-arm64.apk`;
+export const IOS_IPA_URL = `${PORTABLE_RELEASES_URL}/download/slaprf-ios-arm64.ipa`;
+export const IOS_SIDELOADLY_URL = `sideloadly://?url=${encodeURIComponent(IOS_IPA_URL)}`;
+export const ALTSTORE_SOURCE_URL = "https://slaprf.app/altstore-source.json";
+export const IOS_SIDESTORE_URL = `sidestore://source?url=${encodeURIComponent(ALTSTORE_SOURCE_URL)}`;
 
 export const BACKEND_URL_STORAGE_KEY = "slaprf.backend.url";
 export const BACKEND_RECENT_STORAGE_KEY = "slaprf.backend.recent";

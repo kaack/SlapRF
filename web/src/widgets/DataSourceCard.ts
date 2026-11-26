@@ -20,6 +20,7 @@ import {
   saveServerAuthConfig,
 } from "../services/auth";
 import {
+  ANDROID_APK_URL,
   capabilitiesSnapshot,
   connectionLostSnapshot,
   connectToBackend,
@@ -30,6 +31,9 @@ import {
   discoverLocalServer,
   getDatasourceUiMode,
   getRecentBackendUrls,
+  IOS_IPA_URL,
+  IOS_SIDELOADLY_URL,
+  IOS_SIDESTORE_URL,
   orderedPortableAssets,
   PORTABLE_RELEASES_URL,
   probeBackendCandidate,
@@ -387,7 +391,7 @@ export class DataSourceCard extends Component {
 
     const androidApp = isAndroidHostApp();
     const androidLan = androidApp ? getAndroidLanStatus() : null;
-    const sig = `${sim ? "1" : "0"}|${sim ? simSpeed : 0}|${caps.portable ? 1 : 0}|${caps.remoteBackend ? 1 : 0}|${caps.backendBaseUrl}|${caps.hostname}|${caps.version}|${caps.localDetectedUrl ?? ""}|${caps.lanIPs.join(",")}|${effectiveMode}|${this.connecting ? 1 : 0}|${this.discoveringLocal ? 1 : 0}|${this.localDiscoverySearched ? 1 : 0}|${this.connectError}|${this.mixedContentDirectUrl}|${this.noticeReason}|${recents.join(",")}|${androidLan ? `${androidLan.enabled ? 1 : 0}:${androidLan.port}:${androidLan.urls.join(",")}:${androidLan.error ?? ""}` : ""}`;
+    const sig = `${sim ? "1" : "0"}|${sim ? simSpeed : 0}|${caps.portable ? 1 : 0}|${caps.nativeUsb ? 1 : 0}|${caps.remoteBackend ? 1 : 0}|${caps.backendBaseUrl}|${caps.hostname}|${caps.version}|${caps.localDetectedUrl ?? ""}|${caps.lanIPs.join(",")}|${effectiveMode}|${this.connecting ? 1 : 0}|${this.discoveringLocal ? 1 : 0}|${this.localDiscoverySearched ? 1 : 0}|${this.connectError}|${this.mixedContentDirectUrl}|${this.noticeReason}|${recents.join(",")}|${androidLan ? `${androidLan.enabled ? 1 : 0}:${androidLan.port}:${androidLan.urls.join(",")}:${androidLan.error ?? ""}` : ""}`;
     if (sig === this.lastSig) return;
     this.lastSig = sig;
 
@@ -396,7 +400,7 @@ export class DataSourceCard extends Component {
     const isDirectServerOrigin = caps.portable && !caps.remoteBackend;
 
     const modeSubtitle = caps.portable
-      ? `Connected to native Go server (<span class="mono">${esc(caps.backendBaseUrl || window.location.origin)}</span> · v${esc(caps.version)}). Engines, <span class="mono">slaprf.db</span> persistence, native USB-C serial &amp; flasher, LapRF 8-Way, and RotorHazard run on the server.`
+      ? `Connected to native Go server (<span class="mono">${esc(caps.backendBaseUrl || window.location.origin)}</span> · v${esc(caps.version)}). Engines, <span class="mono">slaprf.db</span> persistence, ${caps.nativeUsb ? "native USB-C serial &amp; flasher" : "Bluetooth LE Hub, PoE Bridge"}, LapRF 8-Way, and RotorHazard run on the server.`
       : effectiveMode === "server"
         ? `Connect to a local (<span class="mono">127.0.0.1:8090</span>) or LAN / Raspberry Pi <strong>SlapRF Server</strong> for native performance, <span class="mono">slaprf.db</span> storage, and physical timing hardware.`
         : `Running standalone in your browser with no backend server. Switch to <strong>Server</strong> to connect a local or LAN SlapRF Server for persistent storage and physical timing hardware.`;
@@ -547,6 +551,29 @@ export class DataSourceCard extends Component {
             <a class="btn btn-ghost btn-sm" href="${PORTABLE_RELEASES_URL}" target="_blank" rel="noopener noreferrer">
               ${icons.download(14)}<span>${esc(primaryAsset ? primaryAsset.label : "Download Server")}</span>
             </a>
+          </div>
+          <div class="datasource-server-subsection" data-mobile-downloads-card style="margin-top:10px">
+            <div class="option-title">Native Mobile Apps (Android &amp; iOS / iPadOS)</div>
+            <div class="option-sub">Run the full SlapRF timing engine offline on your phone or tablet with Bluetooth Hub, PoE Bridge (:5480), spoken callouts, and Wi-Fi LAN sharing.</div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px" data-android-download-card>
+              <a class="btn btn-ghost btn-sm" href="${ANDROID_APK_URL}" download title="Download slaprf-android-arm64.apk for Android">
+                ${icons.download(14)}<span>Android APK</span>
+              </a>
+            </div>
+            <div style="margin-top:8px" data-ios-sideload-card>
+              <div class="note" style="margin-bottom:6px"><strong>iOS &amp; iPadOS (Free Sideload):</strong> Bluetooth Hub &amp; PoE Bridge supported. Install in 1 click via Sideloadly (Windows &amp; macOS with Wi-Fi auto-refresh) or SideStore.</div>
+              <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+                <a class="btn btn-primary btn-sm" href="${IOS_SIDELOADLY_URL}" data-ios-sideloadly-link title="1-click install in Sideloadly (Windows & macOS)">
+                  ${icons.download(14)}<span>Install via Sideloadly</span>
+                </a>
+                <a class="btn btn-ghost btn-sm" href="${IOS_SIDESTORE_URL}" data-ios-sidestore-link title="Add SlapRF auto-update source to SideStore">
+                  <span>Add to SideStore</span>
+                </a>
+                <a class="btn btn-ghost btn-sm mono" href="${IOS_IPA_URL}" download data-ios-ipa-link title="Direct download slaprf-ios-arm64.ipa">
+                  <span>slaprf-ios-arm64.ipa</span>
+                </a>
+              </div>
+            </div>
           </div>
         </div>`;
     } else if (caps.localDetectedUrl) {
