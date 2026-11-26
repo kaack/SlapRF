@@ -29,7 +29,8 @@ SlapRF shares a single Go timing engine and TypeScript web UI across desktop, mo
    - Corroborate every bug report against actual diagnostic logs (`slaprf.log`, `GET /v1/logs?format=text`, `adb logcat -s SlapRFGo` on Android) and live runtime state (`/v1/*` + WS snapshots, or Chrome DevTools Protocol via `live-chrome-cdp` for browser UI/canvas/WASM) before guessing from static code.
    - Escalate runtime log severity (`PUT /v1/logs/config` with `{"level":"debug"}` or `"trace"`, `-log-level debug`, or `SLAPRF_LOG_LEVEL=debug`) whenever deeper request, state, or wire-frame traces are needed.
    - When existing logs do not isolate a live issue, instrument the suspect code path with targeted diagnostic logs (`internal/applog`), redeploy (`cmd/devserver`, `cmd/build-portable -skip-web`, or `cmd/build-android -skip-web`), corroborate the root cause and fix against live logs, and either keep high-value diagnostics gated at `DEBUG`/`TRACE` or remove temporary probes before committing.
-5. **Git Checkpointing, Conventional Commits & Rebase Hygiene**:
+5. **Git Checkpointing, Conventional Commits, Local Verification & Rebase Hygiene**:
+   - Always compile and verify Go, web, and ESP-IDF firmware (`~/esp/esp-idf`, targets `esp32c5,esp32p4`) **locally** before pushing to GitHub.
    - Commit locally early and often at logical, tested milestones using **Conventional Commits** (`feat(scope): ...`, `fix(scope): ...`, `docs: ...`, `ci: ...`, `test: ...`, `chore: ...`) so work-in-progress is never lost, even when holding `git push` for user preview.
    - Stage explicit file paths (never blind `git add -A`), and rebase/autosquash noisy unpushed fixup commits onto `origin/main` before pushing (`git-and-github-hygiene` skill).
 
@@ -47,7 +48,7 @@ Activate the relevant skill below whenever a task involves environment setup, bu
 - `docs-site-authoring` (`.agents/skills/docs-site-authoring/SKILL.md`): Hugo + Hextra shortcodes (`themed-image`, `web-flasher`, `api-spec-viewer`), 3-way `Light`/`Auto`/`Dark` theme switcher, dark-slate diagrams, and `cmd/build-docs`.
 - `doc-screenshots` (`.agents/skills/doc-screenshots/SKILL.md`): Generate crisp `2x` Retina matched Dark and Light screenshots for `README.md` and `docs-site/` via `capture_retina.go`.
 - `android-wifi-deploy` (`.agents/skills/android-wifi-deploy/SKILL.md`): Build the signed Android APK, pair/connect wireless `adb` over Wi-Fi (`adb mdns services`), install/launch `app.slaprf`, triage live Hub/Spoke `/v1` + WS streams over `:18090`, stream `logcat`, and attach CDP to the Android WebView.
-- `esp32c5-firmware-build` (`.agents/skills/esp32c5-firmware-build/SKILL.md`): Compile `slaprf-xiao-c5.bin` (USB/Spoke) and `slaprf-xiao-c5-ble.bin` (Bluetooth Hub) locally with ESP-IDF `v5.5.1` or fetch CI build artifacts.
+- `esp32c5-firmware-build` (`.agents/skills/esp32c5-firmware-build/SKILL.md`): Compile `slaprf-xiao-c5.bin` (USB/Spoke), `slaprf-xiao-c5-ble.bin` (Bluetooth Hub), and `slaprf-p4-poe-bridge.bin` (ESP32-P4 PoE Bridge) locally with ESP-IDF `v5.5.1`.
 - `usb-timer-debug-and-flash` (`.agents/skills/usb-timer-debug-and-flash/SKILL.md`): Discover XIAO ESP32-C5 USB ports, avoid port locks and `usbser.sys` boot-latch pitfalls, flash/patch `SLAPRF02` images, and run live USB console/RF diagnostics.
 - `git-and-github-hygiene` (`.agents/skills/git-and-github-hygiene/SKILL.md`): Conventional Commits conventions, frequent local checkpoint commits, staging discipline, and rebasing/autosquashing before pushing.
 - `ci-and-release` (`.agents/skills/ci-and-release/SKILL.md`): Trigger and monitor GitHub Actions workflows (`verify`, `docs`, `pages`, `firmware`, `release`), author `docs/releases/vX.Y.Z.md` release notes, and publish `vX.Y.Z` releases.

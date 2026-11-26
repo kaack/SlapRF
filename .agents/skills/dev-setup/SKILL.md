@@ -4,8 +4,8 @@ description: >-
   Install, configure, and verify local development dependencies for SlapRF across Windows, macOS,
   and Linux: Go 1.25+, Hugo Extended 0.170.1, Chromium/Playwright for UI and E2E tests, GitHub CLI
   (gh), Python pyserial/esptool for USB bench tools, Android SDK/NDK/JDK 17 (adb), and ESP-IDF
-  v5.5.1 for Seeed Studio XIAO ESP32-C5 firmware. Activate when setting up a machine or diagnosing
-  missing build/test tools.
+  v5.5.1 for Seeed Studio XIAO ESP32-C5 and Waveshare ESP32-P4 PoE Bridge firmware. Activate when
+  setting up a machine or diagnosing missing build/test tools.
 ---
 
 # SlapRF Development Environment Setup
@@ -118,34 +118,37 @@ python -m pip install pyserial esptool
 ```
 
 ### Linux USB Serial & Bluetooth LE Prerequisites
-- **USB Serial (`/dev/ttyACM*`)**: On Raspberry Pi OS, the default user is already in `dialout`. On Ubuntu/Debian/Arch desktops, add your user to `dialout` (or `uucp` on Arch) and install a udev rule numbered `<73` (`/etc/udev/rules.d/70-slaprf-esp32c5.rules`, which runs before systemd's `73-seat-late.rules` processes `TAG+="uaccess"`) with `ATTRS{idVendor}=="303a"` and `MODE:="0666"` for immediate hot-plug access to XIAO ESP32-C5 (`303a:1001`) without logging out:
+- **USB Serial (`/dev/ttyACM*`)**: On Raspberry Pi OS, the default user is already in `dialout`. On Ubuntu/Debian/Arch desktops, add your user to `dialout` (or `uucp` on Arch) and install a udev rule numbered `<73` (`/etc/udev/rules.d/70-slaprf-esp32c5.rules`, which runs before systemd's `73-seat-late.rules` processes `TAG+="uaccess"`) for immediate hot-plug access to XIAO ESP32-C5 (`303a:1001`) and Waveshare ESP32-P4 PoE Bridge CH343 (`1a86:55d3`) without logging out:
   ```bash
   sudo usermod -aG dialout "$USER"
-  echo 'SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", MODE:="0666", GROUP="dialout", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/70-slaprf-esp32c5.rules
+  cat <<'EOF' | sudo tee /etc/udev/rules.d/70-slaprf-esp32c5.rules
+  SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", MODE:="0666", GROUP="dialout", TAG+="uaccess"
+  SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d3", MODE:="0666", GROUP="dialout", TAG+="uaccess"
+  EOF
   sudo udevadm control --reload-rules && sudo udevadm trigger --action=add --subsystem-match=tty
   ```
 - **Bluetooth LE (BlueZ over D-Bus)**: SlapRF automatically powers on BlueZ (`org.bluez.Adapter1.Powered = true`) over D-Bus when needed (such as fresh Raspberry Pi OS Lite boots) and discovers non-`hci0` adapters; set `SLAPRF_BLE_ADAPTER=hci1` to pin a specific controller on multi-adapter hosts.
 - **Raspberry Pi + Bluetooth Hub (`slaprf_ble`) Coexistence**: Raspberry Pi `CYW43455` radios share one `2.4 GHz` transceiver and PCB antenna between `2.4 GHz` Wi-Fi and BLE. Do **not** run `2.4 GHz` Wi-Fi on the Pi while using `slaprf_ble` (connect the Pi via `5 GHz` Wi-Fi or Ethernet), and keep at least `30 cm` (`1 ft`) between the Pi and the XIAO ESP32-C5 Hub so near-field RF (`> -30 dBm`) does not saturate the Pi receiver.
 
-### ESP-IDF `v5.5.1` (`esp32c5` Target)
-Required only when compiling C firmware locally (otherwise download CI artifacts via `gh run download`):
+### ESP-IDF `v5.5.1` (`esp32c5,esp32p4` Targets — Always Build & Test Locally Before Pushing)
+Install ESP-IDF `v5.5.1` natively so all firmware projects (`firmware/slaprf`, `firmware/slaprf_ble`, and `firmware/slaprf_p4_poe_bridge`) compile and verify locally without Docker or GitHub Actions:
 
 - **Windows** (`C:\esp`, expected by `firmware\tools\build_local.ps1` and `build_local_ble.ps1`):
   ```powershell
   git clone -b v5.5.1 --depth 1 --recursive --shallow-submodules https://github.com/espressif/esp-idf.git C:\esp\esp-idf
   $env:IDF_TOOLS_PATH = "C:\esp\tools"
-  C:\esp\esp-idf\install.bat esp32c5
+  C:\esp\esp-idf\install.bat esp32c5,esp32p4
   ```
-- **macOS / Linux** (`~/esp/esp-idf`):
+- **macOS / Linux Zero-`sudo` User-Space Install** (`~/esp/esp-idf` + `~/.espressif`):
+  Both `esp32c5` and `esp32p4` share the `riscv32-esp-elf` toolchain. As long as `git`, `python3`, and `python3-venv` are present, `cmake`, `ninja`, `esptool`, and `pyserial` can be installed directly inside the ESP-IDF Python venv with **zero `sudo` or Docker**:
   ```bash
-  # Linux only: install ESP-IDF host build packages once
-  sudo apt-get update && sudo apt-get install -y git wget flex bison gperf python3 python3-pip python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
-
   mkdir -p ~/esp
-  git clone -b v5.5.1 --depth 1 --recursive --shallow-submodules https://github.com/espressif/esp-idf.git ~/esp/esp-idf
-  ~/esp/esp-idf/install.sh esp32c5
+  git clone -b v5.5.6 --depth 1 --recursive --shallow-submodules https://github.com/espressif/esp-idf.git ~/esp/esp-idf
+  ~/esp/esp-idf/install.sh esp32c5,esp32p4
   . ~/esp/esp-idf/export.sh
+  python -m pip install cmake ninja pyserial
   ```
+  *(Optional on Ubuntu/Debian if `python3-venv` is missing: `sudo apt-get update && sudo apt-get install -y git wget python3 python3-venv libusb-1.0-0`.)*
 
 ## Quick Verification Checklist
 Run from the repository root to verify core readiness:

@@ -87,7 +87,7 @@ jobs:
       - name: Build with ESP-IDF
         uses: espressif/esp-idf-ci-action@v1
         with:
-          esp_idf_version: v5.5.1
+          esp_idf_version: v5.5.6
           target: esp32p4
           path: firmware/slaprf_p4_poe_bridge
           command: idf.py build && cd build && python -m esptool --chip esp32p4 merge_bin -o slaprf-p4-poe-bridge.bin @flash_args
