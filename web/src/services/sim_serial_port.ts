@@ -170,9 +170,24 @@ export function isBluetoothPortName(name: string | null | undefined): boolean {
   return typeof name === "string" && name.trim().toLowerCase().startsWith("ble:");
 }
 
-/** User-facing transport of a connected port: "Bluetooth" for `ble:` hub links, otherwise "USB-C". */
-export function portTransportLabel(port: unknown): "Bluetooth" | "USB-C" {
-  return isBackendSerialPort(port) && isBluetoothPortName(port.portName) ? "Bluetooth" : "USB-C";
+/** True when a backend port path is a TCP/Ethernet SlapRF PoE Bridge endpoint (`host:port` or `tcp://host:port`). */
+export function isNetworkPortName(name: string | null | undefined): boolean {
+  if (typeof name !== "string") return false;
+  const s = name.trim();
+  if (!s) return false;
+  const lower = s.toLowerCase();
+  if (lower.startsWith("ble:") || s.startsWith("/dev/") || /^com\d+/i.test(s)) return false;
+  if (lower.startsWith("tcp://") || lower.startsWith("net:")) return true;
+  return /^(\[[^\]]+\]|[a-z0-9.-]+):\d+$/i.test(s);
+}
+
+/** User-facing transport of a connected port: "Bluetooth" for `ble:`, "Ethernet" for PoE bridge `host:port`, otherwise "USB-C". */
+export function portTransportLabel(port: unknown): "Bluetooth" | "Ethernet" | "USB-C" {
+  if (isBackendSerialPort(port)) {
+    if (isBluetoothPortName(port.portName)) return "Bluetooth";
+    if (isNetworkPortName(port.portName)) return "Ethernet";
+  }
+  return "USB-C";
 }
 
 export function createBackendPortHandle(portName: string, description?: string): BackendSerialPortHandle {
@@ -1420,11 +1435,15 @@ export function isBleHardwareMode(): boolean {
   return getBoundStore()?.timingHardwareMode === "slaprf_ble";
 }
 
+export function isNetHardwareMode(): boolean {
+  return getBoundStore()?.timingHardwareMode === "slaprf_net";
+}
+
 export interface PickUsbPortOptions {
   showAllPorts?: boolean;
   excludePorts?: SerialPortLike[];
   excludeTimerIds?: number[];
-  transport?: "usb" | "ble";
+  transport?: "usb" | "ble" | "net";
   vendor?: "slaprf" | "laprf" | "rotorhazard";
   alreadyPaired?: boolean;
   preferredPortName?: string;
@@ -1471,7 +1490,10 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
   const isBleMode = opts.transport
     ? opts.transport === "ble"
     : boundStore?.timingHardwareMode === "slaprf_ble";
-  const showAllRealPorts = isBleMode ? false : Boolean(opts.showAllPorts);
+  const isNetMode = opts.transport
+    ? opts.transport === "net"
+    : boundStore?.timingHardwareMode === "slaprf_net";
+  const showAllRealPorts = isBleMode || isNetMode ? false : Boolean(opts.showAllPorts);
   const excludeTimerIds = new Set<number>(opts.excludeTimerIds ?? []);
   const excludePortNames = new Set<string>();
   for (const p of opts.excludePorts ?? []) {
@@ -1596,9 +1618,11 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
         id: `sim-${t.timerId}`,
         label: isBleMode
           ? `SlapRF Bluetooth Hub (${t.fingerprint || "SIM"}) · ${t.label || "H1"}`
-          : t.unflashed
-            ? `USB JTAG/serial debug unit (Board #${t.timerId}) · Unflashed`
-            : `USB JTAG/serial debug unit (${t.fingerprint}) · ${t.label}`,
+          : isNetMode
+            ? `192.168.1.${109 + t.timerId}:5480 · ESP32-P4 PoE Bridge (${t.fingerprint || "SIM"}) · ${t.label || "H1"}`
+            : t.unflashed
+              ? `USB JTAG/serial debug unit (Board #${t.timerId}) · Unflashed`
+              : `USB JTAG/serial debug unit (${t.fingerprint}) · ${t.label}`,
         createPort: () => new SimulatedSerialPort(t.timerId),
         simTimerId: t.timerId,
       }));
@@ -1616,7 +1640,9 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
             ? `/v1/rotorhazard/usb/ports?all=${showAllRealPorts ? "1" : "0"}`
             : isBleMode
               ? "/v1/slaprf/bluetooth/ports"
-              : `/v1/slaprf/usb/ports?all=${showAllRealPorts ? "1" : "0"}`;
+              : isNetMode
+                ? "/v1/slaprf/network/ports"
+                : `/v1/slaprf/usb/ports?all=${showAllRealPorts ? "1" : "0"}`;
       const res = await fetch(resolveBackendUrl(endpoint), { cache: "no-store" });
       if (!res.ok) return [];
       const data = (await res.json()) as BackendPortsResponse;
@@ -1632,15 +1658,18 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
           const knownFp = activeSlot?.lastStatus?.fp || activeSlot?.lastConfig?.fingerprint || "";
           const rawProd = p.product || p.description || "";
           const isBlePort = p.name.trim().toLowerCase().startsWith("ble:");
+          const isNetPort = isNetworkPortName(p.name);
           const desc = isBlePort
             ? rawProd || "SlapRF Hub (Bluetooth)"
-            : p.isEspressif
-              ? rawProd && !/^usb serial device/i.test(rawProd)
-                ? rawProd
-                : "Seeed XIAO ESP32-C5 (USB JTAG/serial)"
-              : rawProd || "USB Serial Port";
+            : isNetPort
+              ? rawProd || "ESP32-P4 PoE Bridge"
+              : p.isEspressif
+                ? rawProd && !/^usb serial device/i.test(rawProd)
+                  ? rawProd
+                  : "Seeed XIAO ESP32-C5 (USB JTAG/serial)"
+                : rawProd || "USB Serial Port";
           const vidPid = p.vid && p.pid ? ` (${p.vid}:${p.pid})` : "";
-          const identitySuffix = !isBlePort && (knownLabel || knownFp)
+          const identitySuffix = !isBlePort && !isNetPort && (knownLabel || knownFp)
             ? ` · ${[knownFp ? `(${knownFp})` : "", knownLabel].filter(Boolean).join(" ")}`
             : "";
           return {
@@ -1678,7 +1707,7 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
     const renderRowsHtml = (): string => {
       if (scanning && choices.length === 0) {
         return `<div class="sim-usb-port-empty sim-usb-port-scanning">
-          <span>${isBleMode ? "Scanning for Bluetooth Hubs…" : "Scanning serial ports…"}</span>
+          <span>${isBleMode ? "Scanning for Bluetooth Hubs…" : isNetMode ? "Scanning local network for PoE Bridges…" : "Scanning serial ports…"}</span>
           <div class="slaprf-indeterminate-track" role="progressbar" aria-label="Scanning">
             <div class="slaprf-indeterminate-bar"></div>
           </div>
@@ -1690,9 +1719,11 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
             ? "No powered simulated timers available"
             : isBleMode
               ? "No SlapRF Bluetooth Hub found nearby. Make sure the Hub is powered on and not connected to another device (hold BOOT on the Hub for 3 s to enter pairing mode)."
-              : showAllRealPorts
-                ? "No USB serial ports detected on the SlapRF server"
-                : "No Seeed Studio XIAO ESP32-C5 USB ports detected - plug in USB-C and click Refresh"
+              : isNetMode
+                ? "No ESP32-P4 PoE Bridges discovered via UDP :5480 on the local network. Enter its IP address directly on the Network page or check the Ethernet cable."
+                : showAllRealPorts
+                  ? "No USB serial ports detected on the SlapRF server"
+                  : "No Seeed Studio XIAO ESP32-C5 USB ports detected - plug in USB-C and click Refresh"
         }</div>`;
       }
       return choices
@@ -1732,20 +1763,26 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
     };
 
     const moreBtnLabel = () =>
-      simMode ? "More devices…" : scanning ? "Scanning…" : isBleMode ? "Scan again" : "Refresh";
+      simMode ? "More devices…" : scanning ? "Scanning…" : isBleMode || isNetMode ? "Scan again" : "Refresh";
     const modalTitle = isBleMode
       ? opts.alreadyPaired
         ? "Connect Bluetooth Device"
         : "Pair Bluetooth Device"
-      : "Select a serial port";
+      : isNetMode
+        ? "Select a PoE Bridge"
+        : "Select a serial port";
     const confirmBtnText = isBleMode && !opts.alreadyPaired ? "Pair" : "Connect";
-    const listAriaLabel = isBleMode ? "Available Bluetooth Hubs" : "Available serial ports";
+    const listAriaLabel = isBleMode
+      ? "Available Bluetooth Hubs"
+      : isNetMode
+        ? "Discovered PoE Bridges"
+        : "Available serial ports";
 
     backdrop.innerHTML = `
       <div class="slaprf-modal card sim-usb-dialog" role="dialog" aria-modal="true" aria-labelledby="sim-usb-picker-title">
         <div class="slaprf-modal-head">
           <div class="slaprf-modal-title-row">
-            <span class="slaprf-modal-icon">${isBleMode ? icons.wifi(17) : icons.plug(17)}</span>
+            <span class="slaprf-modal-icon">${isBleMode || isNetMode ? icons.wifi(17) : icons.plug(17)}</span>
             <h3 id="sim-usb-picker-title">${esc(modalTitle)}</h3>
           </div>
           <button type="button" class="btn btn-ghost btn-xs" data-modal="cancel" aria-label="Close">

@@ -15,6 +15,8 @@ import {
   createBackendPortHandle,
   isBackendSerialPort,
   isBleHardwareMode,
+  isNetHardwareMode,
+  isNetworkPortName,
   isSimulatedSerialPort,
   isSimulatedUsbMode,
   listSimulatedTimers,
@@ -24,6 +26,24 @@ import {
   recordSerialPortMeta,
   SimulatedSerialPort,
 } from "./sim_serial_port";
+
+export interface SlapRFNetworkDiscoveredDevice {
+  host: string;
+  port: number;
+  label?: string;
+  fingerprint?: string;
+  fw?: string;
+  board?: string;
+  mac?: string;
+  usbConnected?: boolean;
+  usbVid?: string;
+  usbPid?: string;
+  usbProduct?: string;
+  baudRate?: number;
+  clients?: number;
+  timerId?: number;
+  connected?: boolean;
+}
 
 export interface TimerPeerSpoke {
   slot: number;
@@ -265,21 +285,33 @@ export function getPairedBluetoothHub(): PairedBluetoothHubInfo | null {
   };
 }
 
-function backendTransportPrefix(forPortName?: string | null): "/v1/slaprf/bluetooth" | "/v1/slaprf/usb" {
+function backendTransportPrefix(
+  forPortName?: string | null
+): "/v1/slaprf/bluetooth" | "/v1/slaprf/network" | "/v1/slaprf/usb" {
   if (forPortName) {
-    return forPortName.trim().toLowerCase().startsWith("ble:") ? "/v1/slaprf/bluetooth" : "/v1/slaprf/usb";
+    const clean = forPortName.trim();
+    if (clean.toLowerCase().startsWith("ble:")) return "/v1/slaprf/bluetooth";
+    if (isNetworkPortName(clean)) return "/v1/slaprf/network";
+    return "/v1/slaprf/usb";
   }
-  return isBleHardwareMode() ? "/v1/slaprf/bluetooth" : "/v1/slaprf/usb";
+  if (isBleHardwareMode()) return "/v1/slaprf/bluetooth";
+  if (isNetHardwareMode()) return "/v1/slaprf/network";
+  return "/v1/slaprf/usb";
 }
 
-function backendCommandPath(forPortName?: string | null): "/v1/slaprf/bluetooth:command" | "/v1/slaprf/usb:command" {
-  return backendTransportPrefix(forPortName) === "/v1/slaprf/bluetooth"
-    ? "/v1/slaprf/bluetooth:command"
-    : "/v1/slaprf/usb:command";
+function backendCommandPath(
+  forPortName?: string | null
+): "/v1/slaprf/bluetooth:command" | "/v1/slaprf/network:command" | "/v1/slaprf/usb:command" {
+  const prefix = backendTransportPrefix(forPortName);
+  if (prefix === "/v1/slaprf/bluetooth") return "/v1/slaprf/bluetooth:command";
+  if (prefix === "/v1/slaprf/network") return "/v1/slaprf/network:command";
+  return "/v1/slaprf/usb:command";
 }
 
-function backendWsPath(): "/v1/ws/slaprf/bluetooth" | "/v1/ws/slaprf/usb" {
-  return isBleHardwareMode() ? "/v1/ws/slaprf/bluetooth" : "/v1/ws/slaprf/usb";
+function backendWsPath(): "/v1/ws/slaprf/bluetooth" | "/v1/ws/slaprf/network" | "/v1/ws/slaprf/usb" {
+  if (isBleHardwareMode()) return "/v1/ws/slaprf/bluetooth";
+  if (isNetHardwareMode()) return "/v1/ws/slaprf/network";
+  return "/v1/ws/slaprf/usb";
 }
 
 export function forgetKnownHardwareTimer(fp?: string, _label?: string): void {
@@ -680,8 +712,8 @@ export class TimerConsole {
     return this.port;
   }
 
-  /** "Bluetooth" when the open port is a SlapRF Bluetooth Hub link (`ble:<FP>`), otherwise "USB-C". */
-  public get transportLabel(): "Bluetooth" | "USB-C" {
+  /** "Bluetooth" for `ble:<FP>`, "Ethernet" for PoE bridge `host:port`, otherwise "USB-C". */
+  public get transportLabel(): "Bluetooth" | "Ethernet" | "USB-C" {
     return portTransportLabel(this.port);
   }
 
@@ -920,7 +952,9 @@ export class TimerConsole {
     this.connectStatus =
       isBackendSerialPort(port) && port.portName.trim().toLowerCase().startsWith("ble:")
         ? "Waiting for Bluetooth LE connection…"
-        : "Waiting for connection…";
+        : isBackendSerialPort(port) && isNetworkPortName(port.portName)
+          ? `Connecting to ${port.portName}…`
+          : "Waiting for connection…";
     this.busyLabel = "Connecting";
     this.notifyStateChange();
     const abortCtrl = typeof AbortController !== "undefined" ? new AbortController() : null;
@@ -2560,6 +2594,31 @@ export class UsbConnectionPool {
     }
     this.notify();
     return status;
+  }
+
+  /** Connects Slot 0 to a SlapRF PoE Bridge endpoint (`host:port`) in Real or Simulation mode. */
+  public async connectNetworkEndpoint(host: string, port = 5480): Promise<TimerStatus | null> {
+    const cleanHost = host.trim().replace(/^tcp:\/\//i, "");
+    if (!cleanHost) {
+      throw new Error("Enter a PoE Bridge IP address or hostname.");
+    }
+    const cleanPort = Number.isFinite(port) && port >= 1 && port <= 65535 ? Math.round(port) : 5480;
+    const endpoint = cleanHost.includes(":") && !cleanHost.startsWith("[") ? cleanHost : `${cleanHost}:${cleanPort}`;
+    if (isSimulatedUsbMode()) {
+      const hub =
+        listSimulatedTimers().find((t) => t.isHub && t.poweredOn) ??
+        listSimulatedTimers().find((t) => t.poweredOn);
+      if (!hub) {
+        throw new Error("No powered simulated Hub available.");
+      }
+      return await this.connectSimulatedTimer(hub.timerId, 0);
+    }
+    const main = this.slots[0];
+    if (main.connected || main.reconnecting) {
+      await main.disconnectCleanly();
+    }
+    const handle = createBackendPortHandle(endpoint, "ESP32-P4 PoE Bridge");
+    return await main.connectWithPort(handle, false, 2500);
   }
 
   /** Connects Slot 0 to the default powered simulated Hub (`H1`) when in simulated USB mode. */

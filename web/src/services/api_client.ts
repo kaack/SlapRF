@@ -1813,6 +1813,37 @@ export class ApiClient {
     this.store.hydrate(state);
   }
 
+  /** Discovers SlapRF PoE Ethernet Bridges via UDP :5480 (or virtual LAN in Simulation Mode). */
+  public async discoverSlapRFNetwork(): Promise<{
+    subnet: string;
+    devices: Array<{
+      host: string;
+      port: number;
+      label?: string;
+      fingerprint?: string;
+      fw?: string;
+      board?: string;
+      mac?: string;
+      usbConnected?: boolean;
+      usbVid?: string;
+      usbPid?: string;
+      usbProduct?: string;
+      baudRate?: number;
+      clients?: number;
+      timerId?: number;
+      connected?: boolean;
+    }>;
+  }> {
+    if (this.simMode) {
+      return await this.transport.request("GET", "/v1/sim/slaprf/network/devices");
+    }
+    const resp = await fetch(resolveBackendUrl("/v1/slaprf/network/devices"), { cache: "no-store" });
+    if (!resp.ok) {
+      throw new Error(`LAN discovery failed (HTTP ${resp.status})`);
+    }
+    return await resp.json();
+  }
+
   /** Discovers powered-on simulated LapRF 8-Way timers on the virtual LAN in Simulation Mode. */
   public async simLapRFDiscover(): Promise<{
     subnet: string;

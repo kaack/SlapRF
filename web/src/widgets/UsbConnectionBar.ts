@@ -8,6 +8,8 @@ export interface UsbConnectionBarOptions {
   showAllPorts: boolean;
   /** When true (`SlapRF (Bluetooth)` mode), labels controls for wireless Bluetooth Hub connections and omits USB-only options. */
   bluetoothMode?: boolean;
+  /** When true (`SlapRF (Network)` mode), labels controls for PoE Ethernet serial bridge connections. */
+  networkMode?: boolean;
   /** When true (Debug page only), allows swapping to a different USB device while keeping the main USB connection running. */
   allowSwap?: boolean;
   busyText?: string | null;
@@ -66,7 +68,13 @@ function renderChip(c: TimerConsole, active: boolean, canManage = true): string 
   const fp = s?.fp || cfg?.fingerprint || "";
   const fpNote = fp ? ` · ${fp}` : "";
   const viaBluetooth = c.transportLabel === "Bluetooth";
-  const roleMetaShown = viaBluetooth && !isWriting ? `${roleMeta} · Bluetooth` : roleMeta;
+  const viaEthernet = c.transportLabel === "Ethernet";
+  const roleMetaShown =
+    viaBluetooth && !isWriting
+      ? `${roleMeta} · Bluetooth`
+      : viaEthernet && !isWriting
+        ? `${roleMeta} · Ethernet`
+        : roleMeta;
   const openMenuOnClick = canManage && active && !isWriting;
   const actionAttr = openMenuOnClick ? "open-usb-slot-actions" : "select-usb-slot";
   const titleText = openMenuOnClick
@@ -102,6 +110,7 @@ function renderChip(c: TimerConsole, active: boolean, canManage = true): string 
 export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): string {
   const supported = TimerConsole.supported();
   const bleMode = Boolean(opts.bluetoothMode);
+  const netMode = Boolean(opts.networkMode);
   const main = usbPool.mainConsole;
   const swapSlot = usbPool.slots[1];
   const poolBusy = usbPool.slots.find((c) => c.busyLabel)?.busyLabel ?? null;
@@ -120,13 +129,15 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
         : "Reconnecting…"
       : bleMode
         ? "Waiting for Bluetooth LE connection…"
-        : "Waiting for connection…");
+        : netMode
+          ? "Connecting to PoE Bridge…"
+          : "Waiting for connection…");
 
   let chipsHtml = "";
   let actionBtnHtml = "";
   let cancelBtnHtml = "";
 
-  if (opts.allowSwap && !bleMode) {
+  if (opts.allowSwap && !bleMode && !netMode) {
     // Debug page (USB mode):
     // - Protect only a Hub connection (`canManage = false`); any active non-Hub port (Spoke / Other) opens Disconnect options on click.
     // - Allow choosing a second USB connection (Slot 1) to debug on, shown alongside the main connection so the user
@@ -179,12 +190,14 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
     if (main.connected) {
       chipsHtml = renderChip(main, true, true);
     } else {
-      const connectText = bleMode ? (pairedBleHub ? "Connect" : "Pair Device") : "Connect USB";
+      const connectText = bleMode ? (pairedBleHub ? "Connect" : "Pair Device") : netMode ? "Connect Bridge" : "Connect USB";
       const connectTitle = bleMode
         ? pairedBleHub
           ? `Connect to paired Bluetooth Hub ${pairedBleHub.label} (${pairedBleHub.fp})`
           : "Pair a SlapRF Bluetooth Hub"
-        : "Connect a USB device";
+        : netMode
+          ? "Connect to a SlapRF PoE Ethernet Bridge (:5480)"
+          : "Connect a USB device";
       actionBtnHtml = `
         <button
           type="button"
@@ -193,7 +206,7 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
           ${supported && !busy ? "" : "disabled"}
           title="${esc(connectTitle)}"
         >
-          ${bleMode ? icons.wifi(20) : icons.plug(20)}
+          ${bleMode || netMode ? icons.wifi(20) : icons.plug(20)}
           <span class="pilot-chip-name">${busy ? `${esc(busyText)}…` : connectText}</span>
         </button>`;
       if (isConnectingFlow) {

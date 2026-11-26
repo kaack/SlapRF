@@ -6,20 +6,25 @@ import { subscribeAppTheme } from "../core/theme";
 import { ApiClient } from "../services/api_client";
 import { capabilitiesSnapshot } from "../services/capabilities";
 import {
+  FIRMWARE_POE_BRIDGE_IMAGE_NAME,
   FlashProgress,
   HubLink,
   LATEST_FIRMWARE_VERSION,
   TimerReadout,
   cancelActiveFlash,
+  fetchPoeBridgeFirmwareBin,
   firmwareImageNameFor,
   flashXiaoC5OverWebSerial,
   isWebSerialSupported,
   probeBleFirmwareImage,
+  probePoeBridgeFirmwareImage,
 } from "../services/esp_flasher";
 import {
   FLASHER_NEEDS_WEBSERIAL,
   WebSerialPort,
   acquireEspSerialPort,
+  acquirePoeBridgeSerialPort,
+  flashPoeBridgeWithEsptool,
   flashXiaoC5WithEsptool,
   flasherUsesWebSerial,
   hasBrowserWebSerial,
@@ -71,7 +76,7 @@ export class TimerFlasher extends Component {
 
   private step: WizardStepId = "network";
   private slideDir: "next" | "prev" | "none" = "none";
-  private role: "hub" | "spoke" = "hub";
+  private role: "hub" | "spoke" | "poe_bridge" = "hub";
   private flashedNodes = new Set<string>();
   private timerLabel = "H1";
   /** Keep the board's existing fingerprint when reflashing (vs. mint a new one). */
@@ -80,6 +85,8 @@ export class TimerFlasher extends Component {
   private hubLink: HubLink = loadStoredHubLink();
   /** Whether the Bluetooth Hub image is served (null while the probe is running). */
   private bleImageAvailable: boolean | null = null;
+  /** Whether the ESP32-P4 PoE Bridge image is served (null while the probe is running). */
+  private poeBridgeImageAvailable: boolean | null = null;
   private busy = false;
   private progress: FlashProgress | null = null;
   private lastSuccessMsg: string | null = null;
@@ -127,10 +134,13 @@ export class TimerFlasher extends Component {
 
       const pickRole = t.closest<HTMLElement>("[data-pick-role]");
       if (pickRole) {
-        const nextRole = pickRole.dataset.pickRole === "spoke" ? "spoke" : "hub";
+        const rawRole = pickRole.dataset.pickRole;
+        const nextRole: "hub" | "spoke" | "poe_bridge" =
+          rawRole === "spoke" ? "spoke" : rawRole === "poe_bridge" ? "poe_bridge" : "hub";
         if (nextRole !== this.role) {
           this.role = nextRole;
-          this.timerLabel = nextRole === "hub" ? "H1" : this.suggestSpokeLabel();
+          this.timerLabel =
+            nextRole === "hub" ? "H1" : nextRole === "poe_bridge" ? "PoE Bridge" : this.suggestSpokeLabel();
           this.errorMsg = null;
           this.lastSuccessMsg = null;
           this.slideDir = "none";
@@ -229,6 +239,14 @@ export class TimerFlasher extends Component {
         this.render();
       }
     });
+    void probePoeBridgeFirmwareImage().then((ok) => {
+      if (disposed) return;
+      this.poeBridgeImageAvailable = ok;
+      if (!this.busy) {
+        this.slideDir = "none";
+        this.render();
+      }
+    });
     this.onDispose(
       subscribeAppTheme(() => {
         if (!this.busy) {
@@ -271,11 +289,13 @@ export class TimerFlasher extends Component {
     this.goToStep(target, targetIdx > curIdx ? "next" : "prev");
   }
 
-  private labelOptionsForRole(role: "hub" | "spoke" = this.role): string[] {
+  private labelOptionsForRole(role: "hub" | "spoke" | "poe_bridge" = this.role): string[] {
+    if (role === "poe_bridge") return ["PoE Bridge"];
     return role === "hub" ? ["H1"] : ["T1", "T2", "T3", "T4", "T5", "T6"];
   }
 
-  private normalizeLabelForRole(raw: string, role: "hub" | "spoke" = this.role): string {
+  private normalizeLabelForRole(raw: string, role: "hub" | "spoke" | "poe_bridge" = this.role): string {
+    if (role === "poe_bridge") return "PoE Bridge";
     if (role === "hub") return "H1";
     const clean = raw.trim().toUpperCase();
     const opts = this.labelOptionsForRole("spoke");
@@ -310,7 +330,7 @@ export class TimerFlasher extends Component {
   }
 
   private get roleLabel(): string {
-    return this.role === "hub" ? "Hub" : "Spoke";
+    return this.role === "hub" ? "Hub" : this.role === "poe_bridge" ? "PoE Bridge" : "Spoke";
   }
 
   /** Hub link actually used for the next flash: Bluetooth only for a Hub when the BLE image exists. */
@@ -349,6 +369,10 @@ export class TimerFlasher extends Component {
 
   private async flashUsb(): Promise<void> {
     if (!this.validateIdentityStep()) {
+      return;
+    }
+    if (this.role === "poe_bridge") {
+      await this.flashPoeBridge();
       return;
     }
     const cleanLabel = this.timerLabel.trim();
@@ -523,11 +547,74 @@ export class TimerFlasher extends Component {
     return true;
   }
 
+  private async flashPoeBridge(): Promise<void> {
+    const useEsptool = flasherUsesWebSerial();
+    if (!useEsptool && !isSimulatedUsbMode()) {
+      this.errorMsg = FLASHER_NEEDS_WEBSERIAL;
+      this.render();
+      return;
+    }
+    const pendingPortPromise = useEsptool ? acquirePoeBridgeSerialPort() : null;
+
+    this.busy = true;
+    this.errorMsg = null;
+    this.lastSuccessMsg = null;
+    this.slideDir = "none";
+    this.progress = {
+      stage: "connecting",
+      percent: 1,
+      detail: "Select the Waveshare ESP32-P4 USB-C port (CH343) to flash…",
+    };
+    this.render();
+
+    const onProgress = (p: FlashProgress) => {
+      this.progress = p;
+      this.slideDir = "none";
+      if (!this.updateProgressInPlace("PoE Bridge")) {
+        this.render();
+      }
+    };
+
+    try {
+      const { bytes } = await fetchPoeBridgeFirmwareBin();
+      if (useEsptool && pendingPortPromise) {
+        const port = await pendingPortPromise;
+        const verified = await flashPoeBridgeWithEsptool(port, bytes, onProgress);
+        this.flashedNodes.add("poe_bridge");
+        const ipPart = verified?.ip && verified.ip !== "0.0.0.0" ? ` · IP ${verified.ip}:5480` : "";
+        const usbPart = verified?.usbConnected ? ` · USB-A attached (${verified.usbVid}:${verified.usbPid})` : "";
+        this.lastSuccessMsg = verified
+          ? `PoE Bridge flashed (${verified.board} · ${verified.fw}${ipPart}${usbPart}). Connect over Ethernet on Network → SlapRF (Network).`
+          : "PoE Bridge flashed. Plug your Hub into USB-A and Ethernet into PoE, then connect on Network → SlapRF (Network).";
+      } else {
+        this.flashedNodes.add("poe_bridge");
+        this.lastSuccessMsg = "Simulated PoE Bridge ready on 192.168.1.110:5480.";
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/No port selected|aborted|cancelled/i.test(msg)) {
+        this.errorMsg = null;
+      } else {
+        this.errorMsg = msg;
+      }
+    } finally {
+      this.busy = false;
+      this.progress = null;
+      this.slideDir = "none";
+      this.render();
+    }
+  }
+
   private async downloadBin(): Promise<void> {
     if (!this.validateIdentityStep()) {
       return;
     }
     try {
+      if (this.role === "poe_bridge") {
+        const { bytes, filename } = await fetchPoeBridgeFirmwareBin();
+        downloadBinaryFile(filename, "application/octet-stream", bytes);
+        return;
+      }
       const cleanLabel = this.timerLabel.trim();
       const { bytes, filename } = await this.api.fetchFirmwareImage(this.role, cleanLabel, undefined, this.effectiveHubLink);
       downloadBinaryFile(filename, "application/octet-stream", bytes);
@@ -572,22 +659,25 @@ export class TimerFlasher extends Component {
    */
   private renderStepNetwork(): string {
     const isHub = this.role === "hub";
+    const isSpoke = this.role === "spoke";
+    const isBridge = this.role === "poe_bridge";
     const isAndroid = isAndroidHostApp();
     const hostNoun = isAndroid ? "this phone" : "this computer";
     const hubFlashed = this.flashedNodes.has("hub");
+    const bridgeFlashed = this.flashedNodes.has("poe_bridge");
     const flashedSpokes = [...this.flashedNodes].filter((k) => k.startsWith("spoke:")).length;
 
     return `
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
           <div class="flasher-wizard-head">
-            <h3 class="flasher-pane-title">What role will this timer play?</h3>
+            <h3 class="flasher-pane-title">What role will this board play?</h3>
             <span class="note flasher-step-count">Step 1 of 3</span>
           </div>
-          <p>One <strong>Hub</strong> plugs into ${hostNoun} over USB-C and collects passes from up to 6 <strong>Spokes</strong> on the course.</p>
+          <p>One <strong>Hub</strong> plugs into ${hostNoun} over USB-C (or into an optional <strong>PoE Bridge</strong> over Ethernet) and collects passes from up to 6 <strong>Spokes</strong> on the course.</p>
         </div>
 
-        <div class="flasher-pictorial-grid" role="radiogroup" aria-label="Timer role">
+        <div class="flasher-pictorial-grid is-three-col" role="radiogroup" aria-label="Timer role">
           <button
             type="button"
             role="radio"
@@ -604,21 +694,21 @@ export class TimerFlasher extends Component {
               ${this.renderPictorialRoleHub()}
             </div>
             <p class="flasher-pictorial-desc">
-              USB dongle plugged into ${hostNoun}. Collects every Spoke's passes over long-range ESP-NOW and streams them over USB-C.
+              USB dongle plugged into ${hostNoun} (or PoE Bridge). Collects every Spoke's passes over long-range ESP-NOW.
             </p>
           </button>
 
           <button
             type="button"
             role="radio"
-            aria-checked="${!isHub}"
-            class="flasher-pictorial-card ${!isHub ? "is-active" : ""}"
+            aria-checked="${isSpoke}"
+            class="flasher-pictorial-card ${isSpoke ? "is-active" : ""}"
             data-pick-role="spoke"
             ${this.busy ? "disabled" : ""}
           >
             <div class="flasher-pictorial-head">
               <span class="flasher-pictorial-title">Spoke</span>
-              <span class="badge ${!isHub ? "tone-good" : ""}">${
+              <span class="badge ${isSpoke ? "tone-good" : ""}">${
                 flashedSpokes > 0 ? `✓ ${flashedSpokes} flashed` : "Up to 6 · Track timers"
               }</span>
             </div>
@@ -627,6 +717,26 @@ export class TimerFlasher extends Component {
             </div>
             <p class="flasher-pictorial-desc">
               Placed around the course to time each section. Sends its passes to the Hub over long-range ESP-NOW.
+            </p>
+          </button>
+
+          <button
+            type="button"
+            role="radio"
+            aria-checked="${isBridge}"
+            class="flasher-pictorial-card ${isBridge ? "is-active" : ""}"
+            data-pick-role="poe_bridge"
+            ${this.busy ? "disabled" : ""}
+          >
+            <div class="flasher-pictorial-head">
+              <span class="flasher-pictorial-title">PoE Bridge</span>
+              <span class="badge ${isBridge ? "tone-good" : ""}">${bridgeFlashed ? "✓ Flashed" : "ESP32-P4 · Ethernet"}</span>
+            </div>
+            <div class="flasher-pictorial-art">
+              ${this.renderPictorialRolePoeBridge()}
+            </div>
+            <p class="flasher-pictorial-desc">
+              Waveshare ESP32-P4-POE-ETH adapter. Bridges any USB serial device or Hub H1 on USB-A over PoE Ethernet (TCP :5480).
             </p>
           </button>
         </div>
@@ -755,7 +865,83 @@ export class TimerFlasher extends Component {
       </svg>`;
   }
 
+  /** Pictorial for the PoE Bridge role: USB Hub ──USB-A──▶ P4 Bridge ──PoE──▶ Laptop. */
+  private renderPictorialRolePoeBridge(): string {
+    return `
+      <svg class="flasher-pic-svg" viewBox="0 0 280 68" fill="none" aria-hidden="true">
+        <defs>
+          <marker id="pic-arrow-role-bridge" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="currentColor" />
+          </marker>
+        </defs>
+        <line x1="68" y1="34" x2="112" y2="34" class="flasher-pic-link is-dim" marker-end="url(#pic-arrow-role-bridge)" />
+        <line x1="168" y1="34" x2="212" y2="34" class="flasher-pic-link" marker-end="url(#pic-arrow-role-bridge)" />
+        <text x="190" y="25" text-anchor="middle" class="flasher-pic-link-label">PoE</text>
+        <g transform="translate(46, 34)">
+          <circle r="19" class="flasher-pic-node is-dim-node" />
+          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title is-dim">Hub</text>
+        </g>
+        <g transform="translate(140, 34)">
+          <rect x="-24" y="-19" width="48" height="38" rx="8" class="flasher-pic-node is-host-node" />
+          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title">P4</text>
+        </g>
+        <g transform="translate(238, 34)">
+          <rect x="-22" y="-20" width="44" height="40" rx="8" class="flasher-pic-node" />
+          <rect x="-11" y="-8" width="22" height="13" rx="1.5" stroke="currentColor" stroke-width="1.5" />
+          <path d="M-15 8 H15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+        </g>
+      </svg>`;
+  }
+
   private renderStepIdentity(): string {
+    if (this.role === "poe_bridge") {
+      const bridgeMissing = this.poeBridgeImageAvailable === false;
+      return `
+        <div class="flasher-wizard-body">
+          <div class="flasher-wizard-intro">
+            <div class="flasher-wizard-head">
+              <h3 class="flasher-pane-title">Configure PoE Bridge</h3>
+              <span class="note flasher-step-count">Step 2 of 3</span>
+            </div>
+            <p>Generic USB-Serial/JTAG to PoE Ethernet bridge for <strong>Waveshare ESP32-P4-POE-ETH</strong>. Zero network setup required — uses DHCP with automatic link-local fallback.</p>
+          </div>
+
+          <div class="flasher-wifi-inputs flasher-two-col">
+            <div class="flasher-field">
+              <label class="flasher-field-label">Target board</label>
+              <div class="input input-readonly mono" aria-label="Target board" aria-readonly="true">
+                <span>ESP32-P4-POE-ETH</span>
+                <span class="badge">CH343 USB-C</span>
+              </div>
+              <span class="flasher-field-help">Plug USB-C into this computer to flash; plug Hub H1 into USB-A.</span>
+            </div>
+
+            <div class="flasher-field">
+              <label class="flasher-field-label">Firmware</label>
+              <div class="input input-readonly mono" aria-label="Firmware image" aria-readonly="true">
+                <span>${esc(FIRMWARE_POE_BRIDGE_IMAGE_NAME)}</span>
+                <span class="badge ${bridgeMissing ? "badge-warn" : ""}">${bridgeMissing ? "Missing" : "Bundled"}</span>
+              </div>
+              <span class="flasher-field-help">${
+                bridgeMissing
+                  ? "PoE Bridge image (slaprf-p4-poe-bridge.bin) is not included in this build yet."
+                  : "Raw TCP :5480 serial passthrough + UDP :5480 LAN discovery."
+              }</span>
+            </div>
+          </div>
+
+          <div class="flasher-wizard-nav">
+            <button type="button" class="btn" data-wizard-prev="1" ${this.busy ? "disabled" : ""}>
+              ${icons.chevronLeft(15)}
+              <span>Back</span>
+            </button>
+            <button type="button" class="btn" data-wizard-next="1" ${this.busy || bridgeMissing ? "disabled" : ""}>
+              <span>Next</span>
+              ${icons.chevronRight(15)}
+            </button>
+          </div>
+        </div>`;
+    }
     const isHub = this.role === "hub";
     const options = this.labelOptionsForRole(this.role);
     const currentLabel = this.normalizeLabelForRole(this.timerLabel, this.role);
@@ -828,15 +1014,18 @@ export class TimerFlasher extends Component {
   }
 
   private renderStepFlash(webSerialOk: boolean): string {
+    const isBridge = this.role === "poe_bridge";
     const isHub = this.role === "hub";
     const isAndroid = isAndroidHostApp();
-    const cleanLabel = this.timerLabel.trim() || (isHub ? "H1" : this.suggestSpokeLabel());
+    const cleanLabel = isBridge ? "PoE Bridge" : this.timerLabel.trim() || (isHub ? "H1" : this.suggestSpokeLabel());
     const bleHub = isHub && this.effectiveHubLink === "ble";
-    const linkSummary = isHub
-      ? bleHub
-        ? isAndroid ? "Bluetooth → Phone" : "Bluetooth → App"
-        : isAndroid ? "USB-C → Phone" : "USB-C → Computer"
-      : "2.4 GHz ESP-NOW → Hub";
+    const linkSummary = isBridge
+      ? "USB-A ↔ PoE Ethernet (:5480)"
+      : isHub
+        ? bleHub
+          ? isAndroid ? "Bluetooth → Phone" : "Bluetooth → App"
+          : isAndroid ? "USB-C → Phone" : "USB-C → Computer"
+        : "2.4 GHz ESP-NOW → Hub";
     const eraseBeforeFlash = !this.keepFingerprint;
 
     const pct = this.progress ? this.progress.percent : this.lastSuccessMsg ? 100 : 0;
@@ -854,24 +1043,26 @@ export class TimerFlasher extends Component {
             <span class="note flasher-step-count">Step 3 of 3</span>
           </div>
           <p>${
-            hasBrowserWebSerial() || isSimulatedUsbMode()
-              ? `Plug in your <strong>Seeed Studio XIAO ESP32-C5</strong> and click <strong>Flash ${esc(cleanLabel)} to USB</strong> to select the target USB board. After flashing, the board is read back once to confirm it works.`
-              : `Plug in your <strong>Seeed Studio XIAO ESP32-C5</strong> over USB-C and tap <strong>Flash ${esc(cleanLabel)} to USB</strong> to select the target USB board. After flashing, the board is read back once to confirm it works.`
+            isBridge
+              ? `Plug your <strong>Waveshare ESP32-P4-POE-ETH</strong> USB-C port into this computer and click <strong>Flash PoE Bridge to USB</strong>.`
+              : hasBrowserWebSerial() || isSimulatedUsbMode()
+                ? `Plug in your <strong>Seeed Studio XIAO ESP32-C5</strong> and click <strong>Flash ${esc(cleanLabel)} to USB</strong> to select the target USB board. After flashing, the board is read back once to confirm it works.`
+                : `Plug in your <strong>Seeed Studio XIAO ESP32-C5</strong> over USB-C and tap <strong>Flash ${esc(cleanLabel)} to USB</strong> to select the target USB board. After flashing, the board is read back once to confirm it works.`
           }</p>
         </div>
 
         <div class="flasher-summary-grid">
           <div class="flasher-summary-cell">
-            <span class="flasher-summary-label">Timer</span>
+            <span class="flasher-summary-label">${isBridge ? "Device" : "Timer"}</span>
             <strong class="flasher-summary-value mono">${esc(cleanLabel)}</strong>
           </div>
           <div class="flasher-summary-cell">
             <span class="flasher-summary-label">Role</span>
-            <span class="flasher-summary-value"><span class="badge ${isHub ? "tone-good" : ""}">${isHub ? "Hub · Slot 1" : "Spoke · Slots 2–7"}</span></span>
+            <span class="flasher-summary-value"><span class="badge ${isHub || isBridge ? "tone-good" : ""}">${isBridge ? "ESP32-P4 · Serial Bridge" : isHub ? "Hub · Slot 1" : "Spoke · Slots 2–7"}</span></span>
           </div>
           <div class="flasher-summary-cell">
             <span class="flasher-summary-label">Firmware</span>
-            <span class="flasher-summary-value mono">SlapRF ${LATEST_FIRMWARE_VERSION}</span>
+            <span class="flasher-summary-value mono">${isBridge ? esc(FIRMWARE_POE_BRIDGE_IMAGE_NAME) : `SlapRF ${LATEST_FIRMWARE_VERSION}`}</span>
           </div>
           <div class="flasher-summary-cell">
             <span class="flasher-summary-label">Link</span>
@@ -879,7 +1070,10 @@ export class TimerFlasher extends Component {
           </div>
         </div>
 
-        <label class="flasher-erase-toggle-row">
+        ${
+          isBridge
+            ? ""
+            : `<label class="flasher-erase-toggle-row">
           <div class="flasher-erase-toggle-text">
             <strong>Erase before flash</strong>
             <span>Wipe existing board identity and assign a brand-new ID (leave off when updating an existing timer).</span>
@@ -893,7 +1087,8 @@ export class TimerFlasher extends Component {
             />
             <span></span>
           </span>
-        </label>
+        </label>`
+        }
 
         <div class="flasher-progress ${this.busy ? "is-flashing" : ""} ${this.lastSuccessMsg && !this.busy ? "is-complete" : ""}">
           <div class="flasher-progress-top">

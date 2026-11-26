@@ -24,6 +24,7 @@ import {
   getPairedBluetoothHub,
   LiveSample,
   sharedTimerConsole,
+  SlapRFNetworkDiscoveredDevice,
   TimerConsole,
   TimerStatus,
   usbPool,
@@ -188,6 +189,9 @@ export class NetworkView extends Component {
   private lastRhUsbConnSig = "";
   private lastRhUsbTimersStructSig = "";
   private modeSwitchBusy = false;
+  private slaprfNetHost = "192.168.1.110";
+  private slaprfNetPort = 5480;
+  private lastSlaprfNetFieldsSig = "";
   private lastModeSelectorSig = "";
   private lastSlaprfConnSig = "";
   private lastExternalInlineSig = "";
@@ -219,6 +223,7 @@ export class NetworkView extends Component {
                   <div class="net-conn-field is-mode">
                     <div class="net-conn-mode-select-host" data-slot="network-mode-selector"></div>
                   </div>
+                  <div class="net-conn-mode-fields" data-slot="slaprf-net-connection" style="display:none"></div>
                   <div class="net-conn-mode-fields" data-slot="laprf-connection" style="display:none"></div>
                   <div class="net-conn-mode-fields" data-slot="rh-connection" style="display:none"></div>
                 </div>
@@ -486,7 +491,16 @@ export class NetworkView extends Component {
     this.listen(el, "dblclick", (e) => this.onDblClick(e));
     this.listen(el, "input", (e) => {
       const t = e.target as HTMLInputElement;
-      if (t.dataset.field === "laprf-host") {
+      if (t.dataset.field === "slaprf-net-host") {
+        this.slaprfNetHost = t.value;
+        this.savePrefs();
+      } else if (t.dataset.field === "slaprf-net-port") {
+        const p = Number(t.value);
+        if (Number.isFinite(p) && p > 0) {
+          this.slaprfNetPort = p;
+          this.savePrefs();
+        }
+      } else if (t.dataset.field === "laprf-host") {
         this.laprfHost = t.value;
       } else if (t.dataset.field === "laprf-port") {
         const p = Number(t.value);
@@ -635,6 +649,12 @@ export class NetworkView extends Component {
       if (typeof p.showAllPorts === "boolean") {
         this.showAllPorts = p.showAllPorts;
       }
+      if (typeof p.slaprfNetHost === "string" && p.slaprfNetHost.trim()) {
+        this.slaprfNetHost = p.slaprfNetHost.trim();
+      }
+      if (typeof p.slaprfNetPort === "number" && Number.isFinite(p.slaprfNetPort) && p.slaprfNetPort > 0) {
+        this.slaprfNetPort = Math.round(p.slaprfNetPort);
+      }
       if (Array.isArray(p.signalEnabledCh) && p.signalEnabledCh.length === 8) {
         this.signalEnabledCh = p.signalEnabledCh.map(Boolean);
       }
@@ -649,6 +669,8 @@ export class NetworkView extends Component {
         NETWORK_PREFS_KEY,
         JSON.stringify({
           showAllPorts: this.showAllPorts,
+          slaprfNetHost: this.slaprfNetHost,
+          slaprfNetPort: this.slaprfNetPort,
           signalEnabledCh: this.signalEnabledCh,
         })
       );
@@ -768,8 +790,13 @@ export class NetworkView extends Component {
   }
 
   private activeSurveyUrl(): string {
+    const mode = this.store.timingHardwareMode;
     return resolveBackendUrl(
-      this.store.timingHardwareMode === "slaprf_ble" ? "/v1/slaprf/bluetooth/survey" : "/v1/slaprf/usb/survey"
+      mode === "slaprf_ble"
+        ? "/v1/slaprf/bluetooth/survey"
+        : mode === "slaprf_net"
+          ? "/v1/slaprf/network/survey"
+          : "/v1/slaprf/usb/survey"
     );
   }
 
@@ -1113,8 +1140,10 @@ export class NetworkView extends Component {
       case "connect-add": {
         this.connError = null;
         try {
-          const isBle = this.store.timingHardwareMode === "slaprf_ble";
-          const c = await usbPool.connectMain(isBle ? false : this.showAllPorts);
+          const isWirelessOrNet =
+            this.store.timingHardwareMode === "slaprf_ble" ||
+            this.store.timingHardwareMode === "slaprf_net";
+          const c = await usbPool.connectMain(isWirelessOrNet ? false : this.showAllPorts);
           const s = c.status;
           if (s?.role === 1) {
             this.selectTopologySlot(1);
@@ -1128,6 +1157,81 @@ export class NetworkView extends Component {
           }
         }
         this.renderAll();
+        break;
+      }
+      case "slaprf-net-connect": {
+        this.connError = null;
+        try {
+          const s = await usbPool.connectNetworkEndpoint(this.slaprfNetHost, this.slaprfNetPort || 5480);
+          if (s?.role === 1) {
+            this.selectTopologySlot(1);
+          } else if (s?.role === 2 && s.slot >= 2 && s.slot <= 7) {
+            this.selectTopologySlot(s.slot);
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (!/No port selected|aborted|cancelled|cancel/i.test(msg)) {
+            this.connError = msg;
+          }
+        }
+        this.renderAll();
+        break;
+      }
+      case "slaprf-net-scan": {
+        this.connError = null;
+        bindSimSerialStore(this.store);
+        try {
+          const chosen = await pickDiscoveredNetworkDevice<SlapRFNetworkDiscoveredDevice>({
+            title: "Select a SlapRF PoE Bridge",
+            listAriaLabel: "Discovered SlapRF PoE Bridges",
+            scanningText: `Scanning LAN for SlapRF PoE Bridges on UDP :${this.slaprfNetPort || 5480}…`,
+            emptyText: `No SlapRF PoE Bridges discovered on UDP :${this.slaprfNetPort || 5480}`,
+            loadChoices: async () => {
+              const res = await this.api.discoverSlapRFNetwork();
+              return (res.devices ?? [])
+                .filter((d) => !d.connected)
+                .map((d, idx) => {
+                  const ep = `${d.host}:${d.port || 5480}`;
+                  const boardName = d.board || "ESP32-P4 PoE Bridge";
+                  const attached =
+                    d.usbConnected === false
+                      ? " · USB-A empty"
+                      : d.label
+                        ? ` · ${d.label}${d.fingerprint ? ` (${d.fingerprint})` : ""}`
+                        : d.usbProduct
+                          ? ` · ${d.usbProduct}`
+                          : d.usbVid && d.usbPid
+                            ? ` · USB ${d.usbVid}:${d.usbPid}`
+                            : "";
+                  return {
+                    id: `slaprf-net-${ep}-${idx}`,
+                    label: `${ep} · ${boardName}${attached}`,
+                    value: d,
+                    simTimerId: d.timerId,
+                  };
+                });
+            },
+          });
+          this.slaprfNetHost = chosen.host;
+          this.slaprfNetPort = chosen.port || 5480;
+          this.savePrefs();
+          this.lastSlaprfNetFieldsSig = "";
+          this.renderAll();
+          const s = await usbPool.connectNetworkEndpoint(this.slaprfNetHost, this.slaprfNetPort);
+          if (s?.role === 1) {
+            this.selectTopologySlot(1);
+          } else if (s?.role === 2 && s.slot >= 2 && s.slot <= 7) {
+            this.selectTopologySlot(s.slot);
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (!/No device selected|No port selected|aborted|cancelled|cancel/i.test(msg)) {
+            this.connError = msg;
+          }
+        } finally {
+          this.lastSlaprfNetFieldsSig = "";
+          this.renderAll();
+        }
         break;
       }
       case "laprf-connect-eth": {
@@ -1913,7 +2017,10 @@ export class NetworkView extends Component {
     }
   }
 
-  private renderSlapRFNetworkActions(bleMode: boolean): { actionsHtml: string; subbarHtml: string } {
+  private renderSlapRFNetworkActions(
+    bleMode: boolean,
+    netMode = false
+  ): { actionsHtml: string; subbarHtml: string } {
     const supported = TimerConsole.supported();
     const main = usbPool.mainConsole;
     const poolBusy = usbPool.slots.find((c) => c.busyLabel)?.busyLabel ?? null;
@@ -1931,7 +2038,9 @@ export class NetworkView extends Component {
           : "Reconnecting…"
         : bleMode
           ? "Waiting for Bluetooth LE connection…"
-          : "Waiting for connection…");
+          : netMode
+            ? `Connecting to ${this.slaprfNetHost}:${this.slaprfNetPort || 5480}…`
+            : "Waiting for connection…");
 
     let actionsHtml = "";
     if (main.connected) {
@@ -1941,10 +2050,11 @@ export class NetworkView extends Component {
       const isWriting = main.writing;
       const label = isOther
         ? "Other"
-        : s?.label || cfg?.timerLabel || (s?.role === 1 || cfg?.role === "hub" ? "H1" : "USB");
+        : s?.label || cfg?.timerLabel || (s?.role === 1 || cfg?.role === "hub" ? "H1" : netMode ? "Bridge" : "USB");
       const fp = s?.fp || cfg?.fingerprint || "";
       const fpNote = fp ? ` (${fp})` : "";
       const viaBluetooth = bleMode || main.transportLabel === "Bluetooth";
+      const viaEthernet = netMode || main.transportLabel === "Ethernet";
       if (viaBluetooth) {
         actionsHtml = `
           <button
@@ -1969,6 +2079,19 @@ export class NetworkView extends Component {
             ${icons.trash(14)}
             <span>Forget Device</span>
           </button>`;
+      } else if (viaEthernet) {
+        actionsHtml = `
+          <button
+            type="button"
+            class="btn net-conn-btn"
+            data-action="disconnect-usb-slot"
+            data-usb-slot="${main.slotIndex}"
+            ${isWriting ? "disabled" : ""}
+            title="${esc(`Disconnect ${label}${fpNote}`)}"
+          >
+            ${icons.plugOff(14)}
+            <span>Disconnect</span>
+          </button>`;
       } else {
         actionsHtml = `
           <button
@@ -1983,6 +2106,40 @@ export class NetworkView extends Component {
             <span>Disconnect USB</span>
           </button>`;
       }
+    } else if (netMode) {
+      actionsHtml = `
+        <button
+          type="button"
+          class="btn net-conn-btn"
+          data-action="slaprf-net-connect"
+          ${supported && !busy ? "" : "disabled"}
+          title="${esc(`Connect to PoE Bridge at ${this.slaprfNetHost}:${this.slaprfNetPort || 5480}`)}"
+        >
+          ${icons.wifi(14)}
+          <span>${busy ? `${esc(busyText)}…` : "Connect"}</span>
+        </button>
+        <button
+          type="button"
+          class="btn net-conn-btn"
+          data-action="slaprf-net-scan"
+          ${supported && !busy ? "" : "disabled"}
+          title="Discover SlapRF PoE Bridges on the local network (UDP :5480)"
+        >
+          ${icons.target(14)}
+          <span>Discover</span>
+        </button>
+        ${
+          isConnectingFlow
+            ? `<button
+                 type="button"
+                 class="btn btn-ghost net-conn-btn"
+                 data-action="cancel-connect"
+                 title="Cancel connection attempt"
+               >
+                 <span>Cancel</span>
+               </button>`
+            : ""
+        }`;
     } else {
       const pairedBleHub = bleMode ? getPairedBluetoothHub() : null;
       const connectText = bleMode ? (pairedBleHub ? "Connect" : "Pair Device") : "Connect USB";
@@ -2031,7 +2188,9 @@ export class NetworkView extends Component {
       subbarParts.push(
         bleMode
           ? `<div class="sim-error-note">Connect a SlapRF Server or open the mobile app to connect a Bluetooth Hub.</div>`
-          : `<div class="sim-error-note">Connect a SlapRF Server to open physical USB serial ports.</div>`
+          : netMode
+            ? `<div class="sim-error-note">Connect a SlapRF Server to connect to a PoE Ethernet Bridge on your network.</div>`
+            : `<div class="sim-error-note">Connect a SlapRF Server to open physical USB serial ports.</div>`
       );
     }
     if (this.connError && !isConnectingFlow) {
@@ -2057,6 +2216,7 @@ export class NetworkView extends Component {
 
   private renderTopConnectionControls(mode: TimingHardwareMode): void {
     const isBleMode = mode === "slaprf_ble";
+    const isNetMode = mode === "slaprf_net";
     const isLapRFNet = mode === "laprf";
     const isLapRFUSB = mode === "laprf_usb";
     const isLapRF = isLapRFNet || isLapRFUSB;
@@ -2078,7 +2238,9 @@ export class NetworkView extends Component {
               ? "Select your timing device and connect to a LapRF 8-Way timer over Ethernet IP (TCP :5403)."
               : isBleMode
                 ? "Select your timing device and connect to the Hub over <strong>Bluetooth</strong> to inspect pairing status, 2.4 GHz ESP-NOW Spokes, and live 5.8 GHz readings."
-                : "Select your timing device and connect the Hub (or a Spoke) over <strong>USB-C</strong> to inspect the 2.4 GHz network and 5.8 GHz readings.";
+                : isNetMode
+                  ? "Select your timing device and connect to a SlapRF <strong>PoE Ethernet Bridge</strong> (TCP/UDP :5480) to inspect the attached USB Hub, 2.4 GHz ESP-NOW Spokes, and live 5.8 GHz readings."
+                  : "Select your timing device and connect the Hub (or a Spoke) over <strong>USB-C</strong> to inspect the 2.4 GHz network and 5.8 GHz readings.";
       connIntro.innerHTML = `<h2>Connection</h2><p>${introText}</p>`;
       scanSettingsIntroCollapse(connIntro);
     }
@@ -2108,6 +2270,7 @@ export class NetworkView extends Component {
           >
             <option value="slaprf" ${effectiveMode === "slaprf" ? "selected" : ""}>SlapRF (USB)</option>
             <option value="slaprf_ble" ${effectiveMode === "slaprf_ble" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select SlapRF (Bluetooth)"'}>SlapRF (Bluetooth)</option>
+            <option value="slaprf_net" ${effectiveMode === "slaprf_net" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select SlapRF (Network)"'}>SlapRF (Network)</option>
             <option value="laprf" ${effectiveMode === "laprf" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select LapRF 8-Way (Network)"'}>LapRF 8-Way (Network)</option>
             <option value="laprf_usb" ${effectiveMode === "laprf_usb" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select LapRF 8-Way (USB)"'}>LapRF 8-Way (USB)</option>
             <option value="rotorhazard" ${effectiveMode === "rotorhazard" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select RotorHazard (Network)"'}>RotorHazard (Network)</option>
@@ -2118,17 +2281,53 @@ export class NetworkView extends Component {
     }
 
     const slaprfConnHost = this.el.querySelector<HTMLElement>('[data-slot="connection"]');
+    const slaprfNetConnHost = this.el.querySelector<HTMLElement>('[data-slot="slaprf-net-connection"]');
     const extActionsHost = this.el.querySelector<HTMLElement>('[data-slot="external-conn-actions"]');
     const laprfConnHost = this.el.querySelector<HTMLElement>('[data-slot="laprf-connection"]');
     const rhConnHost = this.el.querySelector<HTMLElement>('[data-slot="rh-connection"]');
 
     if (slaprfConnHost) slaprfConnHost.style.display = isSlapRF ? "flex" : "none";
+    if (slaprfNetConnHost) slaprfNetConnHost.style.display = isNetMode ? "flex" : "none";
     if (extActionsHost) extActionsHost.style.display = !isSlapRF ? "flex" : "none";
     if (laprfConnHost) laprfConnHost.style.display = isLapRFNet ? "flex" : "none";
     if (rhConnHost) rhConnHost.style.display = isRHNet ? "flex" : "none";
 
+    if (isNetMode && slaprfNetConnHost) {
+      const activeEl = document.activeElement as HTMLElement | null;
+      const focusedInside = Boolean(activeEl && slaprfNetConnHost.contains(activeEl) && activeEl.tagName === "INPUT");
+      const netSig = `${lock.locked ? 1 : 0}|${this.slaprfNetHost}|${this.slaprfNetPort}`;
+      if (!focusedInside && netSig !== this.lastSlaprfNetFieldsSig) {
+        this.lastSlaprfNetFieldsSig = netSig;
+        const disAttr = lock.locked ? "disabled" : "";
+        slaprfNetConnHost.innerHTML = `
+          <div class="net-conn-field is-ip">
+            <input
+              class="input mono net-conn-input"
+              type="text"
+              value="${esc(this.slaprfNetHost)}"
+              data-field="slaprf-net-host"
+              placeholder="192.168.1.110"
+              aria-label="SlapRF PoE Bridge IP"
+              title="SlapRF PoE Bridge IP or hostname"
+              ${disAttr}
+            />
+          </div>
+          <div class="net-conn-field is-port-num">
+            <input
+              class="input mono net-conn-input"
+              type="number"
+              value="${this.slaprfNetPort}"
+              data-field="slaprf-net-port"
+              aria-label="SlapRF PoE Bridge TCP port"
+              title="SlapRF PoE Bridge TCP/UDP port (default 5480)"
+              ${disAttr}
+            />
+          </div>`;
+      }
+    }
+
     if (isSlapRF && slaprfConnHost) {
-      const { actionsHtml, subbarHtml } = this.renderSlapRFNetworkActions(isBleMode);
+      const { actionsHtml, subbarHtml } = this.renderSlapRFNetworkActions(isBleMode, isNetMode);
       if (actionsHtml !== this.lastSlaprfConnSig) {
         this.lastSlaprfConnSig = actionsHtml;
         slaprfConnHost.innerHTML = actionsHtml;
@@ -3500,13 +3699,18 @@ export class NetworkView extends Component {
     const isBleHub =
       this.store.timingHardwareMode === "slaprf_ble" ||
       (usbPool.hubConsole() ?? sharedTimerConsole).transportLabel === "Bluetooth";
+    const isEthHub =
+      this.store.timingHardwareMode === "slaprf_net" ||
+      (usbPool.hubConsole() ?? sharedTimerConsole).transportLabel === "Ethernet";
     const hubSelected = selectedSlot === 1;
     const hubDotClass = hub.emergencyMode ? "is-emergency" : hub.online ? "is-up" : hub.populated ? "is-warn" : "";
     const hubBadgeClass = hub.online ? "badge-good" : hub.populated ? "badge-warn" : "";
     const hubBadgeText = hub.viaUsb
       ? isBleHub
         ? "Bluetooth · Active"
-        : "USB-C · Active"
+        : isEthHub
+          ? "Ethernet · Active"
+          : "USB-C · Active"
       : hub.online
         ? "Online"
         : hub.populated
@@ -3928,24 +4132,27 @@ export class NetworkView extends Component {
     if (selectedSlot === 1) {
       if (!hub.populated) {
         const isBleEmpty = this.store.timingHardwareMode === "slaprf_ble";
+        const isNetEmpty = this.store.timingHardwareMode === "slaprf_net";
         const emptyHubHtml = `
           <div class="debug-status-topbar">
             <span class="debug-led-status">
               <span class="status-dot"></span>
-              <span class="debug-head-note"><strong>${isBleEmpty ? "Bluetooth Hub" : "TDMA Slot 1"}</strong> · ${isBleEmpty ? "No Bluetooth Hub connected" : "Empty parent Hub slot"}</span>
+              <span class="debug-head-note"><strong>${isBleEmpty ? "Bluetooth Hub" : isNetEmpty ? "PoE Ethernet Bridge" : "TDMA Slot 1"}</strong> · ${isBleEmpty ? "No Bluetooth Hub connected" : isNetEmpty ? "No PoE Bridge connected" : "Empty parent Hub slot"}</span>
             </span>
             <div class="debug-connect-actions">
-              <span class="badge">${isBleEmpty ? "Bluetooth · Idle" : "Slot 1 · Empty"}</span>
+              <span class="badge">${isBleEmpty ? "Bluetooth · Idle" : isNetEmpty ? "Ethernet · Idle" : "Slot 1 · Empty"}</span>
             </div>
           </div>
           <div class="debug-subbox">
             <p class="note">${
               isBleEmpty
                 ? "No SlapRF Bluetooth Hub is currently connected. Click Pair Device (or Connect) above to link wirelessly. Use Forget Device when connected, or hold BOOT on the Hub for 3 s, to pair with a new device."
-                : "No Hub timer is currently connected on TDMA Slot 1. Connect your Hub over USB-C to coordinate the 2.4 GHz network."
+                : isNetEmpty
+                  ? "No SlapRF PoE Ethernet Bridge is currently connected. Enter its IP address (or click Discover) above to connect to your USB Hub over Ethernet."
+                  : "No Hub timer is currently connected on TDMA Slot 1. Connect your Hub over USB-C to coordinate the 2.4 GHz network."
             }</p>
           </div>`;
-        this.lastTimerStructKey = isBleEmpty ? "empty-1-ble" : "empty-1";
+        this.lastTimerStructKey = isBleEmpty ? "empty-1-ble" : isNetEmpty ? "empty-1-net" : "empty-1";
         if (emptyHubHtml !== this.lastTimerHtml) {
           this.lastTimerHtml = emptyHubHtml;
           detailHost.innerHTML = emptyHubHtml;

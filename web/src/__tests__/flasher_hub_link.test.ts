@@ -3,12 +3,14 @@ import {
   buildOrPatchFirmwareBin,
   FIRMWARE_BLE_IMAGE_NAME,
   FIRMWARE_IMAGE_NAME,
+  FIRMWARE_POE_BRIDGE_IMAGE_NAME,
   firmwareImageNameFor,
   firmwareImageUrlFor,
   LATEST_FIRMWARE_VERSION,
   parseSlaprfConfigBlock,
   probeBleFirmwareImage,
   resetBleFirmwareImageProbe,
+  resetPoeBridgeFirmwareImageProbe,
 } from "../services/esp_flasher";
 import { bindSimSerialStore } from "../services/sim_serial_port";
 import { AppStore } from "../state/store";
@@ -23,7 +25,12 @@ interface FetchLog {
 }
 
 /** Replaces window.fetch for firmware URLs only; everything else goes to the real fetch. */
-function stubFirmwareFetch(opts: { usb?: Uint8Array | null; ble?: Uint8Array | null; bleContentType?: string }): {
+function stubFirmwareFetch(opts: {
+  usb?: Uint8Array | null;
+  ble?: Uint8Array | null;
+  bleContentType?: string;
+  poeBridge?: Uint8Array | null;
+}): {
   log: FetchLog[];
   restore: () => void;
 } {
@@ -32,6 +39,14 @@ function stubFirmwareFetch(opts: { usb?: Uint8Array | null; ble?: Uint8Array | n
   const stub = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const method = (init?.method || "GET").toUpperCase();
+    if (url.includes(FIRMWARE_POE_BRIDGE_IMAGE_NAME)) {
+      if (opts.poeBridge !== undefined) log.push({ url, method });
+      if (!opts.poeBridge) return new Response("not found", { status: 404 });
+      return new Response(method === "HEAD" ? null : opts.poeBridge, {
+        status: 200,
+        headers: { "Content-Type": "application/octet-stream" },
+      });
+    }
     const isBle = url.includes(FIRMWARE_BLE_IMAGE_NAME);
     const isUsb = !isBle && url.includes(FIRMWARE_IMAGE_NAME);
     if (!isBle && !isUsb) return original(input, init);
@@ -73,12 +88,16 @@ describe("Flasher Hub connection: USB cable vs Bluetooth hub image", () => {
   it("resolves image names and URLs: only a Hub on Bluetooth gets slaprf-xiao-c5-ble.bin", () => {
     expect(FIRMWARE_IMAGE_NAME).toBe("slaprf-xiao-c5.bin");
     expect(FIRMWARE_BLE_IMAGE_NAME).toBe("slaprf-xiao-c5-ble.bin");
+    expect(FIRMWARE_POE_BRIDGE_IMAGE_NAME).toBe("slaprf-p4-poe-bridge.bin");
     expect(firmwareImageNameFor("hub")).toBe(FIRMWARE_IMAGE_NAME);
     expect(firmwareImageNameFor("hub", "usb")).toBe(FIRMWARE_IMAGE_NAME);
     expect(firmwareImageNameFor("hub", "ble")).toBe(FIRMWARE_BLE_IMAGE_NAME);
     expect(firmwareImageNameFor("spoke", "ble")).toBe(FIRMWARE_IMAGE_NAME);
+    expect(firmwareImageNameFor("poe_bridge")).toBe(FIRMWARE_POE_BRIDGE_IMAGE_NAME);
     expect(firmwareImageUrlFor("hub", "ble")).toBe("./firmware/slaprf-xiao-c5-ble.bin");
     expect(firmwareImageUrlFor("spoke", "ble")).toBe("./firmware/slaprf-xiao-c5.bin");
+    expect(firmwareImageUrlFor("poe_bridge")).toBe("./firmware/slaprf-p4-poe-bridge.bin");
+    resetPoeBridgeFirmwareImageProbe();
   });
 
   it("patches the BLE image with the same SLAPRF02 logic, forces Hub, and refuses to fall back when it is missing", async () => {

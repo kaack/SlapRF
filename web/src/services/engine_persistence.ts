@@ -47,12 +47,33 @@ const INITIAL_RECONCILE_MS = 2_000;
 export interface PersistedEngineStateJson {
   bootTimeUnixNano?: number;
   savedAtUnixUs?: number;
+  timingHardwareMode?: string;
   elapsedUs: number;
   raceArmed: boolean;
   rules: unknown;
   pilots: unknown[] | null;
   gates: unknown[] | null;
   timers: unknown[] | null;
+  savedSlapRFGates?: unknown[] | null;
+  savedSlapRFTimers?: unknown[] | null;
+  savedSlapRFBLEGates?: unknown[] | null;
+  savedSlapRFBLETimers?: unknown[] | null;
+  hasSavedSlapRFBLEState?: boolean;
+  savedSlapRFNetGates?: unknown[] | null;
+  savedSlapRFNetTimers?: unknown[] | null;
+  hasSavedSlapRFNetState?: boolean;
+  savedLapRFGates?: unknown[] | null;
+  savedLapRFTimers?: unknown[] | null;
+  hasSavedLapRFState?: boolean;
+  savedLapRFUSBGates?: unknown[] | null;
+  savedLapRFUSBTimers?: unknown[] | null;
+  hasSavedLapRFUSBState?: boolean;
+  savedRHGates?: unknown[] | null;
+  savedRHTimers?: unknown[] | null;
+  hasSavedRHState?: boolean;
+  savedRHUSBGates?: unknown[] | null;
+  savedRHUSBTimers?: unknown[] | null;
+  hasSavedRHUSBState?: boolean;
   deletedSpokeFp?: string[] | null;
   laps: unknown[] | null;
   crossings: unknown[] | null;
@@ -70,12 +91,33 @@ export interface RealConfigDoc {
   key: typeof KV_REAL_CONFIG;
   bootTimeUnixNano?: number;
   savedAtUnixUs?: number;
+  timingHardwareMode?: string;
   elapsedUs: number;
   raceArmed: boolean;
   rules: unknown;
   pilots: unknown[] | null;
   gates: unknown[] | null;
   timers: unknown[] | null;
+  savedSlapRFGates?: unknown[] | null;
+  savedSlapRFTimers?: unknown[] | null;
+  savedSlapRFBLEGates?: unknown[] | null;
+  savedSlapRFBLETimers?: unknown[] | null;
+  hasSavedSlapRFBLEState?: boolean;
+  savedSlapRFNetGates?: unknown[] | null;
+  savedSlapRFNetTimers?: unknown[] | null;
+  hasSavedSlapRFNetState?: boolean;
+  savedLapRFGates?: unknown[] | null;
+  savedLapRFTimers?: unknown[] | null;
+  hasSavedLapRFState?: boolean;
+  savedLapRFUSBGates?: unknown[] | null;
+  savedLapRFUSBTimers?: unknown[] | null;
+  hasSavedLapRFUSBState?: boolean;
+  savedRHGates?: unknown[] | null;
+  savedRHTimers?: unknown[] | null;
+  hasSavedRHState?: boolean;
+  savedRHUSBGates?: unknown[] | null;
+  savedRHUSBTimers?: unknown[] | null;
+  hasSavedRHUSBState?: boolean;
   deletedSpokeFp?: string[] | null;
   raceState?: unknown;
   eventState?: unknown;
@@ -134,12 +176,33 @@ export function splitRealState(state: PersistedEngineStateJson): {
       key: KV_REAL_CONFIG,
       ...(isKeyNumber(state.bootTimeUnixNano) ? { bootTimeUnixNano: state.bootTimeUnixNano } : {}),
       ...(isKeyNumber(state.savedAtUnixUs) ? { savedAtUnixUs: state.savedAtUnixUs } : {}),
+      ...(typeof state.timingHardwareMode === "string" ? { timingHardwareMode: state.timingHardwareMode } : {}),
       elapsedUs: isKeyNumber(state.elapsedUs) ? state.elapsedUs : 0,
       raceArmed: !!state.raceArmed,
       rules: state.rules ?? null,
       pilots: state.pilots ?? null,
       gates: state.gates ?? null,
       timers: state.timers ?? null,
+      ...(state.savedSlapRFGates !== undefined ? { savedSlapRFGates: state.savedSlapRFGates } : {}),
+      ...(state.savedSlapRFTimers !== undefined ? { savedSlapRFTimers: state.savedSlapRFTimers } : {}),
+      ...(state.savedSlapRFBLEGates !== undefined ? { savedSlapRFBLEGates: state.savedSlapRFBLEGates } : {}),
+      ...(state.savedSlapRFBLETimers !== undefined ? { savedSlapRFBLETimers: state.savedSlapRFBLETimers } : {}),
+      ...(state.hasSavedSlapRFBLEState !== undefined ? { hasSavedSlapRFBLEState: state.hasSavedSlapRFBLEState } : {}),
+      ...(state.savedSlapRFNetGates !== undefined ? { savedSlapRFNetGates: state.savedSlapRFNetGates } : {}),
+      ...(state.savedSlapRFNetTimers !== undefined ? { savedSlapRFNetTimers: state.savedSlapRFNetTimers } : {}),
+      ...(state.hasSavedSlapRFNetState !== undefined ? { hasSavedSlapRFNetState: state.hasSavedSlapRFNetState } : {}),
+      ...(state.savedLapRFGates !== undefined ? { savedLapRFGates: state.savedLapRFGates } : {}),
+      ...(state.savedLapRFTimers !== undefined ? { savedLapRFTimers: state.savedLapRFTimers } : {}),
+      ...(state.hasSavedLapRFState !== undefined ? { hasSavedLapRFState: state.hasSavedLapRFState } : {}),
+      ...(state.savedLapRFUSBGates !== undefined ? { savedLapRFUSBGates: state.savedLapRFUSBGates } : {}),
+      ...(state.savedLapRFUSBTimers !== undefined ? { savedLapRFUSBTimers: state.savedLapRFUSBTimers } : {}),
+      ...(state.hasSavedLapRFUSBState !== undefined ? { hasSavedLapRFUSBState: state.hasSavedLapRFUSBState } : {}),
+      ...(state.savedRHGates !== undefined ? { savedRHGates: state.savedRHGates } : {}),
+      ...(state.savedRHTimers !== undefined ? { savedRHTimers: state.savedRHTimers } : {}),
+      ...(state.hasSavedRHState !== undefined ? { hasSavedRHState: state.hasSavedRHState } : {}),
+      ...(state.savedRHUSBGates !== undefined ? { savedRHUSBGates: state.savedRHUSBGates } : {}),
+      ...(state.savedRHUSBTimers !== undefined ? { savedRHUSBTimers: state.savedRHUSBTimers } : {}),
+      ...(state.hasSavedRHUSBState !== undefined ? { hasSavedRHUSBState: state.hasSavedRHUSBState } : {}),
       deletedSpokeFp: state.deletedSpokeFp ?? null,
       ...(state.raceState !== undefined ? { raceState: state.raceState } : {}),
       ...(state.eventState !== undefined ? { eventState: state.eventState } : {}),
@@ -177,12 +240,33 @@ export function assembleRealState(
   return {
     ...(config && isKeyNumber(config.bootTimeUnixNano) ? { bootTimeUnixNano: config.bootTimeUnixNano } : {}),
     ...(config && isKeyNumber(config.savedAtUnixUs) ? { savedAtUnixUs: config.savedAtUnixUs } : {}),
+    ...(config && typeof config.timingHardwareMode === "string" ? { timingHardwareMode: config.timingHardwareMode } : {}),
     elapsedUs: config ? num(config.elapsedUs) : 0,
     raceArmed: config ? !!config.raceArmed : true,
     rules: config?.rules ?? {},
     pilots: config?.pilots ?? null,
     gates: config?.gates ?? null,
     timers: config?.timers ?? null,
+    ...(config?.savedSlapRFGates !== undefined ? { savedSlapRFGates: config.savedSlapRFGates } : {}),
+    ...(config?.savedSlapRFTimers !== undefined ? { savedSlapRFTimers: config.savedSlapRFTimers } : {}),
+    ...(config?.savedSlapRFBLEGates !== undefined ? { savedSlapRFBLEGates: config.savedSlapRFBLEGates } : {}),
+    ...(config?.savedSlapRFBLETimers !== undefined ? { savedSlapRFBLETimers: config.savedSlapRFBLETimers } : {}),
+    ...(config?.hasSavedSlapRFBLEState !== undefined ? { hasSavedSlapRFBLEState: config.hasSavedSlapRFBLEState } : {}),
+    ...(config?.savedSlapRFNetGates !== undefined ? { savedSlapRFNetGates: config.savedSlapRFNetGates } : {}),
+    ...(config?.savedSlapRFNetTimers !== undefined ? { savedSlapRFNetTimers: config.savedSlapRFNetTimers } : {}),
+    ...(config?.hasSavedSlapRFNetState !== undefined ? { hasSavedSlapRFNetState: config.hasSavedSlapRFNetState } : {}),
+    ...(config?.savedLapRFGates !== undefined ? { savedLapRFGates: config.savedLapRFGates } : {}),
+    ...(config?.savedLapRFTimers !== undefined ? { savedLapRFTimers: config.savedLapRFTimers } : {}),
+    ...(config?.hasSavedLapRFState !== undefined ? { hasSavedLapRFState: config.hasSavedLapRFState } : {}),
+    ...(config?.savedLapRFUSBGates !== undefined ? { savedLapRFUSBGates: config.savedLapRFUSBGates } : {}),
+    ...(config?.savedLapRFUSBTimers !== undefined ? { savedLapRFUSBTimers: config.savedLapRFUSBTimers } : {}),
+    ...(config?.hasSavedLapRFUSBState !== undefined ? { hasSavedLapRFUSBState: config.hasSavedLapRFUSBState } : {}),
+    ...(config?.savedRHGates !== undefined ? { savedRHGates: config.savedRHGates } : {}),
+    ...(config?.savedRHTimers !== undefined ? { savedRHTimers: config.savedRHTimers } : {}),
+    ...(config?.hasSavedRHState !== undefined ? { hasSavedRHState: config.hasSavedRHState } : {}),
+    ...(config?.savedRHUSBGates !== undefined ? { savedRHUSBGates: config.savedRHUSBGates } : {}),
+    ...(config?.savedRHUSBTimers !== undefined ? { savedRHUSBTimers: config.savedRHUSBTimers } : {}),
+    ...(config?.hasSavedRHUSBState !== undefined ? { hasSavedRHUSBState: config.hasSavedRHUSBState } : {}),
     deletedSpokeFp: config?.deletedSpokeFp ?? null,
     ...(config?.raceState !== undefined ? { raceState: config.raceState } : {}),
     ...(config?.eventState !== undefined ? { eventState: config.eventState } : {}),

@@ -2,13 +2,14 @@ export type TimerRole = "START_FINISH" | "SECTOR_GATE";
 export type TimingHardwareMode =
   | "slaprf"
   | "slaprf_ble"
+  | "slaprf_net"
   | "laprf"
   | "laprf_usb"
   | "rotorhazard"
   | "rotorhazard_usb";
 
 export function isSlapRFMode(mode?: TimingHardwareMode | string | null): boolean {
-  return !mode || mode === "slaprf" || mode === "slaprf_ble";
+  return !mode || mode === "slaprf" || mode === "slaprf_ble" || mode === "slaprf_net";
 }
 
 export function isLapRFMode(mode?: TimingHardwareMode | string | null): boolean {
@@ -21,6 +22,7 @@ export function isRotorHazardMode(mode?: TimingHardwareMode | string | null): bo
 
 export function normalizeTimingHardwareMode(mode?: string | null): TimingHardwareMode {
   if (mode === "slaprf_ble") return "slaprf_ble";
+  if (mode === "slaprf_net") return "slaprf_net";
   if (mode === "laprf") return "laprf";
   if (mode === "laprf_usb") return "laprf_usb";
   if (mode === "rotorhazard") return "rotorhazard";

@@ -110,6 +110,7 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect(opts.map((o) => o.value)).toEqual([
         "slaprf",
         "slaprf_ble",
+        "slaprf_net",
         "laprf",
         "laprf_usb",
         "rotorhazard",
@@ -118,6 +119,7 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect(opts.map((o) => o.textContent?.trim())).toEqual([
         "SlapRF (USB)",
         "SlapRF (Bluetooth)",
+        "SlapRF (Network)",
         "LapRF 8-Way (Network)",
         "LapRF 8-Way (USB)",
         "RotorHazard (Network)",
@@ -128,6 +130,7 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect(opts[3].disabled).toBe(false);
       expect(opts[4].disabled).toBe(false);
       expect(opts[5].disabled).toBe(false);
+      expect(opts[6].disabled).toBe(false);
 
       // When Simulation is OFF without a Go backend connected, external systems are gated cleanly
       const realStore = makeStore({
@@ -139,11 +142,13 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       try {
         sel = root2.querySelector<HTMLSelectElement>("select[data-field='network-hardware-mode']")!;
         const bleOpt = sel.querySelector<HTMLOptionElement>("option[value='slaprf_ble']")!;
+        const netOpt = sel.querySelector<HTMLOptionElement>("option[value='slaprf_net']")!;
         const laprfOpt = sel.querySelector<HTMLOptionElement>("option[value='laprf']")!;
         const laprfUsbOpt = sel.querySelector<HTMLOptionElement>("option[value='laprf_usb']")!;
         const rhOpt = sel.querySelector<HTMLOptionElement>("option[value='rotorhazard']")!;
         const rhUsbOpt = sel.querySelector<HTMLOptionElement>("option[value='rotorhazard_usb']")!;
         expect(bleOpt.disabled).toBe(true);
+        expect(netOpt.disabled).toBe(true);
         expect(laprfOpt.disabled).toBe(true);
         expect(laprfUsbOpt.disabled).toBe(true);
         expect(rhOpt.disabled).toBe(true);

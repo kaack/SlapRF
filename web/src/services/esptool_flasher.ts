@@ -17,6 +17,7 @@ import {
   ProgressCallback,
   TimerReadout,
   buildOrPatchFirmwareBin,
+  fetchPoeBridgeFirmwareBin,
   generateFingerprint,
   parseSlaprfConfigBlock,
   parseStatusSnapshot,
@@ -34,6 +35,7 @@ import { usbPool } from "./timer_console";
 
 const ESPRESSIF_USB_VID = 0x303a;
 const ESPRESSIF_USB_JTAG_PID = 0x1001;
+const WCH_USB_VID = 0x1a86;
 const ESP_IMAGE_MAGIC = 0xe9;
 
 interface WebSerialPortInfo {
@@ -477,6 +479,48 @@ export async function acquireEspSerialPort(): Promise<WebSerialPort> {
     }
     if (/No port selected|cancel/i.test(msg)) {
       // A person takes far longer than this to dismiss the prompt: Chrome refused without showing it.
+      if (performance.now() - t0 < 400) {
+        throw new Error(
+          "Chrome blocked the USB port prompt. Open chrome://settings/content/serialPorts, allow sites to ask, make sure this site is not blocked, then try again."
+        );
+      }
+      throw new Error("No port selected");
+    }
+    throw err;
+  }
+}
+
+/**
+ * Opens the serial port picker for an ESP32-P4 PoE Ethernet Bridge (typically CH343P `0x1A86:0x55D3`
+ * or native Espressif USB `0x303A`).
+ */
+export async function acquirePoeBridgeSerialPort(): Promise<WebSerialPort> {
+  if (capabilitiesSnapshot().portable && !isStandaloneWebSerialMode()) {
+    const picked = await pickUsbPort({ showAllPorts: true, transport: "usb" });
+    if (isBackendSerialPort(picked)) {
+      return new BackendRawWebSerialPort({
+        name: picked.portName,
+        product: picked.description || "ESP32-P4 PoE Bridge",
+        isEspressif: false,
+      });
+    }
+    return picked as unknown as WebSerialPort;
+  }
+  const api = webSerial();
+  if (!api) {
+    throw new Error(FLASHER_NEEDS_WEBSERIAL);
+  }
+  const t0 = performance.now();
+  try {
+    return await api.requestPort({
+      filters: [{ usbVendorId: WCH_USB_VID }, { usbVendorId: ESPRESSIF_USB_VID }],
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/user gesture/i.test(msg)) {
+      throw new Error("Chrome only shows the USB port prompt right after a click. Click the button again.");
+    }
+    if (/No port selected|cancel/i.test(msg)) {
       if (performance.now() - t0 < 400) {
         throw new Error(
           "Chrome blocked the USB port prompt. Open chrome://settings/content/serialPorts, allow sites to ask, make sure this site is not blocked, then try again."
@@ -980,6 +1024,205 @@ export async function flashXiaoC5WithEsptool(
   }
 }
 
+export interface PoeBridgeReadout {
+  fw: string;
+  board: string;
+  ethLink?: boolean;
+  ip?: string;
+  mac?: string;
+  tcpPort?: number;
+  usbConnected?: boolean;
+  usbVid?: string;
+  usbPid?: string;
+}
+
+/** Queries a freshly booted ESP32-P4 PoE Bridge on UART0 (`STATUS?`) and parses `@{"t":"bridge",...}`. */
+export async function readPoeBridgeStatusOverWebSerial(
+  port: WebSerialPort,
+  waitMs = 1600
+): Promise<PoeBridgeReadout | null> {
+  try {
+    await port.open({ baudRate: 115200, bufferSize: 16384 });
+  } catch {
+    return null;
+  }
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  const dec = new TextDecoder();
+  let textBuf = "";
+  const query = new TextEncoder().encode("\nSTATUS?\n");
+  const send = async () => {
+    const w = port.writable?.getWriter();
+    if (!w) return;
+    await w.write(query).catch(() => undefined);
+    w.releaseLock();
+  };
+  try {
+    await setLines(port, false, false);
+    reader = port.readable?.getReader() ?? null;
+    if (!reader) return null;
+    await send();
+    const deadline = Date.now() + waitMs;
+    let resent = false;
+    let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
+    while (Date.now() < deadline) {
+      if (!pendingRead) pendingRead = reader.read();
+      const res = await Promise.race([
+        pendingRead.then((r) => ({ kind: "read" as const, r })),
+        sleep(Math.max(1, Math.min(150, deadline - Date.now()))).then(() => ({ kind: "timeout" as const })),
+      ]);
+      if (res.kind === "read") {
+        pendingRead = null;
+        if (res.r.done || !res.r.value) break;
+        textBuf += dec.decode(res.r.value, { stream: true });
+        for (const rawLine of textBuf.split(/\r?\n/)) {
+          const idx = rawLine.lastIndexOf("@{");
+          if (idx < 0) continue;
+          try {
+            const parsed = JSON.parse(rawLine.slice(idx + 1)) as Record<string, unknown>;
+            if (parsed.t === "bridge") {
+              return {
+                fw: typeof parsed.fw === "string" ? parsed.fw : "v0.1.0",
+                board: typeof parsed.board === "string" ? parsed.board : "ESP32-P4-POE-ETH",
+                ethLink: typeof parsed.ethLink === "boolean" ? parsed.ethLink : undefined,
+                ip: typeof parsed.ip === "string" ? parsed.ip : undefined,
+                mac: typeof parsed.mac === "string" ? parsed.mac : undefined,
+                tcpPort: typeof parsed.tcpPort === "number" ? parsed.tcpPort : 5480,
+                usbConnected: typeof parsed.usbConnected === "boolean" ? parsed.usbConnected : undefined,
+                usbVid: typeof parsed.usbVid === "string" ? parsed.usbVid : undefined,
+                usbPid: typeof parsed.usbPid === "string" ? parsed.usbPid : undefined,
+              };
+            }
+          } catch {
+            // partial JSON line; wait for next chunk
+          }
+        }
+      } else if (!resent && Date.now() > deadline - waitMs / 2) {
+        resent = true;
+        await send();
+      }
+    }
+    return null;
+  } finally {
+    if (reader) {
+      await reader.cancel().catch(() => undefined);
+      try {
+        reader.releaseLock();
+      } catch {
+        // ignore
+      }
+    }
+    await port.close().catch(() => undefined);
+  }
+}
+
+/** Flashes the merged ESP32-P4 PoE Bridge image (`slaprf-p4-poe-bridge.bin`) at offset 0x0 and verifies boot. */
+export async function flashPoeBridgeWithEsptool(
+  port: WebSerialPort,
+  imageBytes: Uint8Array,
+  onProgress: ProgressCallback
+): Promise<PoeBridgeReadout | null> {
+  const emit = (stage: FlashProgress["stage"], percent: number, detail: string) =>
+    onProgress({ stage, percent, detail } as FlashProgress);
+
+  emit("connecting", 2, "Preparing USB serial port…");
+  const hold = await pauseServerConnection();
+
+  const abort = new AbortController();
+  let session: Session | null = null;
+  const unregister = registerFlashCanceler(() => {
+    abort.abort();
+    if (session) void session.transport.disconnect().catch(() => undefined);
+  });
+
+  try {
+    emit("bootloader", 6, "Connecting to ESP32-P4 ROM bootloader…");
+    session = await openSession(
+      port,
+      (line) => {
+        if (line.startsWith("__retry__")) {
+          emit("connecting", 6, `Board not responding. Retrying (attempt ${line.slice(9)} of 3)…`);
+        } else if (/Chip is/i.test(line)) {
+          emit("bootloader", 8, line.trim());
+        } else if (/Uploading stub/i.test(line)) {
+          emit("bootloader", 10, "Uploading ESP32-P4 flasher stub…");
+        } else if (/Stub running/i.test(line)) {
+          emit("bootloader", 12, "Flasher stub running…");
+        }
+      },
+      abort.signal
+    );
+    if (abort.signal.aborted) throw new Error("Cancelled.");
+
+    const region = { data: imageBytes, address: 0 };
+    const kbTotal = Math.round(region.data.length / 1024);
+    emit("erasing", 14, `Erasing ${kbTotal} KB of SPI flash…`);
+    let sawProgress = false;
+    let erasePct = 14;
+    const eraseTicker = window.setInterval(() => {
+      if (!sawProgress && erasePct < 17) {
+        erasePct++;
+        emit("erasing", erasePct, `Erasing ${kbTotal} KB of SPI flash…`);
+      }
+    }, 400);
+    try {
+      await session.loader.writeFlash({
+        fileArray: [region],
+        flashMode: "keep",
+        flashFreq: "keep",
+        flashSize: "keep",
+        eraseAll: false,
+        compress: true,
+        reportProgress: (_idx, written, total) => {
+          sawProgress = true;
+          const frac = total > 0 ? Math.min(1, written / total) : 0;
+          const pct = Math.min(94, Math.round(18 + frac * 76));
+          emit("writing", pct, `Writing PoE Bridge (${Math.round(frac * kbTotal)} / ${kbTotal} KB)…`);
+        },
+      });
+    } finally {
+      window.clearInterval(eraseTicker);
+    }
+
+    emit("rebooting", 95, "Rebooting ESP32-P4 PoE Bridge…");
+    await session.loader.after("hard_reset").catch(() => undefined);
+    await session.transport.disconnect().catch(() => undefined);
+    session = null;
+    await sleep(250);
+    // Ensure CH343P RTS/DTR lines are released cleanly to SPI flash boot (DTR=0, RTS=0)
+    try {
+      await port.open({ baudRate: 115200, bufferSize: 16384 });
+      await setLines(port, false, true);
+      await sleep(90);
+      await setLines(port, false, false);
+      await sleep(120);
+      await port.close().catch(() => undefined);
+    } catch {
+      // ignore if port already closed
+    }
+
+    emit("rebooting", 97, "Verifying ESP32-P4 PoE Bridge over UART0…");
+    await sleep(1400);
+    const verified = await readPoeBridgeStatusOverWebSerial(port, 2000).catch(() => null);
+    emit(
+      "done",
+      100,
+      verified
+        ? `PoE Bridge (${verified.board} · ${verified.fw}) flashed and verified.`
+        : "PoE Bridge firmware flashed."
+    );
+    return verified;
+  } catch (err) {
+    if (abort.signal.aborted) throw new Error("Flash cancelled.");
+    throw friendlyError(err);
+  } finally {
+    unregister();
+    if (session) {
+      await session.transport.disconnect().catch(() => undefined);
+    }
+    void resumeServerConnection(hold);
+  }
+}
+
 /* ---- Erase ---------------------------------------------------------------------------------- */
 
 /** One-shot erase of the entire SPI flash of the board on `port`, then closes the port. */
@@ -1159,6 +1402,32 @@ if (typeof window !== "undefined") {
         const keep = opts.fingerprint ? false : opts.keepFingerprint !== false;
         return flashXiaoC5WithEsptool(port, built.bytes, label, onProgress, keep);
       }),
+    /** Flashes `slaprf-p4-poe-bridge.bin` directly onto `portName` (e.g. `/dev/ttyACM0`) via Go USB-raw bridge. */
+    flashPoeBridgePort: async (portName: string) => {
+      const t0 = performance.now();
+      const progress: string[] = [];
+      const logStart = esptoolLog.length;
+      const onProgress: ProgressCallback = (p) => {
+        const line = `[${String(Math.round(p.percent)).padStart(3)}%] ${p.stage}: ${p.detail}`;
+        if (progress[progress.length - 1] !== line) progress.push(line);
+      };
+      const out: EsptoolAutomationResult = { ok: false, ms: 0, progress, log: [] };
+      try {
+        const { bytes } = await fetchPoeBridgeFirmwareBin();
+        const port = new BackendRawWebSerialPort({
+          name: portName,
+          product: "ESP32-P4 PoE Bridge",
+          isEspressif: false,
+        });
+        out.result = await flashPoeBridgeWithEsptool(port, bytes, onProgress);
+        out.ok = true;
+      } catch (err) {
+        out.error = err instanceof Error ? err.message : String(err);
+      }
+      out.ms = Math.round(performance.now() - t0);
+      out.log = esptoolLog.slice(logStart);
+      return JSON.stringify(out);
+    },
     /** Erases the whole SPI flash of the single granted ESP32-C5. Returns a JSON report. */
     erase: (opts: { index?: number } = {}) =>
       runAutomation(opts.index, (port, onProgress) => eraseXiaoC5WithEsptool(port, onProgress)),

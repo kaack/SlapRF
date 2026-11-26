@@ -428,6 +428,7 @@ export class TopBar extends Component {
 
     const appTheme = getAppTheme();
     const isBleMode = hwMode === "slaprf_ble";
+    const isNetMode = hwMode === "slaprf_net";
     const pairedBleHub = isBleMode ? getPairedBluetoothHub() : null;
     const sig = `${meta.id}:${appTheme}:${hwMode}:${sim ? 1 : 0}:${caps.demoMode ? 1 : 0}:${caps.portable ? 1 : 0}:${lockedOut ? 1 : 0}:${caps.remoteBackend ? 1 : 0}:${caps.backendBaseUrl}:${caps.localDetectedUrl ?? ""}:${emulEnabled ? 1 : 0}:${voiceOn ? 1 : 0}:${emulConnected ? 1 : 0}:${this.scopeMenuOpen ? 1 : 0}:${this.crumbMenuOpen ? 1 : 0}:${usbOn ? 1 : 0}:${activeLabel}:${usbFp}:${usbBusy}:${pairedBleHub?.fp ?? ""}:${led.color}:${led.shortLabel}:${led.detail}:${sbCollapsed ? 1 : 0}:${rCtx.tab}:${rCtx.raceId ?? ""}:${rCtx.raceName}:${rCtx.activeStage}:${rCtx.totalStages}:${rCtx.stageTitle}:${rCtx.live ? 1 : 0}:${pCtx.tab}:${pCtx.sessionId ?? ""}:${pCtx.sessionName}:${pCtx.active ? 1 : 0}:${aTopCtx.mode}:${aScope ? `${aScope.kind}:${aScope.id}:${aScope.name}:${aScope.live ? 1 : 0}` : ""}:${scopePopoverCounts}`;
     this.el.classList.toggle("has-subpage-back", isSubPage);
@@ -461,14 +462,18 @@ export class TopBar extends Component {
     const usbTitle = !usbSupported
       ? isBleMode
         ? "Connect a SlapRF Server or open the mobile app to connect a Bluetooth Hub"
-        : "Connect a SlapRF Server to open USB serial ports"
+        : isNetMode
+          ? "Connect a SlapRF Server to connect to a PoE Ethernet Bridge"
+          : "Connect a SlapRF Server to open USB serial ports"
       : usbOn
-        ? `Connected over ${main.transportLabel === "Bluetooth" || isBleMode ? "Bluetooth" : "USB"}${activeLabel ? ` (${activeLabel}${usbFp ? ` · ${usbFp}` : ""})` : ""} · click for connection options`
+        ? `Connected over ${main.transportLabel === "Bluetooth" || isBleMode ? "Bluetooth" : main.transportLabel === "Ethernet" || isNetMode ? "Ethernet" : "USB"}${activeLabel ? ` (${activeLabel}${usbFp ? ` · ${usbFp}` : ""})` : ""} · click for connection options`
         : isBleMode
           ? pairedBleHub
             ? `Connect to paired Bluetooth Hub ${pairedBleHub.label} (${pairedBleHub.fp})`
             : "Pair a SlapRF Bluetooth Hub"
-          : "Connect a timer over USB-C";
+          : isNetMode
+            ? "Connect to a SlapRF PoE Ethernet Bridge (:5480)"
+            : "Connect a timer over USB-C";
 
     const usbBtn =
       isSlapRFMode(hwMode)
@@ -638,17 +643,21 @@ export class TopBar extends Component {
               ? "LapRF 8-Way diagnostics: Ethernet TCP :5403 link status, 8-slot RSSI telemetry, clock sync, and supply voltage"
               : meta.id === "debug" && hwMode === "slaprf_ble"
                 ? "SlapRF Bluetooth Hub diagnostics: BLE link sync, pairing state, 5.8 GHz receiver health, live RSSI monitor & spectrum scan"
-                : meta.id === "network" && hwMode === "rotorhazard_usb"
-                  ? "RotorHazard USB serial nodes, multi-node RX5808 tuning, and live 0-255 node RSSI"
-                  : meta.id === "network" && hwMode === "rotorhazard"
-                    ? "RotorHazard timing devices, per-device admin credentials, clock sync, and live 0–255 RX5808 node RSSI"
-                    : meta.id === "network" && hwMode === "laprf_usb"
-                      ? "LapRF 8-Way pucks over USB CDC serial (115200 baud), clock sync, and live 8-slot RSSI"
-                      : meta.id === "network" && hwMode === "laprf"
-                        ? "LapRF 8-Way pucks over Ethernet (:5403), LAN discovery, clock sync, and live 8-slot RSSI"
-                        : meta.id === "network" && hwMode === "slaprf_ble"
-                      ? "SlapRF Bluetooth Hub wireless connection, pairing status, and live 8-channel 5.8 GHz RSSI"
-                      : meta.subtitle;
+                : meta.id === "debug" && hwMode === "slaprf_net"
+                  ? "SlapRF Network diagnostics: PoE Ethernet TCP :5480 serial bridge, 5.8 GHz receiver health, live RSSI monitor & spectrum scan"
+                  : meta.id === "network" && hwMode === "rotorhazard_usb"
+                    ? "RotorHazard USB serial nodes, multi-node RX5808 tuning, and live 0-255 node RSSI"
+                    : meta.id === "network" && hwMode === "rotorhazard"
+                      ? "RotorHazard timing devices, per-device admin credentials, clock sync, and live 0–255 RX5808 node RSSI"
+                      : meta.id === "network" && hwMode === "laprf_usb"
+                        ? "LapRF 8-Way pucks over USB CDC serial (115200 baud), clock sync, and live 8-slot RSSI"
+                        : meta.id === "network" && hwMode === "laprf"
+                          ? "LapRF 8-Way pucks over Ethernet (:5403), LAN discovery, clock sync, and live 8-slot RSSI"
+                          : meta.id === "network" && hwMode === "slaprf_ble"
+                            ? "SlapRF Bluetooth Hub wireless connection, pairing status, and live 8-channel 5.8 GHz RSSI"
+                            : meta.id === "network" && hwMode === "slaprf_net"
+                              ? "SlapRF PoE Ethernet Bridge (:5480), LAN discovery, 2.4 GHz ESP-NOW Spokes, and live 5.8 GHz RSSI"
+                              : meta.subtitle;
 
     const hideTopLevelSubtitle = meta.id === "races" || meta.id === "practice";
     const titleMarkup =

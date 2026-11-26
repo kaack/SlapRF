@@ -103,11 +103,18 @@ export const FIRMWARE_BLE_IMAGE_NAME = "slaprf-xiao-c5-ble.bin";
 /** Bluetooth Hub firmware image URL. Optional: only present when firmware/slaprf_ble was built. */
 export const FIRMWARE_BLE_IMAGE_URL = `./firmware/${FIRMWARE_BLE_IMAGE_NAME}`;
 
+/** Waveshare ESP32-P4 PoE Ethernet Bridge firmware image file name (mirrors Go `firmware.PoEBridgeImageName`). */
+export const FIRMWARE_POE_BRIDGE_IMAGE_NAME = "slaprf-p4-poe-bridge.bin";
+
+/** Waveshare ESP32-P4 PoE Ethernet Bridge firmware image URL. */
+export const FIRMWARE_POE_BRIDGE_IMAGE_URL = `./firmware/${FIRMWARE_POE_BRIDGE_IMAGE_NAME}`;
+
 /** How a Hub talks to the host: the USB cable (default image) or Bluetooth LE (BLE image). */
 export type HubLink = "usb" | "ble";
 
 /** Firmware image file name for a role and Hub link (mirrors Go `firmware.ImageNameFor`). Spokes always get the USB image. */
-export function firmwareImageNameFor(role: "hub" | "spoke", hubLink: HubLink = "usb"): string {
+export function firmwareImageNameFor(role: "hub" | "spoke" | "poe_bridge", hubLink: HubLink = "usb"): string {
+  if (role === "poe_bridge") return FIRMWARE_POE_BRIDGE_IMAGE_NAME;
   return role === "hub" && hubLink === "ble" ? FIRMWARE_BLE_IMAGE_NAME : FIRMWARE_IMAGE_NAME;
 }
 
@@ -117,10 +124,11 @@ let firmwareBaseDir = "./firmware";
 export function setFirmwareBaseDir(dir: string): void {
   firmwareBaseDir = dir.replace(/\/+$/, "") || "./firmware";
   bleImageProbe = null;
+  poeBridgeImageProbe = null;
 }
 
 /** Firmware image URL for a role and Hub link. */
-export function firmwareImageUrlFor(role: "hub" | "spoke", hubLink: HubLink = "usb"): string {
+export function firmwareImageUrlFor(role: "hub" | "spoke" | "poe_bridge", hubLink: HubLink = "usb"): string {
   return `${firmwareBaseDir}/${firmwareImageNameFor(role, hubLink)}`;
 }
 
@@ -128,7 +136,12 @@ export function firmwareImageUrlFor(role: "hub" | "spoke", hubLink: HubLink = "u
 export const BLE_IMAGE_MISSING_MESSAGE =
   "The Bluetooth hub firmware image (slaprf-xiao-c5-ble.bin) is not available in this build.";
 
+/** Error shown when the ESP32-P4 PoE Bridge image is requested but has not been built. */
+export const POE_BRIDGE_IMAGE_MISSING_MESSAGE =
+  "The PoE Bridge firmware image (slaprf-p4-poe-bridge.bin) is not available in this build.";
+
 let bleImageProbe: Promise<boolean> | null = null;
+let poeBridgeImageProbe: Promise<boolean> | null = null;
 
 /**
  * Resolves true when the Bluetooth Hub image is served next to the app. Uses a HEAD request
@@ -151,9 +164,50 @@ export function probeBleFirmwareImage(refresh = false): Promise<boolean> {
   return bleImageProbe;
 }
 
+/** Resolves true when the ESP32-P4 PoE Bridge image (`slaprf-p4-poe-bridge.bin`) is served next to the app. */
+export function probePoeBridgeFirmwareImage(refresh = false): Promise<boolean> {
+  if (poeBridgeImageProbe && !refresh) return poeBridgeImageProbe;
+  poeBridgeImageProbe = (async () => {
+    try {
+      if (typeof fetch !== "function") return false;
+      const res = await fetch(firmwareImageUrlFor("poe_bridge"), { method: "HEAD", cache: "no-cache" });
+      if (!res.ok) return false;
+      const type = (res.headers.get("content-type") || "").toLowerCase();
+      return !type.includes("text/html");
+    } catch {
+      return false;
+    }
+  })();
+  return poeBridgeImageProbe;
+}
+
+/** Fetches the unpatched merged ESP32-P4 PoE Bridge firmware image (`slaprf-p4-poe-bridge.bin`). */
+export async function fetchPoeBridgeFirmwareBin(): Promise<{ bytes: Uint8Array; filename: string }> {
+  try {
+    const res = await fetch(firmwareImageUrlFor("poe_bridge"), { cache: "no-cache" });
+    if (res.ok) {
+      const type = (res.headers.get("content-type") || "").toLowerCase();
+      if (!type.includes("text/html")) {
+        const fetched = new Uint8Array(await res.arrayBuffer());
+        if (fetched.length >= 4096) {
+          return { bytes: fetched, filename: FIRMWARE_POE_BRIDGE_IMAGE_NAME };
+        }
+      }
+    }
+  } catch {
+    // handled below
+  }
+  throw new Error(POE_BRIDGE_IMAGE_MISSING_MESSAGE);
+}
+
 /** Test hook: forget the cached Bluetooth image probe. */
 export function resetBleFirmwareImageProbe(): void {
   bleImageProbe = null;
+}
+
+/** Test hook: forget the cached PoE Bridge image probe. */
+export function resetPoeBridgeFirmwareImageProbe(): void {
+  poeBridgeImageProbe = null;
 }
 
 /** 5.8 GHz sweep rate compiled into the firmware (SWEEP_HZ in firmware/slaprf/main/main.c). */

@@ -22,18 +22,41 @@ import {
 } from "./harness";
 
 describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
-  it("normalizes slaprf_ble and identifies both SlapRF hardware modes", () => {
+  it("normalizes slaprf_ble and slaprf_net and identifies all SlapRF hardware modes", () => {
     expect(isSlapRFMode(undefined)).toBe(true);
     expect(isSlapRFMode(null)).toBe(true);
     expect(isSlapRFMode("slaprf")).toBe(true);
     expect(isSlapRFMode("slaprf_ble")).toBe(true);
+    expect(isSlapRFMode("slaprf_net")).toBe(true);
     expect(isSlapRFMode("laprf")).toBe(false);
     expect(isSlapRFMode("rotorhazard")).toBe(false);
     expect(isSlapRFMode("rotorhazard_usb")).toBe(false);
 
     expect(normalizeTimingHardwareMode("slaprf_ble")).toBe("slaprf_ble");
+    expect(normalizeTimingHardwareMode("slaprf_net")).toBe("slaprf_net");
     expect(normalizeTimingHardwareMode("slaprf")).toBe("slaprf");
     expect(normalizeTimingHardwareMode("unknown")).toBe("slaprf");
+  });
+
+  it("renders SlapRF (Network) IP/Port controls + Connect + Discover on NetworkView", () => {
+    const store = makeStore({
+      simulatorRunning: true,
+      timingHardwareMode: "slaprf_net",
+    });
+    const { api } = makeMockApiClient(store);
+    const root = mountHtml(`<div id="net-poe-host"></div>`);
+    const netView = new NetworkView(root.querySelector("#net-poe-host")!, store, api);
+    try {
+      const sel = root.querySelector<HTMLSelectElement>("select[data-field='network-hardware-mode']")!;
+      expect(sel.value).toBe("slaprf_net");
+      expect(root.querySelector('[data-slot="connection-intro"]')?.textContent || "").toContain("PoE Ethernet Bridge");
+      expect(root.querySelector('[data-field="slaprf-net-host"]')).not.toBeNull();
+      expect(root.querySelector('[data-field="slaprf-net-port"]')).not.toBeNull();
+      expect(root.querySelector('[data-action="slaprf-net-connect"]')).not.toBeNull();
+      expect(root.querySelector('[data-action="slaprf-net-scan"]')).not.toBeNull();
+    } finally {
+      netView.destroy();
+    }
   });
 
   it("renders SlapRF (Bluetooth) Connection intro and selector on NetworkView", () => {
@@ -869,6 +892,7 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       expect(Array.from(sel.options).map((o) => o.value)).toEqual([
         "slaprf",
         "slaprf_ble",
+        "slaprf_net",
         "laprf",
         "laprf_usb",
         "rotorhazard",

@@ -146,10 +146,11 @@ export class BrowserHubBridge {
 
     const main = usbPool.mainConsole;
     const isBleMode = hwMode === "slaprf_ble";
+    const isNetMode = hwMode === "slaprf_net";
 
     if ((main.reconnecting || main.busyLabel) && !main.connected) {
       const label = main.reconnecting
-        ? `Reconnecting ${isBleMode ? "Bluetooth" : "USB"} (${main.reconnectAttempt}/${main.maxReconnectAttempts})…`
+        ? `Reconnecting ${isBleMode ? "Bluetooth" : isNetMode ? "Ethernet" : "USB"} (${main.reconnectAttempt}/${main.maxReconnectAttempts})…`
         : `${main.busyLabel}…`;
       return {
         color: "yellow",
@@ -160,7 +161,12 @@ export class BrowserHubBridge {
     if (main.connected) {
       const s = main.lastStatus;
       const cfg = main.lastConfig;
-      const via = main.transportLabel === "Bluetooth" || isBleMode ? "Bluetooth" : main.transportLabel;
+      const via =
+        main.transportLabel === "Bluetooth" || isBleMode
+          ? "Bluetooth"
+          : main.transportLabel === "Ethernet" || isNetMode
+            ? "Ethernet"
+            : main.transportLabel;
       if (s?.emergencyMode) {
         return {
           color: "red",

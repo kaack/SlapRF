@@ -3250,8 +3250,8 @@ export class DebugView extends Component {
       switch (t.dataset.action) {
         case "connect":
         case "connect-add": {
-          const isBle = this.hwMode() === "slaprf_ble";
-          await usbPool.connectOrSwapDebug(isBle ? false : this.showAllPorts);
+          const isWirelessOrNet = this.hwMode() === "slaprf_ble" || this.hwMode() === "slaprf_net";
+          await usbPool.connectOrSwapDebug(isWirelessOrNet ? false : this.showAllPorts);
           break;
         }
         case "cancel-connect": {
@@ -4798,10 +4798,12 @@ export class DebugView extends Component {
     }
 
     const isBleMode = this.hwMode() === "slaprf_ble";
+    const isNetMode = this.hwMode() === "slaprf_net";
     patchUsbConnectionBar(host, {
       activeConsole: this.console,
-      showAllPorts: isBleMode ? false : this.showAllPorts,
+      showAllPorts: isBleMode || isNetMode ? false : this.showAllPorts,
       bluetoothMode: isBleMode,
+      networkMode: isNetMode,
       allowSwap: true,
       busyText: this.busy,
       error: this.error,
@@ -4941,7 +4943,9 @@ export class DebugView extends Component {
                 ? "# Click \"Run self-test\" to verify console, identity, 5.8 GHz receiver, sweep timing, memory, and course link."
                 : this.hwMode() === "slaprf_ble"
                   ? "# Connect a SlapRF Bluetooth Hub above or in the top bar to run the hardware self-test."
-                  : "# Connect a timer over USB-C in the top bar to run the hardware self-test."
+                  : this.hwMode() === "slaprf_net"
+                    ? "# Connect a SlapRF PoE Ethernet Bridge above or on the Network page to run the hardware self-test."
+                    : "# Connect a timer over USB-C in the top bar to run the hardware self-test."
         );
     this.slot("selftest").innerHTML = `
       <div class="debug-card-head debug-log-head">
