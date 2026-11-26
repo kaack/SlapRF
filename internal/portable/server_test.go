@@ -122,6 +122,48 @@ func TestCapabilitiesCORSAndRemoteSlapRFOrigin(t *testing.T) {
 	}
 }
 
+func TestDisableUSBReportsNativeUsbFalseAndDefaultsRealEngineToBLE(t *testing.T) {
+	srv := portable.NewServer(portable.Config{
+		Version:    "v2.1.0-ios",
+		DisableUSB: true,
+		StaticFS: fstest.MapFS{
+			"index.html": &fstest.MapFile{Data: []byte("<html>slaprf</html>")},
+		},
+	})
+	defer srv.Close()
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp := doJSONReq(t, http.MethodGet, ts.URL+"/v1/capabilities", ts.URL, nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var caps portable.CapabilitiesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&caps); err != nil {
+		t.Fatalf("decode capabilities: %v", err)
+	}
+	if !caps.Portable || !caps.NativeEngine || caps.NativeUSB {
+		t.Fatalf("expected portable=true, nativeEngine=true, nativeUsb=false; got %+v", caps)
+	}
+
+	simOffResp := doJSONReq(t, http.MethodPatch, ts.URL+"/v1/sim", ts.URL, map[string]any{"running": false})
+	simOffResp.Body.Close()
+
+	stResp := doJSONReq(t, http.MethodGet, ts.URL+"/v1/status", ts.URL, nil)
+	defer stResp.Body.Close()
+	var st struct {
+		TimingHardwareMode string `json:"timingHardwareMode"`
+	}
+	if err := json.NewDecoder(stResp.Body).Decode(&st); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if st.TimingHardwareMode != "slaprf_ble" {
+		t.Fatalf("expected DisableUSB real engine to default to slaprf_ble, got %q", st.TimingHardwareMode)
+	}
+}
+
 func TestMultiGPProxy(t *testing.T) {
 	var seenPath, seenQuery, seenAPIKey string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

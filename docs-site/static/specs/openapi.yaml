@@ -7356,6 +7356,7 @@ components:
           example: true
         nativeUsb:
           type: boolean
+          description: True when direct host USB-C serial and USB firmware flashing are available (desktop and Android); false on native iOS and iPadOS hosts.
           example: true
         laprfEmulator:
           type: boolean

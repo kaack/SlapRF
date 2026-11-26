@@ -1,4 +1,4 @@
-//go:build !android && !nobluetooth && (windows || (darwin && cgo))
+//go:build !android && !ios && !nobluetooth && (windows || (darwin && cgo))
 
 package bluetooth
 

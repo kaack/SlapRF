@@ -35,11 +35,13 @@ firmware/*/build-*/
 *.db-wal
 *.db-shm
 
-# Portable & Android embedded site staging (populated by cmd/build-portable and cmd/build-android; .keep is tracked for go:embed)
+# Portable, Android & iOS embedded site staging (populated by cmd/build-*; .keep is tracked for go:embed)
 /cmd/slaprf/site/*
 !/cmd/slaprf/site/.keep
 /cmd/slaprf-android/site/*
 !/cmd/slaprf-android/site/.keep
+/cmd/slaprf-ios/site/*
+!/cmd/slaprf-ios/site/.keep
 /cmd/gatecam-android/site/*
 !/cmd/gatecam-android/site/.keep
 slaprf.exe

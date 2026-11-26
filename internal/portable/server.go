@@ -102,6 +102,7 @@ type Config struct {
 	USBListPorts    serialport.Lister
 	BLEOpenPort     firmware.SerialOpener
 	BLEListPorts    serialport.Lister
+	DisableUSB      bool // When true (e.g. native iOS/iPadOS host), reports nativeUsb=false and omits direct USB serial links
 	DisableAuth     bool // When true (-no-auth), clears persisted Basic Auth on startup
 }
 
@@ -306,6 +307,16 @@ func NewServer(cfg Config) *Server {
 		initialSimMode = s.persistWorker.Hydrate()
 		s.persistWorker.Start()
 	}
+	if cfg.DisableUSB {
+		switch domain.NormalizeTimingHardwareMode(realEngine.TimingHardwareMode()) {
+		case domain.HardwareModeSlapRF:
+			realEngine.SetTimingHardwareMode(domain.HardwareModeSlapRFBLE, false)
+		case domain.HardwareModeLapRFUSB:
+			realEngine.SetTimingHardwareMode(domain.HardwareModeLapRF, false)
+		case domain.HardwareModeRotorHazardUSB:
+			realEngine.SetTimingHardwareMode(domain.HardwareModeRotorHazard, false)
+		}
+	}
 	if domain.IsSlapRFMode(simEngine.TimingHardwareMode()) {
 		simEngine.SetAllTimersOffline()
 	} else {
@@ -394,7 +405,7 @@ func NewServer(cfg Config) *Server {
 		lastActiveSlapRF = wantMode
 		reconcileMu.Unlock()
 
-		wantUSB := wantMode == domain.HardwareModeSlapRF
+		wantUSB := wantMode == domain.HardwareModeSlapRF && !cfg.DisableUSB
 		wantBLE := wantMode == domain.HardwareModeSlapRFBLE
 		wantNet := wantMode == domain.HardwareModeSlapRFNet
 		if !wantUSB {
@@ -421,6 +432,16 @@ func NewServer(cfg Config) *Server {
 	}
 
 	reconcileRealHardwareLinks := func(simRunning bool, restoreSaved bool) {
+		if cfg.DisableUSB && !simRunning {
+			switch domain.NormalizeTimingHardwareMode(realEngine.TimingHardwareMode()) {
+			case domain.HardwareModeSlapRF:
+				realEngine.SetTimingHardwareMode(domain.HardwareModeSlapRFBLE, false)
+			case domain.HardwareModeLapRFUSB:
+				realEngine.SetTimingHardwareMode(domain.HardwareModeLapRF, false)
+			case domain.HardwareModeRotorHazardUSB:
+				realEngine.SetTimingHardwareMode(domain.HardwareModeRotorHazard, false)
+			}
+		}
 		realMode := realEngine.TimingHardwareMode()
 		reconcileSlapRFLinks(simRunning, realMode, restoreSaved)
 		if restoreSaved {
@@ -857,7 +878,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		Hostname:            s.hostname,
 		StorageBackend:      "bbolt",
 		NativeEngine:        true,
-		NativeUSB:           true,
+		NativeUSB:           !s.cfg.DisableUSB,
 		LanIPs:              LanIPs(),
 		LaprfEmulator:       true,
 		LaprfClient:         true,

@@ -1,4 +1,4 @@
-//go:build !android && !js
+//go:build !android && !ios && !js
 
 package serialport
 
