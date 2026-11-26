@@ -41,6 +41,10 @@ export interface SlapRFNetworkDiscoveredDevice {
   usbProduct?: string;
   baudRate?: number;
   clients?: number;
+  tcpConnected?: boolean;
+  tcpClients?: number;
+  maxClients?: number;
+  tcpPeer?: string;
   timerId?: number;
   connected?: boolean;
 }

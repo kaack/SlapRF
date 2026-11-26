@@ -59,7 +59,7 @@ export class Sidebar extends Component {
       </div>
       <div class="sidebar-nav-shell">
         <nav class="nav nav-flat" data-sidebar-nav>
-          ${visibleRoutes.map((r) => `<a class="nav-item ${PRIMARY_MOBILE_ROUTES.has(r.id) ? "is-mobile-primary" : "is-mobile-secondary"}" href="${getRememberedRouteHash(r.id)}" data-route="${r.id}" ${r.simOnly ? 'data-sim-only="1"' : ""}${r.laprfEmulatorOnly ? 'data-laprf-emulator-only="1"' : ""}>${r.icon()}<span>${r.label}</span></a>`).join("")}
+          ${visibleRoutes.map((r) => `<a class="nav-item ${PRIMARY_MOBILE_ROUTES.has(r.id) ? "is-mobile-primary" : "is-mobile-secondary"}" href="${getRememberedRouteHash(r.id)}" data-route="${r.id}" ${r.simOnly ? 'data-sim-only="1"' : ""}${r.laprfEmulatorOnly ? 'data-laprf-emulator-only="1"' : ""}${r.poeBridgeOnly ? 'data-poe-only="1"' : ""}>${r.icon()}<span>${r.label}</span></a>`).join("")}
           <button
             type="button"
             class="nav-item mobile-more-tab-btn"
@@ -106,7 +106,7 @@ export class Sidebar extends Component {
                 class="mobile-more-tile"
                 href="${getRememberedRouteHash(r.id)}"
                 data-route="${r.id}"
-                ${r.simOnly ? 'data-sim-only="1"' : ""}${r.laprfEmulatorOnly ? 'data-laprf-emulator-only="1"' : ""}
+                ${r.simOnly ? 'data-sim-only="1"' : ""}${r.laprfEmulatorOnly ? 'data-laprf-emulator-only="1"' : ""}${r.poeBridgeOnly ? 'data-poe-only="1"' : ""}
               >
                 <span class="mobile-more-tile-icon">${r.icon()}</span>
                 <span class="mobile-more-tile-label">${r.label}</span>
@@ -454,6 +454,10 @@ export class Sidebar extends Component {
     const emulOn = isPortable && !isExternalTimer && sharedLapRFEmulatorRelay.snapshot.enabled;
     this.el.querySelectorAll<HTMLElement>("[data-laprf-emulator-only]").forEach((a) => {
       a.style.display = emulOn ? "" : "none";
+    });
+    const poeOn = !lockedOut && this.store.timingHardwareMode === "slaprf_net";
+    this.el.querySelectorAll<HTMLElement>("[data-poe-only]").forEach((a) => {
+      a.style.display = poeOn ? "" : "none";
     });
     this.el.querySelectorAll<HTMLElement>('[data-route="flasher"]').forEach((a) => {
       a.style.display = "";

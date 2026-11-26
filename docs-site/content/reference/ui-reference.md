@@ -13,6 +13,7 @@ Reference guide to the screens, live signal scope controls, and crossing detecti
 | Races | Event creation, MultiGP import, per-race **Track** & timing rules editor, visual Format Canvas brackets, live Marshal / Race Control horns, and Review waveforms. |
 | Pilots | Pilot directory with callsigns, phonetic TTS spellings, and default 5.8 GHz channels (`Raceband`, `Fatshark`, `Boscam`, `IMD6`). |
 | Network | Timing system selector (`SlapRF (USB)`, `SlapRF (Bluetooth)`, `SlapRF (Network)`, `LapRF 8-Way (Network)`, `LapRF 8-Way (USB)`, `RotorHazard (Network)`, `RotorHazard (USB)`), connection manager, topology graph, and live RSSI monitor. |
+| PoE Bridge | Shown when `SlapRF (Network)` is selected. Displays live Ethernet link speed, IPv4/MAC details, USB-A device status, DHCP vs. static IPv4 configuration, USB-A baud & DTR/RTS controls, and remote bridge reboot. |
 | Flasher | Built-in wizard (on Android and desktop) for flashing Hub, Spoke, and ESP32-P4 PoE Bridge firmware, inspecting board configuration, or factory-erasing boards over USB-C. |
 | Debug | Live 5.8 GHz spectrum and waterfall analyzer, raw USB/Bluetooth timer console, and RF health checks. |
 | Simulator | Multi-pilot 5.8 GHz physics track simulator for testing track layouts, threshold behavior, and race brackets without hardware. |

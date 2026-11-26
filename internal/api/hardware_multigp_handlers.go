@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"slaprf/internal/domain"
 	"slaprf/internal/ingest"
@@ -404,7 +405,39 @@ func (s *Server) handleSimUSBHellos(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
-func (s *Server) handleSimSlapRFNetDiscover(w http.ResponseWriter, _ *http.Request) {
+type simPoeBridgeState struct {
+	bootAt        time.Time
+	dhcp          bool
+	ip            string
+	netmask       string
+	gateway       string
+	staticIP      string
+	staticNetmask string
+	staticGateway string
+	baud          int
+	dtr           bool
+	rts           bool
+	rxResetBytes  uint64
+	txResetBytes  uint64
+}
+
+func defaultSimPoeBridgeState() simPoeBridgeState {
+	return simPoeBridgeState{
+		bootAt:        time.Now(),
+		dhcp:          true,
+		ip:            "192.168.1.110",
+		netmask:       "255.255.255.0",
+		gateway:       "192.168.1.1",
+		staticIP:      "192.168.1.110",
+		staticNetmask: "255.255.255.0",
+		staticGateway: "192.168.1.1",
+		baud:          115200,
+		dtr:           true,
+		rts:           false,
+	}
+}
+
+func (s *Server) snapshotSimPoeBridge() map[string]any {
 	timers := s.simEngine.DetectedTimersSnapshot()
 	hubLabel := "H1"
 	hubFP := "A1B2C3D4"
@@ -421,28 +454,202 @@ func (s *Server) handleSimSlapRFNetDiscover(w http.ResponseWriter, _ *http.Reque
 			break
 		}
 	}
+
+	s.simPoeMu.Lock()
+	st := s.simPoe
+	if st.bootAt.IsZero() {
+		st = defaultSimPoeBridgeState()
+		s.simPoe = st
+	}
+	s.simPoeMu.Unlock()
+
+	upMs := uint64(time.Since(st.bootAt).Milliseconds())
+	rawRx := upMs * 4
+	rawTx := upMs / 5
+	rxBytes := uint64(0)
+	if rawRx > st.rxResetBytes {
+		rxBytes = rawRx - st.rxResetBytes
+	}
+	txBytes := uint64(0)
+	if rawTx > st.txResetBytes {
+		txBytes = rawTx - st.txResetBytes
+	}
+	ep := fmt.Sprintf("%s:5480", st.ip)
+
+	return map[string]any{
+		"host":          st.ip,
+		"port":          5480,
+		"endpoint":      ep,
+		"board":         "ESP32-P4-WIFI6-POE-ETH",
+		"fp":            hubFP,
+		"label":         hubLabel,
+		"fw":            domain.LatestFirmwareVersion,
+		"bridgeFw":      "0.2.0",
+		"upMs":          upMs,
+		"usbConnected":  hubOnline,
+		"usbVid":        "303A",
+		"usbPid":        "1001",
+		"baud":          st.baud,
+		"dtr":           st.dtr,
+		"rts":           st.rts,
+		"ip":            st.ip,
+		"netmask":       st.netmask,
+		"gateway":       st.gateway,
+		"staticIp":      st.staticIP,
+		"staticNetmask": st.staticNetmask,
+		"staticGateway": st.staticGateway,
+		"mac":           "AA:BB:CC:54:80:01",
+		"linkUp":        true,
+		"linkSpeedMbps": 100,
+		"fullDuplex":    true,
+		"dhcp":          st.dhcp,
+		"tcpConnected":  false,
+		"tcpClients":    0,
+		"maxClients":    1,
+		"tcpPeer":       "",
+		"rxBytes":       rxBytes,
+		"txBytes":       txBytes,
+		"connected":     false,
+		"verified":      true,
+	}
+}
+
+func (s *Server) handleSimSlapRFNetDiscover(w http.ResponseWriter, _ *http.Request) {
+	dev := s.snapshotSimPoeBridge()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"subnet": "192.168.1.0/24 (Simulated LAN)",
-		"devices": []map[string]any{
-			{
-				"host":          "192.168.1.110",
-				"port":          5480,
-				"endpoint":      "192.168.1.110:5480",
-				"fp":            hubFP,
-				"label":         hubLabel,
-				"fw":            domain.LatestFirmwareVersion,
-				"bridgeFw":      "0.1.0",
-				"usbConnected":  true,
-				"usbVid":        "303A",
-				"usbPid":        "1001",
-				"baud":          115200,
-				"mac":           "AA:BB:CC:54:80:01",
-				"linkSpeedMbps": 100,
-				"fullDuplex":    true,
-				"connected":     hubOnline,
-				"verified":      true,
-			},
-		},
+		"subnet":  "192.168.1.0/24 (Simulated LAN)",
+		"devices": []map[string]any{dev},
+	})
+}
+
+func (s *Server) handleSimSlapRFNetBridgeStatus(w http.ResponseWriter, _ *http.Request) {
+	dev := s.snapshotSimPoeBridge()
+	ep, _ := dev["endpoint"].(string)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"target":        ep,
+		"activeTarget":  ep,
+		"connectedSlot": 0,
+		"subnet":        "192.168.1.0/24 (Simulated LAN)",
+		"bridge":        dev,
+		"devices":       []map[string]any{dev},
+		"error":         "",
+	})
+}
+
+func (s *Server) handleSimSlapRFNetBridgeAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErrorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		Target  string `json:"target"`
+		Action  string `json:"action"`
+		Baud    int    `json:"baud"`
+		DHCP    *bool  `json:"dhcp"`
+		IP      string `json:"ip"`
+		Netmask string `json:"netmask"`
+		Gateway string `json:"gateway"`
+		DTR     *bool  `json:"dtr"`
+		RTS     *bool  `json:"rts"`
+	}
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, "invalid JSON request body")
+		return
+	}
+
+	action := strings.ToLower(strings.TrimSpace(req.Action))
+	var msg string
+
+	s.simPoeMu.Lock()
+	if s.simPoe.bootAt.IsZero() {
+		s.simPoe = defaultSimPoeBridgeState()
+	}
+	switch action {
+	case "baud":
+		if req.Baud < 1200 || req.Baud > 4000000 {
+			s.simPoeMu.Unlock()
+			writeErrorJSON(w, http.StatusBadRequest, "baud rate must be between 1200 and 4000000")
+			return
+		}
+		s.simPoe.baud = req.Baud
+		msg = fmt.Sprintf("USB-A baud rate set to %d.", req.Baud)
+	case "lines":
+		if req.DTR == nil && req.RTS == nil {
+			s.simPoeMu.Unlock()
+			writeErrorJSON(w, http.StatusBadRequest, "specify dtr or rts")
+			return
+		}
+		if req.DTR != nil {
+			s.simPoe.dtr = *req.DTR
+		}
+		if req.RTS != nil {
+			s.simPoe.rts = *req.RTS
+		}
+		msg = "USB-A serial control lines updated."
+	case "reset-usb":
+		s.simPoe.dtr = true
+		s.simPoe.rts = false
+		msg = "Reset pulse sent to attached USB-A device."
+	case "reset-counters":
+		upMs := uint64(time.Since(s.simPoe.bootAt).Milliseconds())
+		s.simPoe.rxResetBytes = upMs * 4
+		s.simPoe.txResetBytes = upMs / 5
+		msg = "USB-A serial traffic counters cleared."
+	case "netcfg":
+		useDHCP := true
+		if req.DHCP != nil {
+			useDHCP = *req.DHCP
+		}
+		if useDHCP {
+			s.simPoe.dhcp = true
+			s.simPoe.ip = "192.168.1.110"
+			s.simPoe.netmask = "255.255.255.0"
+			s.simPoe.gateway = "192.168.1.1"
+			msg = "Network mode set to automatic DHCP + Link-Local."
+		} else {
+			ip := strings.TrimSpace(req.IP)
+			mask := strings.TrimSpace(req.Netmask)
+			gw := strings.TrimSpace(req.Gateway)
+			if mask == "" {
+				mask = "255.255.255.0"
+			}
+			if gw == "" {
+				gw = "0.0.0.0"
+			}
+			if ip == "" || strings.Count(ip, ".") != 3 {
+				s.simPoeMu.Unlock()
+				writeErrorJSON(w, http.StatusBadRequest, "enter a valid IPv4 address (for example 192.168.1.110)")
+				return
+			}
+			s.simPoe.dhcp = false
+			s.simPoe.ip = ip
+			s.simPoe.netmask = mask
+			s.simPoe.gateway = gw
+			s.simPoe.staticIP = ip
+			s.simPoe.staticNetmask = mask
+			s.simPoe.staticGateway = gw
+			msg = fmt.Sprintf("Static IPv4 %s (%s) saved and applied.", ip, mask)
+		}
+	case "reboot":
+		s.simPoe.bootAt = time.Now()
+		s.simPoe.rxResetBytes = 0
+		s.simPoe.txResetBytes = 0
+		msg = "Rebooted simulated PoE Bridge."
+	default:
+		s.simPoeMu.Unlock()
+		writeErrorJSON(w, http.StatusBadRequest, fmt.Sprintf("unsupported PoE Bridge action %q", req.Action))
+		return
+	}
+	s.simPoeMu.Unlock()
+
+	dev := s.snapshotSimPoeBridge()
+	ep, _ := dev["endpoint"].(string)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"action":  action,
+		"target":  ep,
+		"message": msg,
+		"bridge":  dev,
 	})
 }
 

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"slaprf/internal/applog"
 	"slaprf/internal/domain"
@@ -102,6 +103,8 @@ type Server struct {
 	laprfServer *laprf.Server
 	appLog      *applog.Logger
 	hooks       ServerHooks
+	simPoeMu    sync.Mutex
+	simPoe      simPoeBridgeState
 }
 
 // NewServer creates the request router with separate simulation and real-world engines.
@@ -123,6 +126,7 @@ func NewServer(
 		realEngine:  realEngine,
 		simulator:   simulator,
 		laprfServer: laprfServer,
+		simPoe:      defaultSimPoeBridgeState(),
 	}
 	// The LapRF 8-Way emulation always serves whichever engine is active, whether the
 	// simulator is updated via PATCH /v1/sim or directly (WASM bridge `setRunning`).
@@ -300,6 +304,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/sim/pilots/{slotIndex}", wrap(s.handleSimPilotCustomAction))
 	mux.HandleFunc("GET /v1/sim/slaprf/usb-hellos", s.handleSimUSBHellos)
 	mux.HandleFunc("GET /v1/sim/slaprf/network/devices", s.handleSimSlapRFNetDiscover)
+	mux.HandleFunc("GET /v1/sim/slaprf/network/bridge", s.handleSimSlapRFNetBridgeStatus)
+	mux.HandleFunc("POST /v1/sim/slaprf/network/bridge:action", wrap(s.handleSimSlapRFNetBridgeAction))
 	mux.HandleFunc("POST /v1/sim/slaprf/timers", wrap(s.handleCreateSimTimer))
 	mux.HandleFunc("POST /v1/sim/slaprf/timers:reset", wrap(s.handleResetSimTimers))
 	mux.HandleFunc("PATCH /v1/sim/slaprf/timers/{timerId}", wrap(s.handlePatchSimTimer))

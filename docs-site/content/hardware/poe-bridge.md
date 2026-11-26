@@ -44,3 +44,6 @@ Connect your laptop or phone to the same network (wired Ethernet or Wi-Fi router
 3. Confirm Hub `H1` appears as **Active** with live RSSI bars.
 
 {{% /steps %}}
+
+> [!TIP]
+> Selecting **`SlapRF (Network)`** adds a **PoE Bridge** tab to the main navigation so you can inspect Ethernet link speed, switch between DHCP and a static IPv4 address, change USB-A baud rate, or reboot the bridge remotely with no serial commands.

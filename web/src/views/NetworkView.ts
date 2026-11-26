@@ -1203,15 +1203,24 @@ export class NetworkView extends Component {
                           : d.usbVid && d.usbPid
                             ? ` · USB ${d.usbVid}:${d.usbPid}`
                             : "";
+                  const busySuffix = d.tcpConnected
+                    ? ` · In use${d.tcpPeer ? ` by ${d.tcpPeer}` : ""}`
+                    : "";
                   return {
                     id: `slaprf-net-${ep}-${idx}`,
-                    label: `${ep} · ${boardName}${attached}`,
+                    label: `${ep} · ${boardName}${attached}${busySuffix}`,
                     value: d,
                     simTimerId: d.timerId,
                   };
                 });
             },
           });
+          if (chosen.tcpConnected) {
+            const ep = `${chosen.host}:${chosen.port || 5480}`;
+            throw new Error(
+              `PoE Bridge ${ep} is already in use${chosen.tcpPeer ? ` by ${chosen.tcpPeer}` : ""}. Disconnect the active client first.`
+            );
+          }
           this.slaprfNetHost = chosen.host;
           this.slaprfNetPort = chosen.port || 5480;
           this.savePrefs();
@@ -2081,6 +2090,14 @@ export class NetworkView extends Component {
           </button>`;
       } else if (viaEthernet) {
         actionsHtml = `
+          <a
+            href="#/poe"
+            class="btn btn-ghost net-conn-btn"
+            title="Inspect PoE Bridge link status, IPv4, USB-A baud rate, and reboot"
+          >
+            ${icons.plug(14)}
+            <span>PoE Bridge</span>
+          </a>
           <button
             type="button"
             class="btn net-conn-btn"

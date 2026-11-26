@@ -9,6 +9,7 @@ export type RouteId =
   | "laprf-emulator"
   | "sim"
   | "network"
+  | "poe"
   | "setup"
   | "flasher"
   | "debug"
@@ -351,6 +352,7 @@ export interface RouteMeta {
   icon: () => string;
   simOnly?: boolean;
   laprfEmulatorOnly?: boolean;
+  poeBridgeOnly?: boolean;
   hiddenFromNav?: boolean;
 }
 
@@ -407,6 +409,14 @@ export const ROUTES: RouteMeta[] = [
     title: "Network",
     subtitle: "Connect to your Hub or Spoke timer over USB-C, inspect the 2.4 GHz network, and manage monitored 5.8 GHz channels",
     icon: () => icons.wifi(20),
+  },
+  {
+    id: "poe",
+    label: "PoE Bridge",
+    title: "PoE Bridge",
+    subtitle: "Inspect Ethernet link status, configure DHCP or static IPv4, set USB-A baud rate & control lines, and reboot your ESP32-P4 PoE Bridge",
+    icon: () => icons.plug(20),
+    poeBridgeOnly: true,
   },
   {
     id: "flasher",

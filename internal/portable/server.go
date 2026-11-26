@@ -704,6 +704,8 @@ func (s *Server) RegisterAPIRoutes(mux *http.ServeMux) {
 	// SlapRF PoE Ethernet / TCP Serial Bridge
 	mux.HandleFunc("GET /v1/slaprf/network/ports", s.handleNetworkPorts)
 	mux.HandleFunc("GET /v1/slaprf/network/devices", s.handleNetworkDevices)
+	mux.HandleFunc("GET /v1/slaprf/network/bridge", s.handleNetworkBridgeStatus)
+	mux.HandleFunc("POST /v1/slaprf/network/bridge:action", s.handleNetworkBridgeAction)
 	mux.HandleFunc("GET /v1/slaprf/network/connections", s.handleNetworkStatus)
 	mux.HandleFunc("POST /v1/slaprf/network/connections", s.handleNetworkConnect)
 	mux.HandleFunc("POST /v1/slaprf/network/connections:disconnectAll", s.handleNetworkDisconnectAll)

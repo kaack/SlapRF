@@ -1979,6 +1979,7 @@ export async function pickDiscoveredNetworkDevice<T>(
   const simMode = isSimulatedUsbMode();
   let choices: Array<DiscoveredNetworkChoice<T>> = [];
   let scanning = true;
+  let scanError = "";
 
   return new Promise<T>((resolve, reject) => {
     const pickInitialId = (list: Array<DiscoveredNetworkChoice<T>>): string | null =>
@@ -2000,6 +2001,9 @@ export async function pickDiscoveredNetworkDevice<T>(
         </div>`;
       }
       if (choices.length === 0) {
+        if (scanError) {
+          return `<div class="sim-usb-port-empty">${esc(scanError)}</div>`;
+        }
         return `<div class="sim-usb-port-empty">${esc(
           opts.emptyText ||
             (simMode
@@ -2097,6 +2101,7 @@ export async function pickDiscoveredNetworkDevice<T>(
 
     const runAsyncScan = () => {
       scanning = true;
+      scanError = "";
       refreshListDom();
       void opts
         .loadChoices()
@@ -2104,9 +2109,11 @@ export async function pickDiscoveredNetworkDevice<T>(
           if (closed) return;
           choices = filterChoices(next);
         })
-        .catch(() => {
+        .catch((err) => {
           if (closed) return;
           choices = [];
+          scanError = err instanceof Error ? err.message : String(err);
+          console.warn("[pickDiscoveredNetworkDevice] scan failed:", err);
         })
         .finally(() => {
           if (closed) return;

@@ -52,6 +52,7 @@ import {
   openBackendConnectModal,
   probeServerReachable,
   reportBackendConnectionLost,
+  resolveBackendUrl,
 } from "./capabilities";
 import { enginePersistence, LAST_BACKUP_STORAGE_KEY, LEGACY_LOCALSTORAGE_KEYS } from "./engine_persistence";
 import {
@@ -1830,6 +1831,10 @@ export class ApiClient {
       usbProduct?: string;
       baudRate?: number;
       clients?: number;
+      tcpConnected?: boolean;
+      tcpClients?: number;
+      maxClients?: number;
+      tcpPeer?: string;
       timerId?: number;
       connected?: boolean;
     }>;
@@ -1840,6 +1845,154 @@ export class ApiClient {
     const resp = await fetch(resolveBackendUrl("/v1/slaprf/network/devices"), { cache: "no-store" });
     if (!resp.ok) {
       throw new Error(`LAN discovery failed (HTTP ${resp.status})`);
+    }
+    return await resp.json();
+  }
+
+  /** Reads out-of-band status + LAN inventory for a SlapRF PoE Ethernet Bridge (`UDP :5480`). */
+  public async fetchPoeBridgeStatus(opts?: {
+    target?: string;
+    scan?: boolean;
+  }): Promise<{
+    target: string;
+    activeTarget: string;
+    connectedSlot: number;
+    subnet: string;
+    bridge: {
+      host: string;
+      port: number;
+      endpoint: string;
+      board: string;
+      bridgeFw: string;
+      upMs: number;
+      usbConnected: boolean;
+      usbVid: string;
+      usbPid: string;
+      baud: number;
+      dtr: boolean;
+      rts: boolean;
+      ip: string;
+      netmask: string;
+      gateway: string;
+      staticIp?: string;
+      staticNetmask?: string;
+      staticGateway?: string;
+      mac: string;
+      linkUp: boolean;
+      linkSpeedMbps: number;
+      fullDuplex: boolean;
+      dhcp: boolean;
+      tcpConnected: boolean;
+      tcpClients?: number;
+      maxClients?: number;
+      tcpPeer?: string;
+      rxBytes: number;
+      txBytes: number;
+    } | null;
+    devices: Array<{
+      host: string;
+      port: number;
+      endpoint: string;
+      board?: string;
+      bridgeFw?: string;
+      usbConnected: boolean;
+      usbVid?: string;
+      usbPid?: string;
+      baud?: number;
+      mac?: string;
+      linkSpeedMbps?: number;
+      fullDuplex?: boolean;
+      dhcp?: boolean;
+    }>;
+    error?: string;
+  }> {
+    if (this.simMode) {
+      return await this.transport.request("GET", "/v1/sim/slaprf/network/bridge");
+    }
+    const qs = new URLSearchParams();
+    if (opts?.target) qs.set("target", opts.target);
+    if (opts?.scan === false) qs.set("scan", "0");
+    const q = qs.toString();
+    const url = resolveBackendUrl(`/v1/slaprf/network/bridge${q ? `?${q}` : ""}`);
+    const resp = await fetch(url, { cache: "no-store" });
+    if (!resp.ok) {
+      let detail = `HTTP ${resp.status}`;
+      try {
+        const body = (await resp.json()) as { error?: string };
+        if (body?.error) detail = body.error;
+      } catch {
+        // Ignore JSON parse failure
+      }
+      throw new Error(detail);
+    }
+    return await resp.json();
+  }
+
+  /** Sends an out-of-band management command (`baud`, `netcfg`, `lines`, `reset-usb`, `reset-counters`, `reboot`) to a PoE Bridge. */
+  public async sendPoeBridgeAction(payload: {
+    target?: string;
+    action: "baud" | "netcfg" | "lines" | "reset-usb" | "reset-counters" | "reboot";
+    baud?: number;
+    dhcp?: boolean;
+    ip?: string;
+    netmask?: string;
+    gateway?: string;
+    dtr?: boolean;
+    rts?: boolean;
+  }): Promise<{
+    ok: boolean;
+    action: string;
+    target: string;
+    message?: string;
+    bridge?: {
+      host: string;
+      port: number;
+      endpoint: string;
+      board: string;
+      bridgeFw: string;
+      upMs: number;
+      usbConnected: boolean;
+      usbVid: string;
+      usbPid: string;
+      baud: number;
+      dtr: boolean;
+      rts: boolean;
+      ip: string;
+      netmask: string;
+      gateway: string;
+      staticIp?: string;
+      staticNetmask?: string;
+      staticGateway?: string;
+      mac: string;
+      linkUp: boolean;
+      linkSpeedMbps: number;
+      fullDuplex: boolean;
+      dhcp: boolean;
+      tcpConnected: boolean;
+      tcpClients?: number;
+      maxClients?: number;
+      tcpPeer?: string;
+      rxBytes: number;
+      txBytes: number;
+    } | null;
+  }> {
+    if (this.simMode) {
+      return await this.transport.request("POST", "/v1/sim/slaprf/network/bridge:action", payload);
+    }
+    const resp = await fetch(resolveBackendUrl("/v1/slaprf/network/bridge:action"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!resp.ok) {
+      let detail = `HTTP ${resp.status}`;
+      try {
+        const body = (await resp.json()) as { error?: string };
+        if (body?.error) detail = body.error;
+      } catch {
+        // Ignore JSON parse failure
+      }
+      throw new Error(detail);
     }
     return await resp.json();
   }

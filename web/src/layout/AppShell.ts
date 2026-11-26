@@ -37,6 +37,7 @@ import { RacesView } from "../views/RacesView";
 import { DebugView } from "../views/DebugView";
 import { FlasherView } from "../views/FlasherView";
 import { NetworkView } from "../views/NetworkView";
+import { PoeBridgeView } from "../views/PoeBridgeView";
 import { SetupView } from "../views/SetupView";
 import { SimView } from "../views/SimView";
 import { AboutView, preloadAboutVersion } from "../views/AboutView";
@@ -150,9 +151,13 @@ export class AppShell extends Component {
       })
     );
     this.onDispose(
-      store.subscribe(["status", "race"], () => {
+      store.subscribe(["status", "config", "race"], () => {
         if (this.store.hasHydrated && !this.store.simulatorRunning && this.router.route === "sim") {
           this.router.navigateSection("races");
+          return;
+        }
+        if (this.store.hasHydrated && this.store.timingHardwareMode !== "slaprf_net" && this.router.route === "poe") {
+          this.router.navigateSection("network");
           return;
         }
         if (this.store.hasHydrated) {
@@ -206,6 +211,7 @@ export class AppShell extends Component {
       if (r.hiddenFromNav) continue;
       if (r.simOnly && !simOn) continue;
       if (r.laprfEmulatorOnly && !emulOn) continue;
+      if (r.poeBridgeOnly && this.store.timingHardwareMode !== "slaprf_net") continue;
       visibleSet.add(r.id);
       if (!primarySet.has(r.id)) {
         secondary.push(r.id);
@@ -1032,6 +1038,10 @@ export class AppShell extends Component {
       this.router.navigateSection("setup");
       return;
     }
+    if (route === "poe" && this.store.hasHydrated && this.store.timingHardwareMode !== "slaprf_net") {
+      this.router.navigateSection("network");
+      return;
+    }
 
     const swipeTrans =
       this.pendingSwipeTransition &&
@@ -1202,6 +1212,8 @@ export class AppShell extends Component {
         return new SimView(host, this.store, this.api);
       case "network":
         return new NetworkView(host, this.store, this.api);
+      case "poe":
+        return new PoeBridgeView(host, this.store, this.api);
       case "setup":
         return new SetupView(host, this.store, this.api, this.announcer);
       case "flasher":

@@ -4838,6 +4838,73 @@ paths:
                 type: object
                 additionalProperties: true
 
+  /v1/slaprf/network/bridge:
+    get:
+      tags: [SlapRF Hardware (Network)]
+      summary: Query live out-of-band status of a PoE Ethernet Bridge over UDP `:5480`
+      operationId: getSlapRFNetworkBridgeStatus
+      parameters:
+        - name: target
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: scan
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["0", "1"]
+      responses:
+        "200":
+          description: PoE Bridge status snapshot and discovered LAN bridges
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/slaprf/network/bridge:action:
+    post:
+      tags: [SlapRF Hardware (Network)]
+      summary: Send an out-of-band management action (`baud`, `netcfg`, `lines`, `reset-usb`, `reset-counters`, `reboot`) to a PoE Bridge
+      operationId: sendSlapRFNetworkBridgeAction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                target:
+                  type: string
+                action:
+                  type: string
+                  enum: [baud, netcfg, lines, reset-usb, reset-counters, reboot]
+                baud:
+                  type: integer
+                dhcp:
+                  type: boolean
+                ip:
+                  type: string
+                netmask:
+                  type: string
+                gateway:
+                  type: string
+                dtr:
+                  type: boolean
+                rts:
+                  type: boolean
+      responses:
+        "200":
+          description: Action result and refreshed PoE Bridge status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
   /v1/slaprf/network/ports:
     get:
       tags: [SlapRF Hardware (Network)]
@@ -5022,6 +5089,41 @@ paths:
       responses:
         "200":
           description: Simulated PoE bridge devices
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/sim/slaprf/network/bridge:
+    get:
+      tags: [Simulator (SlapRF)]
+      summary: Read virtual PoE Ethernet Bridge status in Simulation Mode
+      operationId: getSimSlapRFNetworkBridgeStatus
+      responses:
+        "200":
+          description: Simulated PoE bridge status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/sim/slaprf/network/bridge:action:
+    post:
+      tags: [Simulator (SlapRF)]
+      summary: Execute a management action (`baud`, `netcfg`, `lines`, `reset-usb`, `reset-counters`, `reboot`) on the simulated PoE Bridge
+      operationId: sendSimSlapRFNetworkBridgeAction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Simulated action result and updated bridge status
           content:
             application/json:
               schema:

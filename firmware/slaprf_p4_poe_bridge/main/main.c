@@ -45,8 +45,9 @@
 #include "usb/cdc_acm_host.h"
 #include "usb/usb_host.h"
 
-#define BRIDGE_FW_VERSION       "0.1.0"
+#define BRIDGE_FW_VERSION       "0.2.2"
 #define BRIDGE_TCP_PORT         5480
+#define MAX_TCP_CLIENTS         1
 #define DEFAULT_USB_BAUD        115200
 
 /* Waveshare ESP32-P4-(WIFI6-)POE-ETH hardware pin map */
@@ -90,21 +91,33 @@ typedef struct {
     uint16_t usb_vid;
     uint16_t usb_pid;
     uint32_t usb_baud;
+    bool usb_dtr;
+    bool usb_rts;
     uint64_t usb_rx_bytes;
     uint64_t usb_tx_bytes;
+    bool tcp_connected;
+    int tcp_clients;
+    char tcp_peer[96];
 } bridge_state_t;
+
+typedef struct {
+    int fd;
+    char peer_ip[16];
+} tcp_client_slot_t;
 
 static SemaphoreHandle_t g_state_mu = NULL;
 static SemaphoreHandle_t g_cdc_tx_mu = NULL;
 static SemaphoreHandle_t g_usb_disc_sem = NULL;
 static SemaphoreHandle_t g_ring_mu = NULL;
+static SemaphoreHandle_t g_clients_mu = NULL;
 
 static bridge_state_t g_state;
 static bridge_cfg_t g_cfg;
 static esp_netif_t *g_eth_netif = NULL;
 static cdc_acm_dev_hdl_t g_cdc_dev = NULL;
 
-static volatile int g_tcp_client_fd = -1;
+static tcp_client_slot_t g_tcp_clients[MAX_TCP_CLIENTS];
+static volatile int g_tcp_client_count = 0;
 static TaskHandle_t g_tcp_tx_task = NULL;
 
 static uint8_t g_rx_ring[USB_RX_RING_SIZE];
@@ -129,7 +142,7 @@ static void hold_onboard_c6_in_reset(void)
 
 static void ring_push_bytes(const uint8_t *data, size_t len)
 {
-    if (len == 0 || g_tcp_client_fd < 0) {
+    if (len == 0 || g_tcp_client_count <= 0) {
         return;
     }
     xSemaphoreTake(g_ring_mu, portMAX_DELAY);
@@ -200,8 +213,10 @@ static void ring_clear(void)
 static size_t format_bridge_json(char *buf, size_t buf_sz, bool as_at_line)
 {
     bridge_state_t snap;
+    bridge_cfg_t cfg_snap;
     xSemaphoreTake(g_state_mu, portMAX_DELAY);
     snap = g_state;
+    cfg_snap = g_cfg;
     xSemaphoreGive(g_state_mu);
 
     uint64_t up_ms = (uint64_t)(esp_timer_get_time() / 1000ULL);
@@ -209,10 +224,13 @@ static size_t format_bridge_json(char *buf, size_t buf_sz, bool as_at_line)
         buf,
         buf_sz,
         "%s{\"t\":\"bridge\",\"proto\":\"usb-serial-eth\",\"ver\":1,"
-        "\"board\":\"ESP32-P4-POE-ETH\",\"bridgeFw\":\"%s\",\"port\":%d,\"upMs\":%" PRIu64 ","
+        "\"board\":\"ESP32-P4-WIFI6-POE-ETH\",\"bridgeFw\":\"%s\",\"port\":%d,\"upMs\":%" PRIu64 ","
         "\"usbConnected\":%s,\"usbVid\":\"%04X\",\"usbPid\":\"%04X\",\"baud\":%" PRIu32 ","
+        "\"dtr\":%s,\"rts\":%s,"
         "\"ip\":\"%s\",\"netmask\":\"%s\",\"gateway\":\"%s\",\"mac\":\"%s\","
+        "\"staticIp\":\"%s\",\"staticNetmask\":\"%s\",\"staticGateway\":\"%s\","
         "\"linkUp\":%s,\"linkSpeedMbps\":%d,\"fullDuplex\":%s,\"dhcp\":%s,"
+        "\"tcpConnected\":%s,\"tcpClients\":%d,\"maxClients\":%d,\"tcpPeer\":\"%s\","
         "\"rxBytes\":%" PRIu64 ",\"txBytes\":%" PRIu64 "}%s",
         as_at_line ? "@" : "",
         BRIDGE_FW_VERSION,
@@ -222,14 +240,23 @@ static size_t format_bridge_json(char *buf, size_t buf_sz, bool as_at_line)
         snap.usb_vid,
         snap.usb_pid,
         snap.usb_baud,
+        snap.usb_dtr ? "true" : "false",
+        snap.usb_rts ? "true" : "false",
         snap.ip_str,
         snap.netmask_str,
         snap.gw_str,
         snap.mac_str,
+        cfg_snap.ip,
+        cfg_snap.netmask,
+        cfg_snap.gateway,
         snap.eth_link_up ? "true" : "false",
         snap.link_speed_mbps,
         snap.full_duplex ? "true" : "false",
         snap.using_static_ip ? "false" : "true",
+        snap.tcp_connected ? "true" : "false",
+        snap.tcp_clients,
+        MAX_TCP_CLIENTS,
+        snap.tcp_peer,
         snap.usb_rx_bytes,
         snap.usb_tx_bytes,
         as_at_line ? "\n" : ""
@@ -398,6 +425,8 @@ static void usb_cdc_supervisor_task(void *arg)
         g_state.usb_vid = g_state.last_seen_vid;
         g_state.usb_pid = g_state.last_seen_pid;
         g_state.usb_baud = baud;
+        g_state.usb_dtr = true;
+        g_state.usb_rts = false;
         vid = g_state.usb_vid;
         pid = g_state.usb_pid;
         xSemaphoreGive(g_state_mu);
@@ -425,18 +454,17 @@ static void load_bridge_cfg(void)
         g_cfg.baud_rate = baud;
     }
     uint8_t is_static = 0;
-    size_t sz = 0;
-    if (nvs_get_u8(h, "static", &is_static) == ESP_OK && is_static == 1) {
-        sz = sizeof(g_cfg.ip);
-        if (nvs_get_str(h, "ip", g_cfg.ip, &sz) == ESP_OK) {
-            sz = sizeof(g_cfg.netmask);
-            if (nvs_get_str(h, "mask", g_cfg.netmask, &sz) != ESP_OK) {
-                snprintf(g_cfg.netmask, sizeof(g_cfg.netmask), "255.255.255.0");
-            }
-            sz = sizeof(g_cfg.gateway);
-            if (nvs_get_str(h, "gw", g_cfg.gateway, &sz) != ESP_OK) {
-                snprintf(g_cfg.gateway, sizeof(g_cfg.gateway), "0.0.0.0");
-            }
+    size_t sz = sizeof(g_cfg.ip);
+    if (nvs_get_str(h, "ip", g_cfg.ip, &sz) == ESP_OK) {
+        sz = sizeof(g_cfg.netmask);
+        if (nvs_get_str(h, "mask", g_cfg.netmask, &sz) != ESP_OK) {
+            snprintf(g_cfg.netmask, sizeof(g_cfg.netmask), "255.255.255.0");
+        }
+        sz = sizeof(g_cfg.gateway);
+        if (nvs_get_str(h, "gw", g_cfg.gateway, &sz) != ESP_OK) {
+            snprintf(g_cfg.gateway, sizeof(g_cfg.gateway), "0.0.0.0");
+        }
+        if (nvs_get_u8(h, "static", &is_static) == ESP_OK && is_static == 1) {
             g_cfg.static_ip = true;
         }
     }
@@ -477,7 +505,7 @@ static esp_err_t apply_net_cfg_to_netif(void)
     return err;
 }
 
-static bool save_and_apply_net_cfg(bool is_static, const char *ip, const char *mask, const char *gw)
+static bool validate_and_store_net_cfg(bool is_static, const char *ip, const char *mask, const char *gw)
 {
     if (is_static) {
         uint32_t ip_a = esp_ip4addr_aton(ip);
@@ -492,6 +520,7 @@ static bool save_and_apply_net_cfg(bool is_static, const char *ip, const char *m
         return false;
     }
     nvs_set_u8(h, "static", is_static ? 1 : 0);
+    xSemaphoreTake(g_state_mu, portMAX_DELAY);
     if (is_static) {
         nvs_set_str(h, "ip", ip);
         nvs_set_str(h, "mask", mask);
@@ -503,8 +532,17 @@ static bool save_and_apply_net_cfg(bool is_static, const char *ip, const char *m
     } else {
         g_cfg.static_ip = false;
     }
+    xSemaphoreGive(g_state_mu);
     nvs_commit(h);
     nvs_close(h);
+    return true;
+}
+
+static bool save_and_apply_net_cfg(bool is_static, const char *ip, const char *mask, const char *gw)
+{
+    if (!validate_and_store_net_cfg(is_static, ip, mask, gw)) {
+        return false;
+    }
     return apply_net_cfg_to_netif() == ESP_OK;
 }
 
@@ -684,8 +722,8 @@ static void udp_discovery_task(void *arg)
         return;
     }
 
-    char rx_buf[128];
-    char tx_buf[512];
+    char rx_buf[192];
+    char tx_buf[640];
     while (true) {
         struct sockaddr_in src_addr;
         socklen_t socklen = sizeof(src_addr);
@@ -694,19 +732,35 @@ static void udp_discovery_task(void *arg)
             continue;
         }
         rx_buf[n] = '\0';
-        if (strncmp(rx_buf, "DISCOVER?", 9) == 0 || strncmp(rx_buf, "SLAPRF_DISCOVER?", 16) == 0) {
+        while (n > 0 && (rx_buf[n - 1] == '\n' || rx_buf[n - 1] == '\r' || rx_buf[n - 1] == ' ' || rx_buf[n - 1] == '\t')) {
+            rx_buf[--n] = '\0';
+        }
+        const char *cmd = rx_buf;
+        while (*cmd == ' ' || *cmd == '\t') {
+            cmd++;
+        }
+
+        if (strcasecmp(cmd, "DISCOVER?") == 0 || strcasecmp(cmd, "SLAPRF_DISCOVER?") == 0 ||
+            strcasecmp(cmd, "STATUS?") == 0 || strcasecmp(cmd, "BRIDGE?") == 0 || strcasecmp(cmd, "NETCFG?") == 0) {
             size_t len = format_bridge_json(tx_buf, sizeof(tx_buf), false);
             if (len > 0) {
                 sendto(sock, tx_buf, len, 0, (struct sockaddr *)&src_addr, socklen);
             }
-        } else if (strncmp(rx_buf, "CTRL ", 5) == 0) {
+        } else if (strncasecmp(cmd, "BAUD ", 5) == 0) {
+            uint32_t b = (uint32_t)strtoul(cmd + 5, NULL, 10);
+            bool ok = save_and_apply_baud(b);
+            int ack_n = snprintf(tx_buf, sizeof(tx_buf), "{\"ok\":%s,\"baud\":%" PRIu32 "}", ok ? "true" : "false", b);
+            if (ack_n > 0) {
+                sendto(sock, tx_buf, (size_t)ack_n, 0, (struct sockaddr *)&src_addr, socklen);
+            }
+        } else if (strncasecmp(cmd, "CTRL ", 5) == 0) {
             /* Out-of-band serial control lines (`CTRL dtr=1 rts=0 baud=115200`) so TCP :5480
              * stays 100% pure unescaped serial bytes while still supporting remote DTR/RTS/baud! */
             int dtr = -1, rts = -1;
             unsigned long baud = 0;
-            const char *p_dtr = strstr(rx_buf + 5, "dtr=");
-            const char *p_rts = strstr(rx_buf + 5, "rts=");
-            const char *p_baud = strstr(rx_buf + 5, "baud=");
+            const char *p_dtr = strstr(cmd + 5, "dtr=");
+            const char *p_rts = strstr(cmd + 5, "rts=");
+            const char *p_baud = strstr(cmd + 5, "baud=");
             if (p_dtr) {
                 dtr = atoi(p_dtr + 4) ? 1 : 0;
             }
@@ -720,17 +774,18 @@ static void udp_discovery_task(void *arg)
                 save_and_apply_baud((uint32_t)baud);
             }
             if (dtr >= 0 || rts >= 0) {
-                static bool cur_dtr = true;
-                static bool cur_rts = false;
-                if (dtr >= 0) {
-                    cur_dtr = (dtr != 0);
-                }
-                if (rts >= 0) {
-                    cur_rts = (rts != 0);
-                }
+                bool next_dtr = true;
+                bool next_rts = false;
+                xSemaphoreTake(g_state_mu, portMAX_DELAY);
+                next_dtr = (dtr >= 0) ? (dtr != 0) : g_state.usb_dtr;
+                next_rts = (rts >= 0) ? (rts != 0) : g_state.usb_rts;
+                g_state.usb_dtr = next_dtr;
+                g_state.usb_rts = next_rts;
+                xSemaphoreGive(g_state_mu);
+
                 xSemaphoreTake(g_cdc_tx_mu, portMAX_DELAY);
                 if (g_cdc_dev != NULL) {
-                    cdc_acm_host_set_control_line_state(g_cdc_dev, cur_dtr, cur_rts);
+                    cdc_acm_host_set_control_line_state(g_cdc_dev, next_dtr, next_rts);
                 }
                 xSemaphoreGive(g_cdc_tx_mu);
             }
@@ -738,19 +793,93 @@ static void udp_discovery_task(void *arg)
             if (ack_n > 0) {
                 sendto(sock, tx_buf, (size_t)ack_n, 0, (struct sockaddr *)&src_addr, socklen);
             }
+        } else if (strcasecmp(cmd, "NETCFG DHCP") == 0) {
+            bool ok = validate_and_store_net_cfg(false, "", "", "");
+            int ack_n = snprintf(tx_buf, sizeof(tx_buf), "{\"ok\":%s,\"mode\":\"dhcp\"}", ok ? "true" : "false");
+            if (ack_n > 0) {
+                sendto(sock, tx_buf, (size_t)ack_n, 0, (struct sockaddr *)&src_addr, socklen);
+            }
+            if (ok) {
+                vTaskDelay(pdMS_TO_TICKS(25));
+                apply_net_cfg_to_netif();
+            }
+        } else if (strncasecmp(cmd, "NETCFG STATIC ", 14) == 0) {
+            char ip[20] = {0}, mask[20] = {0}, gw[20] = "0.0.0.0";
+            int parts = sscanf(cmd + 14, "%19s %19s %19s", ip, mask, gw);
+            bool ok = (parts >= 2) && validate_and_store_net_cfg(true, ip, mask, gw);
+            int ack_n = snprintf(
+                tx_buf,
+                sizeof(tx_buf),
+                "{\"ok\":%s,\"mode\":\"static\",\"ip\":\"%s\",\"netmask\":\"%s\",\"gateway\":\"%s\"}",
+                ok ? "true" : "false",
+                ip,
+                mask,
+                gw
+            );
+            if (ack_n > 0) {
+                sendto(sock, tx_buf, (size_t)ack_n, 0, (struct sockaddr *)&src_addr, socklen);
+            }
+            if (ok) {
+                vTaskDelay(pdMS_TO_TICKS(25));
+                apply_net_cfg_to_netif();
+            }
+        } else if (strcasecmp(cmd, "RESET_COUNTERS") == 0) {
+            xSemaphoreTake(g_state_mu, portMAX_DELAY);
+            g_state.usb_rx_bytes = 0;
+            g_state.usb_tx_bytes = 0;
+            xSemaphoreGive(g_state_mu);
+            int ack_n = snprintf(tx_buf, sizeof(tx_buf), "{\"ok\":true}");
+            if (ack_n > 0) {
+                sendto(sock, tx_buf, (size_t)ack_n, 0, (struct sockaddr *)&src_addr, socklen);
+            }
+        } else if (strcasecmp(cmd, "REBOOT") == 0) {
+            int ack_n = snprintf(tx_buf, sizeof(tx_buf), "{\"ok\":true,\"cmd\":\"REBOOT\"}");
+            if (ack_n > 0) {
+                sendto(sock, tx_buf, (size_t)ack_n, 0, (struct sockaddr *)&src_addr, socklen);
+            }
+            vTaskDelay(pdMS_TO_TICKS(80));
+            esp_restart();
         }
     }
+}
+
+static void sync_tcp_clients_state(void)
+{
+    int count = 0;
+    char peers[96] = {0};
+    size_t pos = 0;
+
+    xSemaphoreTake(g_clients_mu, portMAX_DELAY);
+    for (int i = 0; i < MAX_TCP_CLIENTS; i++) {
+        if (g_tcp_clients[i].fd >= 0) {
+            count++;
+            int w = snprintf(peers + pos, sizeof(peers) - pos, "%s%s", pos > 0 ? ", " : "", g_tcp_clients[i].peer_ip);
+            if (w > 0) {
+                size_t adv = (size_t)w;
+                pos = (pos + adv < sizeof(peers)) ? (pos + adv) : (sizeof(peers) - 1);
+            }
+        }
+    }
+    g_tcp_client_count = count;
+    xSemaphoreGive(g_clients_mu);
+
+    xSemaphoreTake(g_state_mu, portMAX_DELAY);
+    g_state.tcp_connected = (count > 0);
+    g_state.tcp_clients = count;
+    snprintf(g_state.tcp_peer, sizeof(g_state.tcp_peer), "%s", peers);
+    xSemaphoreGive(g_state_mu);
 }
 
 static void tcp_tx_pump_task(void *arg)
 {
     (void)arg;
     uint8_t chunk[1460];
+    int fds[MAX_TCP_CLIENTS];
+
     while (true) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20));
         while (true) {
-            int fd = g_tcp_client_fd;
-            if (fd < 0) {
+            if (g_tcp_client_count <= 0) {
                 ring_clear();
                 break;
             }
@@ -758,21 +887,60 @@ static void tcp_tx_pump_task(void *arg)
             if (n == 0) {
                 break;
             }
-            size_t sent_total = 0;
-            while (sent_total < n && g_tcp_client_fd == fd) {
-                ssize_t w = send(fd, chunk + sent_total, n - sent_total, 0);
-                if (w < 0) {
-                    if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
-                        vTaskDelay(pdMS_TO_TICKS(1));
-                        continue;
-                    }
-                    shutdown(fd, SHUT_RDWR);
-                    break;
+
+            xSemaphoreTake(g_clients_mu, portMAX_DELAY);
+            for (int i = 0; i < MAX_TCP_CLIENTS; i++) {
+                fds[i] = g_tcp_clients[i].fd;
+            }
+            xSemaphoreGive(g_clients_mu);
+
+            for (int i = 0; i < MAX_TCP_CLIENTS; i++) {
+                int fd = fds[i];
+                if (fd < 0) {
+                    continue;
                 }
-                sent_total += (size_t)w;
+                size_t sent_total = 0;
+                int retries = 0;
+                while (sent_total < n) {
+                    ssize_t w = send(fd, chunk + sent_total, n - sent_total, 0);
+                    if (w < 0) {
+                        if (errno == EINTR) {
+                            continue;
+                        }
+                        if ((errno == EAGAIN || errno == EWOULDBLOCK) && retries < 2) {
+                            retries++;
+                            vTaskDelay(pdMS_TO_TICKS(1));
+                            continue;
+                        }
+                        /* Stall or disconnect: shut down socket so tcp_server_task reclaims the slot */
+                        shutdown(fd, SHUT_RDWR);
+                        break;
+                    }
+                    if (w == 0) {
+                        shutdown(fd, SHUT_RDWR);
+                        break;
+                    }
+                    sent_total += (size_t)w;
+                }
             }
         }
     }
+}
+
+static void configure_client_socket(int fd)
+{
+    int nodelay = 1;
+    int keepalive = 1;
+    int keepidle = 3;
+    int keepintvl = 1;
+    int keepcnt = 2;
+    struct timeval snd_tv = {.tv_sec = 0, .tv_usec = 120000};
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+    setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &keepalive, sizeof(keepalive));
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &keepidle, sizeof(keepidle));
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &keepintvl, sizeof(keepintvl));
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &keepcnt, sizeof(keepcnt));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv));
 }
 
 static void tcp_server_task(void *arg)
@@ -792,100 +960,154 @@ static void tcp_server_task(void *arg)
         .sin_port = htons(BRIDGE_TCP_PORT),
         .sin_addr.s_addr = htonl(INADDR_ANY),
     };
-    if (bind(listen_fd, (struct sockaddr *)&bind_addr, sizeof(bind_addr)) < 0 || listen(listen_fd, 2) < 0) {
+    if (bind(listen_fd, (struct sockaddr *)&bind_addr, sizeof(bind_addr)) < 0 || listen(listen_fd, MAX_TCP_CLIENTS + 2) < 0) {
         ESP_LOGE(TAG, "TCP bind/listen(:%d) failed: errno=%d", BRIDGE_TCP_PORT, errno);
         close(listen_fd);
         vTaskDelete(NULL);
         return;
     }
 
-    ESP_LOGI(TAG, "Raw TCP serial server listening on :%d", BRIDGE_TCP_PORT);
+    ESP_LOGI(TAG, "Raw TCP serial server listening on :%d (max %d concurrent clients)", BRIDGE_TCP_PORT, MAX_TCP_CLIENTS);
 
     uint8_t rx_buf[1024];
     while (true) {
-        struct sockaddr_in client_addr;
-        socklen_t addr_len = sizeof(client_addr);
-        int client_fd = accept(listen_fd, (struct sockaddr *)&client_addr, &addr_len);
-        if (client_fd < 0) {
-            vTaskDelay(pdMS_TO_TICKS(50));
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(listen_fd, &rfds);
+        int max_fd = listen_fd;
+
+        xSemaphoreTake(g_clients_mu, portMAX_DELAY);
+        for (int i = 0; i < MAX_TCP_CLIENTS; i++) {
+            int cfd = g_tcp_clients[i].fd;
+            if (cfd >= 0) {
+                FD_SET(cfd, &rfds);
+                if (cfd > max_fd) {
+                    max_fd = cfd;
+                }
+            }
+        }
+        xSemaphoreGive(g_clients_mu);
+
+        struct timeval tv = {.tv_sec = 1, .tv_usec = 0};
+        int sel = select(max_fd + 1, &rfds, NULL, NULL, &tv);
+        if (sel < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        if (sel == 0) {
             continue;
         }
 
-        while (client_fd >= 0) {
-            int nodelay = 1;
-            int keepalive = 1;
-            int keepidle = 5;
-            int keepintvl = 2;
-            int keepcnt = 3;
-            setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
-            setsockopt(client_fd, SOL_SOCKET, SO_KEEPALIVE, &keepalive, sizeof(keepalive));
-            setsockopt(client_fd, IPPROTO_TCP, TCP_KEEPIDLE, &keepidle, sizeof(keepidle));
-            setsockopt(client_fd, IPPROTO_TCP, TCP_KEEPINTVL, &keepintvl, sizeof(keepintvl));
-            setsockopt(client_fd, IPPROTO_TCP, TCP_KEEPCNT, &keepcnt, sizeof(keepcnt));
-
-            ring_clear();
-            g_tcp_client_fd = client_fd;
-
-            char peer_ip[16] = {0};
-            inet_ntoa_r(client_addr.sin_addr, peer_ip, sizeof(peer_ip) - 1);
-            ESP_LOGI(TAG, "TCP client connected from %s", peer_ip);
-
-            int next_client_fd = -1;
+        if (FD_ISSET(listen_fd, &rfds)) {
             struct sockaddr_in next_addr;
-            memset(&next_addr, 0, sizeof(next_addr));
+            socklen_t nlen = sizeof(next_addr);
+            int nfd = accept(listen_fd, (struct sockaddr *)&next_addr, &nlen);
+            if (nfd >= 0) {
+                char peer_ip[16] = {0};
+                inet_ntoa_r(next_addr.sin_addr, peer_ip, sizeof(peer_ip) - 1);
 
-            while (true) {
-                fd_set rfds;
-                FD_ZERO(&rfds);
-                FD_SET(listen_fd, &rfds);
-                FD_SET(client_fd, &rfds);
-                int max_fd = (listen_fd > client_fd) ? listen_fd : client_fd;
-                struct timeval tv = {.tv_sec = 1, .tv_usec = 0};
-
-                int sel = select(max_fd + 1, &rfds, NULL, NULL, &tv);
-                if (sel < 0) {
-                    if (errno == EINTR) {
-                        continue;
+                /* First reap any active slot whose peer already closed before rejecting a new connection */
+                xSemaphoreTake(g_clients_mu, portMAX_DELAY);
+                for (int i = 0; i < MAX_TCP_CLIENTS; i++) {
+                    int efd = g_tcp_clients[i].fd;
+                    if (efd >= 0) {
+                        uint8_t peek_b = 0;
+                        ssize_t pr = recv(efd, &peek_b, 1, MSG_PEEK | MSG_DONTWAIT);
+                        if (pr == 0 || (pr < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
+                            close(efd);
+                            g_tcp_clients[i].fd = -1;
+                            g_tcp_clients[i].peer_ip[0] = '\0';
+                            if (g_tcp_client_count > 0) {
+                                g_tcp_client_count--;
+                            }
+                        }
                     }
-                    break;
                 }
-                if (sel == 0) {
-                    continue;
-                }
-                if (FD_ISSET(listen_fd, &rfds)) {
-                    socklen_t nlen = sizeof(next_addr);
-                    int nfd = accept(listen_fd, (struct sockaddr *)&next_addr, &nlen);
-                    if (nfd >= 0) {
-                        ESP_LOGI(TAG, "Replacing existing TCP session with new client connection");
-                        next_client_fd = nfd;
+
+                int chosen_slot = -1;
+                int prev_count = g_tcp_client_count;
+                char busy_owner[16] = {0};
+                for (int i = 0; i < MAX_TCP_CLIENTS; i++) {
+                    if (g_tcp_clients[i].fd < 0) {
+                        chosen_slot = i;
                         break;
                     }
-                }
-                if (!FD_ISSET(client_fd, &rfds)) {
-                    continue;
-                }
-
-                ssize_t n = recv(client_fd, rx_buf, sizeof(rx_buf), 0);
-                if (n < 0) {
-                    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-                        continue;
+                    if (busy_owner[0] == '\0') {
+                        snprintf(busy_owner, sizeof(busy_owner), "%s", g_tcp_clients[i].peer_ip);
                     }
-                    break;
                 }
-                if (n == 0) {
-                    break;
+                if (chosen_slot >= 0) {
+                    configure_client_socket(nfd);
+                    if (prev_count == 0) {
+                        ring_clear();
+                    }
+                    g_tcp_clients[chosen_slot].fd = nfd;
+                    snprintf(g_tcp_clients[chosen_slot].peer_ip, sizeof(g_tcp_clients[chosen_slot].peer_ip), "%s", peer_ip);
+                    g_tcp_client_count = prev_count + 1;
                 }
+                xSemaphoreGive(g_clients_mu);
 
-                /* Pure transparent passthrough: write every TCP byte verbatim to USB TX */
-                cdc_send_bytes_raw(rx_buf, (size_t)n);
+                if (chosen_slot < 0) {
+                    /* Send a brief BUSY notice on the rejected socket and close it without touching the active owner */
+                    char busy_msg[128];
+                    int bn = snprintf(
+                        busy_msg,
+                        sizeof(busy_msg),
+                        "@{\"t\":\"err\",\"code\":\"BUSY\",\"peer\":\"%s\"}\n",
+                        busy_owner[0] ? busy_owner : "another client"
+                    );
+                    if (bn > 0) {
+                        struct timeval btv = {.tv_sec = 0, .tv_usec = 40000};
+                        setsockopt(nfd, SOL_SOCKET, SO_SNDTIMEO, &btv, sizeof(btv));
+                        send(nfd, busy_msg, (size_t)bn, 0);
+                    }
+                    ESP_LOGW(TAG, "Rejected TCP client %s: serial port already in use by %s", peer_ip, busy_owner);
+                    close(nfd);
+                } else {
+                    sync_tcp_clients_state();
+                    ESP_LOGI(TAG, "TCP client connected from %s", peer_ip);
+                }
+            }
+        }
+
+        for (int i = 0; i < MAX_TCP_CLIENTS; i++) {
+            int cfd = -1;
+            char peer_ip[16] = {0};
+            xSemaphoreTake(g_clients_mu, portMAX_DELAY);
+            cfd = g_tcp_clients[i].fd;
+            if (cfd >= 0) {
+                snprintf(peer_ip, sizeof(peer_ip), "%s", g_tcp_clients[i].peer_ip);
+            }
+            xSemaphoreGive(g_clients_mu);
+
+            if (cfd < 0 || !FD_ISSET(cfd, &rfds)) {
+                continue;
             }
 
-            ESP_LOGI(TAG, "TCP client disconnected (%s)", peer_ip);
-            g_tcp_client_fd = -1;
-            ring_clear();
-            close(client_fd);
-            client_fd = next_client_fd;
-            client_addr = next_addr;
+            ssize_t n = recv(cfd, rx_buf, sizeof(rx_buf), 0);
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+                continue;
+            }
+            if (n <= 0) {
+                xSemaphoreTake(g_clients_mu, portMAX_DELAY);
+                g_tcp_clients[i].fd = -1;
+                g_tcp_clients[i].peer_ip[0] = '\0';
+                xSemaphoreGive(g_clients_mu);
+
+                close(cfd);
+                sync_tcp_clients_state();
+                if (g_tcp_client_count <= 0) {
+                    ring_clear();
+                }
+                ESP_LOGI(TAG, "TCP client disconnected (%s), active=%d/%d", peer_ip, g_tcp_client_count, MAX_TCP_CLIENTS);
+                continue;
+            }
+
+            /* Pure transparent passthrough: write every TCP byte verbatim to USB TX */
+            cdc_send_bytes_raw(rx_buf, (size_t)n);
         }
     }
 }
@@ -900,7 +1122,7 @@ static void uart0_console_task(void *arg)
     uint8_t ch = 0;
     char line[256];
     size_t len = 0;
-    char reply[512];
+    char reply[640];
 
     while (true) {
         int r = uart_read_bytes(UART_NUM_0, &ch, 1, pdMS_TO_TICKS(100));
@@ -949,6 +1171,13 @@ static void uart0_console_task(void *arg)
                     if (n > 0) {
                         uart_write_bytes(UART_NUM_0, reply, (size_t)n);
                     }
+                } else if (strcasecmp(cmd, "RESET_COUNTERS") == 0) {
+                    xSemaphoreTake(g_state_mu, portMAX_DELAY);
+                    g_state.usb_rx_bytes = 0;
+                    g_state.usb_tx_bytes = 0;
+                    xSemaphoreGive(g_state_mu);
+                    const char *ack = "@{\"t\":\"counters\",\"ok\":true}\n";
+                    uart_write_bytes(UART_NUM_0, ack, strlen(ack));
                 } else if (strcasecmp(cmd, "REBOOT") == 0) {
                     const char *ack = "@{\"t\":\"ack\",\"cmd\":\"REBOOT\"}\n";
                     uart_write_bytes(UART_NUM_0, ack, strlen(ack));
@@ -971,9 +1200,16 @@ void app_main(void)
     g_state_mu = xSemaphoreCreateMutex();
     g_cdc_tx_mu = xSemaphoreCreateMutex();
     g_ring_mu = xSemaphoreCreateMutex();
+    g_clients_mu = xSemaphoreCreateMutex();
     g_usb_disc_sem = xSemaphoreCreateBinary();
+    for (int i = 0; i < MAX_TCP_CLIENTS; i++) {
+        g_tcp_clients[i].fd = -1;
+        g_tcp_clients[i].peer_ip[0] = '\0';
+    }
     memset(&g_state, 0, sizeof(g_state));
     g_state.usb_baud = DEFAULT_USB_BAUD;
+    g_state.usb_dtr = true;
+    g_state.usb_rts = false;
 
     /* 2. Initialize NVS & load optional static IP / baud configuration */
     esp_err_t nvs_err = nvs_flash_init();

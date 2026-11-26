@@ -10,6 +10,7 @@ import "./widgets_and_modals.test";
 import "./modals_round_lap_multigp.test";
 import "./views_races_and_analytics.test";
 import "./flasher_hub_link.test";
+import "./poe_bridge_view.test";
 import "./editors_sim_network_views.test";
 import "./rotorhazard.test";
 import "./slaprf_ble.test";

@@ -29,18 +29,92 @@ type DiscoveredDevice struct {
 	Host          string `json:"host"`
 	Port          int    `json:"port"`
 	Endpoint      string `json:"endpoint"`
+	Board         string `json:"board,omitempty"`
 	FP            string `json:"fp,omitempty"`
 	Label         string `json:"label,omitempty"`
 	FW            string `json:"fw,omitempty"`
 	BridgeFW      string `json:"bridgeFw,omitempty"`
+	UpMs          uint64 `json:"upMs,omitempty"`
 	USBConnected  bool   `json:"usbConnected"`
 	USBVID        string `json:"usbVid,omitempty"`
 	USBPID        string `json:"usbPid,omitempty"`
 	Baud          int    `json:"baud,omitempty"`
+	DTR           bool   `json:"dtr"`
+	RTS           bool   `json:"rts"`
+	IP            string `json:"ip,omitempty"`
+	Netmask       string `json:"netmask,omitempty"`
+	Gateway       string `json:"gateway,omitempty"`
+	StaticIP      string `json:"staticIp,omitempty"`
+	StaticNetmask string `json:"staticNetmask,omitempty"`
+	StaticGateway string `json:"staticGateway,omitempty"`
 	MAC           string `json:"mac,omitempty"`
+	LinkUp        bool   `json:"linkUp"`
 	LinkSpeedMbps int    `json:"linkSpeedMbps,omitempty"`
 	FullDuplex    bool   `json:"fullDuplex,omitempty"`
+	DHCP          bool   `json:"dhcp"`
+	TCPConnected  bool   `json:"tcpConnected"`
+	TCPClients    int    `json:"tcpClients"`
+	MaxClients    int    `json:"maxClients"`
+	TCPPeer       string `json:"tcpPeer,omitempty"`
+	RXBytes       uint64 `json:"rxBytes"`
+	TXBytes       uint64 `json:"txBytes"`
+	Connected     bool   `json:"connected"`
 	Verified      bool   `json:"verified"`
+}
+
+// BridgeStatus describes the full out-of-band status snapshot reported by a PoE Bridge over UDP `:5480`.
+type BridgeStatus struct {
+	Host          string `json:"host"`
+	Port          int    `json:"port"`
+	Endpoint      string `json:"endpoint"`
+	Board         string `json:"board"`
+	BridgeFW      string `json:"bridgeFw"`
+	UpMs          uint64 `json:"upMs"`
+	USBConnected  bool   `json:"usbConnected"`
+	USBVID        string `json:"usbVid"`
+	USBPID        string `json:"usbPid"`
+	Baud          int    `json:"baud"`
+	DTR           bool   `json:"dtr"`
+	RTS           bool   `json:"rts"`
+	IP            string `json:"ip"`
+	Netmask       string `json:"netmask"`
+	Gateway       string `json:"gateway"`
+	StaticIP      string `json:"staticIp,omitempty"`
+	StaticNetmask string `json:"staticNetmask,omitempty"`
+	StaticGateway string `json:"staticGateway,omitempty"`
+	MAC           string `json:"mac"`
+	LinkUp        bool   `json:"linkUp"`
+	LinkSpeedMbps int    `json:"linkSpeedMbps"`
+	FullDuplex    bool   `json:"fullDuplex"`
+	DHCP          bool   `json:"dhcp"`
+	TCPConnected  bool   `json:"tcpConnected"`
+	TCPClients    int    `json:"tcpClients"`
+	MaxClients    int    `json:"maxClients"`
+	TCPPeer       string `json:"tcpPeer,omitempty"`
+	RXBytes       uint64 `json:"rxBytes"`
+	TXBytes       uint64 `json:"txBytes"`
+}
+
+// BridgeActionRequest specifies an out-of-band management action sent to a PoE Bridge over UDP `:5480`.
+type BridgeActionRequest struct {
+	Target  string `json:"target,omitempty"`
+	Action  string `json:"action"`
+	Baud    int    `json:"baud,omitempty"`
+	DHCP    *bool  `json:"dhcp,omitempty"`
+	IP      string `json:"ip,omitempty"`
+	Netmask string `json:"netmask,omitempty"`
+	Gateway string `json:"gateway,omitempty"`
+	DTR     *bool  `json:"dtr,omitempty"`
+	RTS     *bool  `json:"rts,omitempty"`
+}
+
+// BridgeActionResult reports the outcome of a PoE Bridge management action.
+type BridgeActionResult struct {
+	OK      bool          `json:"ok"`
+	Action  string        `json:"action"`
+	Target  string        `json:"target"`
+	Message string        `json:"message,omitempty"`
+	Bridge  *BridgeStatus `json:"bridge,omitempty"`
 }
 
 // Config configures the physical SlapRF LAN / PoE Ethernet transport.
@@ -201,23 +275,41 @@ func (t *Transport) Discover(ctx context.Context, _ bool) ([]slaprf.PortInfo, er
 type udpDiscoveryReply struct {
 	Proto         string `json:"proto"`
 	Ver           int    `json:"ver"`
+	Board         string `json:"board"`
 	FP            string `json:"fp"`
 	Label         string `json:"label"`
 	FW            string `json:"fw"`
 	BridgeFW      string `json:"bridgeFw"`
+	UpMs          uint64 `json:"upMs"`
 	USBConnected  bool   `json:"usbConnected"`
 	USBVID        string `json:"usbVid"`
 	USBPID        string `json:"usbPid"`
 	Baud          int    `json:"baud"`
+	DTR           *bool  `json:"dtr"`
+	RTS           *bool  `json:"rts"`
 	Port          int    `json:"port"`
 	IP            string `json:"ip"`
+	Netmask       string `json:"netmask"`
+	Gateway       string `json:"gateway"`
+	StaticIP      string `json:"staticIp"`
+	StaticNetmask string `json:"staticNetmask"`
+	StaticGateway string `json:"staticGateway"`
 	MAC           string `json:"mac"`
+	LinkUp        *bool  `json:"linkUp"`
 	LinkSpeedMbps int    `json:"linkSpeedMbps"`
 	FullDuplex    bool   `json:"fullDuplex"`
+	DHCP          *bool  `json:"dhcp"`
+	TCPConnected  bool   `json:"tcpConnected"`
+	TCPClients    int    `json:"tcpClients"`
+	MaxClients    int    `json:"maxClients"`
+	TCPPeer       string `json:"tcpPeer"`
+	RXBytes       uint64 `json:"rxBytes"`
+	TXBytes       uint64 `json:"txBytes"`
 }
 
-// DiscoverDevices broadcasts and sweeps `SLAPRF_DISCOVER?` over UDP `:5480` across active IPv4 LAN
-// and Link-Local AutoIP (`169.254.0.0/16`) interfaces, returning verified SlapRF PoE Bridges.
+// DiscoverDevices broadcasts `DISCOVER?` over UDP `:5480` across active IPv4 LAN and Link-Local AutoIP
+// interfaces in a fast broadcast wave (~220 ms), falling back to a non-blocking /24 unicast sweep only
+// when broadcast packets are filtered by the local Wi-Fi AP or switch.
 func (t *Transport) DiscoverDevices(ctx context.Context) ([]DiscoveredDevice, string, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -228,72 +320,151 @@ func (t *Transport) DiscoverDevices(ctx context.Context) ([]DiscoveredDevice, st
 	}
 	defer conn.Close()
 
-	targets, subnetLabel := t.collectDiscoveryTargets()
+	fastTargets, sweepTargets, subnetLabel := t.collectDiscoveryTargets()
 	payload := []byte(discoverProbePayload)
-	for _, dstStr := range targets {
-		udpAddr, rErr := net.ResolveUDPAddr("udp4", dstStr)
-		if rErr != nil {
-			continue
-		}
-		_, _ = conn.WriteTo(payload, udpAddr)
-	}
 
-	deadline := time.Now().Add(t.discWindow)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
+	sendList := func(targets []string) {
+		for _, dstStr := range targets {
+			if ctx.Err() != nil {
+				return
+			}
+			udpAddr, rErr := net.ResolveUDPAddr("udp4", dstStr)
+			if rErr != nil {
+				continue
+			}
+			_, _ = conn.WriteTo(payload, udpAddr)
+		}
 	}
-	_ = conn.SetReadDeadline(deadline)
 
 	byEndpoint := make(map[string]DiscoveredDevice)
 	buf := make([]byte, 2048)
-	for {
-		if ctx.Err() != nil {
-			break
+
+	readUntil := func(deadline time.Time) {
+		if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+			deadline = d
 		}
-		n, srcAddr, rErr := conn.ReadFrom(buf)
-		if rErr != nil {
-			break
+		_ = conn.SetReadDeadline(deadline)
+		for {
+			if ctx.Err() != nil {
+				return
+			}
+			n, srcAddr, rErr := conn.ReadFrom(buf)
+			if rErr != nil {
+				return
+			}
+			raw := strings.TrimSpace(string(buf[:n]))
+			raw = strings.TrimPrefix(raw, "@")
+			var rep udpDiscoveryReply
+			if err := json.Unmarshal([]byte(raw), &rep); err != nil {
+				continue
+			}
+			if rep.Proto != "usb-serial-eth" && rep.Proto != "slaprf-eth" {
+				continue
+			}
+			host := strings.TrimSpace(rep.IP)
+			if udpSrc, ok := srcAddr.(*net.UDPAddr); ok && udpSrc.IP != nil {
+				host = udpSrc.IP.String()
+			}
+			if host == "" {
+				continue
+			}
+			port := rep.Port
+			if port <= 0 || port > 65535 {
+				port = t.discPort
+			}
+			ep := net.JoinHostPort(host, strconv.Itoa(port))
+			label := strings.TrimSpace(rep.Label)
+			dtr := true
+			if rep.DTR != nil {
+				dtr = *rep.DTR
+			}
+			rts := false
+			if rep.RTS != nil {
+				rts = *rep.RTS
+			}
+			linkUp := true
+			if rep.LinkUp != nil {
+				linkUp = *rep.LinkUp
+			}
+			dhcp := true
+			if rep.DHCP != nil {
+				dhcp = *rep.DHCP
+			}
+			board := strings.TrimSpace(rep.Board)
+			if board == "" || board == "ESP32-P4-POE-ETH" {
+				board = "ESP32-P4-WIFI6-POE-ETH"
+			}
+			tcpClients := rep.TCPClients
+			if tcpClients == 0 && rep.TCPConnected {
+				tcpClients = 1
+			}
+			maxClients := rep.MaxClients
+			if maxClients <= 0 {
+				maxClients = 1
+			}
+			byEndpoint[ep] = DiscoveredDevice{
+				Host:          host,
+				Port:          port,
+				Endpoint:      ep,
+				Board:         board,
+				FP:            strings.ToUpper(strings.TrimSpace(rep.FP)),
+				Label:         label,
+				FW:            strings.TrimSpace(rep.FW),
+				BridgeFW:      strings.TrimSpace(rep.BridgeFW),
+				UpMs:          rep.UpMs,
+				USBConnected:  rep.USBConnected,
+				USBVID:        strings.ToUpper(strings.TrimSpace(rep.USBVID)),
+				USBPID:        strings.ToUpper(strings.TrimSpace(rep.USBPID)),
+				Baud:          rep.Baud,
+				DTR:           dtr,
+				RTS:           rts,
+				IP:            strings.TrimSpace(rep.IP),
+				Netmask:       strings.TrimSpace(rep.Netmask),
+				Gateway:       strings.TrimSpace(rep.Gateway),
+				StaticIP:      strings.TrimSpace(rep.StaticIP),
+				StaticNetmask: strings.TrimSpace(rep.StaticNetmask),
+				StaticGateway: strings.TrimSpace(rep.StaticGateway),
+				MAC:           strings.ToUpper(strings.TrimSpace(rep.MAC)),
+				LinkUp:        linkUp,
+				LinkSpeedMbps: rep.LinkSpeedMbps,
+				FullDuplex:    rep.FullDuplex,
+				DHCP:          dhcp,
+				TCPConnected:  rep.TCPConnected || tcpClients > 0,
+				TCPClients:    tcpClients,
+				MaxClients:    maxClients,
+				TCPPeer:       strings.TrimSpace(rep.TCPPeer),
+				RXBytes:       rep.RXBytes,
+				TXBytes:       rep.TXBytes,
+				Verified:      true,
+			}
 		}
-		raw := strings.TrimSpace(string(buf[:n]))
-		raw = strings.TrimPrefix(raw, "@")
-		var rep udpDiscoveryReply
-		if err := json.Unmarshal([]byte(raw), &rep); err != nil {
-			continue
+	}
+
+	// Wave 1: fast broadcast probe (2 bursts 45 ms apart for Wi-Fi DTIM reliability, ~220 ms total).
+	fastWin := t.discWindow
+	if len(sweepTargets) > 0 && fastWin > 220*time.Millisecond {
+		fastWin = 220 * time.Millisecond
+	}
+	sendList(fastTargets)
+	if fastWin > 90*time.Millisecond {
+		readUntil(time.Now().Add(45 * time.Millisecond))
+		if len(byEndpoint) == 0 {
+			sendList(fastTargets)
 		}
-		if rep.Proto != "usb-serial-eth" && rep.Proto != "slaprf-eth" {
-			continue
+		readUntil(time.Now().Add(fastWin - 45*time.Millisecond))
+	} else {
+		readUntil(time.Now().Add(fastWin))
+	}
+
+	// Wave 2: only if broadcast returned 0 bridges, sweep /24 in a background goroutine so Linux ARP
+	// resolution queues on unused IPs never block `ReadFrom` or stall discovery for multiple seconds.
+	if len(byEndpoint) == 0 && len(sweepTargets) > 0 && ctx.Err() == nil {
+		go sendList(sweepTargets)
+		sweepWin := t.discWindow
+		if sweepWin < 450*time.Millisecond {
+			sweepWin = 450 * time.Millisecond
 		}
-		host := strings.TrimSpace(rep.IP)
-		if udpSrc, ok := srcAddr.(*net.UDPAddr); ok && udpSrc.IP != nil {
-			// Prefer the actual routable source IP observed on the socket.
-			host = udpSrc.IP.String()
-		}
-		if host == "" {
-			continue
-		}
-		port := rep.Port
-		if port <= 0 || port > 65535 {
-			port = t.discPort
-		}
-		ep := net.JoinHostPort(host, strconv.Itoa(port))
-		label := strings.TrimSpace(rep.Label)
-		byEndpoint[ep] = DiscoveredDevice{
-			Host:          host,
-			Port:          port,
-			Endpoint:      ep,
-			FP:            strings.ToUpper(strings.TrimSpace(rep.FP)),
-			Label:         label,
-			FW:            strings.TrimSpace(rep.FW),
-			BridgeFW:      strings.TrimSpace(rep.BridgeFW),
-			USBConnected:  rep.USBConnected,
-			USBVID:        strings.ToUpper(strings.TrimSpace(rep.USBVID)),
-			USBPID:        strings.ToUpper(strings.TrimSpace(rep.USBPID)),
-			Baud:          rep.Baud,
-			MAC:           strings.ToUpper(strings.TrimSpace(rep.MAC)),
-			LinkSpeedMbps: rep.LinkSpeedMbps,
-			FullDuplex:    rep.FullDuplex,
-			Verified:      true,
-		}
+		readUntil(time.Now().Add(sweepWin))
 	}
 
 	out := make([]DiscoveredDevice, 0, len(byEndpoint))
@@ -309,35 +480,41 @@ func (t *Transport) DiscoverDevices(ctx context.Context) ([]DiscoveredDevice, st
 	return out, subnetLabel, nil
 }
 
-func (t *Transport) collectDiscoveryTargets() ([]string, string) {
-	seen := make(map[string]bool)
-	var out []string
-	add := func(host string, port int) {
+func (t *Transport) collectDiscoveryTargets() (fast []string, sweep []string, primarySubnet string) {
+	seenFast := make(map[string]bool)
+	seenSweep := make(map[string]bool)
+	addFast := func(host string, port int) {
 		ep := net.JoinHostPort(host, strconv.Itoa(port))
-		if !seen[ep] {
-			seen[ep] = true
-			out = append(out, ep)
+		if !seenFast[ep] {
+			seenFast[ep] = true
+			fast = append(fast, ep)
+		}
+	}
+	addSweep := func(host string, port int) {
+		ep := net.JoinHostPort(host, strconv.Itoa(port))
+		if !seenFast[ep] && !seenSweep[ep] {
+			seenSweep[ep] = true
+			sweep = append(sweep, ep)
 		}
 	}
 
 	for _, explicit := range t.probeTargets {
 		if norm, err := t.ValidateTarget(explicit); err == nil {
-			if !seen[norm] {
-				seen[norm] = true
-				out = append(out, norm)
+			if !seenFast[norm] {
+				seenFast[norm] = true
+				fast = append(fast, norm)
 			}
 		}
 	}
 	if len(t.probeTargets) > 0 {
-		return out, "127.0.0.1/32"
+		return fast, nil, "127.0.0.1/32"
 	}
 
-	add("255.255.255.255", t.discPort)
-	var primarySubnet string
+	addFast("255.255.255.255", t.discPort)
 
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return out, ""
+		return fast, nil, ""
 	}
 	unicastSubnets := 0
 	for _, iface := range ifaces {
@@ -372,7 +549,7 @@ func (t *Transport) collectDiscoveryTargets() ([]string, string) {
 
 			var bcastIP [4]byte
 			binary.BigEndian.PutUint32(bcastIP[:], bcastNum)
-			add(net.IP(bcastIP[:]).String(), t.discPort)
+			addFast(net.IP(bcastIP[:]).String(), t.discPort)
 
 			var netIP [4]byte
 			binary.BigEndian.PutUint32(netIP[:], netNum)
@@ -381,8 +558,6 @@ func (t *Transport) collectDiscoveryTargets() ([]string, string) {
 				primarySubnet = subnetStr
 			}
 
-			// Also send unicast UDP datagrams across up to two private /24 subnets so switches/APs
-			// with broadcast filtering still discover PoE Bridges reliably.
 			if ones >= 24 && ip4.IsPrivate() && unicastSubnets < 2 {
 				unicastSubnets++
 				base24 := ipNum & 0xFFFFFF00
@@ -393,12 +568,12 @@ func (t *Transport) collectDiscoveryTargets() ([]string, string) {
 					}
 					var dst [4]byte
 					binary.BigEndian.PutUint32(dst[:], cand)
-					add(net.IP(dst[:]).String(), t.discPort)
+					addSweep(net.IP(dst[:]).String(), t.discPort)
 				}
 			}
 		}
 	}
-	return out, primarySubnet
+	return fast, sweep, primarySubnet
 }
 
 func (t *Transport) Open(ctx context.Context, target string, onProgress func(string)) (firmware.SerialPort, error) {
@@ -522,6 +697,14 @@ func (p *tcpSerialPort) Read(b []byte) (int, error) {
 		_ = p.conn.SetReadDeadline(time.Time{})
 	}
 	n, err := p.conn.Read(b)
+	if n > 0 && bytesHasBusyError(b[:n]) {
+		peer := extractBusyPeer(b[:n])
+		_ = p.conn.Close()
+		if peer != "" {
+			return 0, fmt.Errorf("PoE Bridge %s is already in use by %s", p.ctrlAddr, peer)
+		}
+		return 0, fmt.Errorf("PoE Bridge %s is already in use by another client", p.ctrlAddr)
+	}
 	if err != nil {
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {
@@ -529,6 +712,26 @@ func (p *tcpSerialPort) Read(b []byte) (int, error) {
 		}
 	}
 	return n, err
+}
+
+func bytesHasBusyError(b []byte) bool {
+	s := string(b)
+	return strings.Contains(s, `"code":"BUSY"`) && strings.Contains(s, `"t":"err"`)
+}
+
+func extractBusyPeer(b []byte) string {
+	raw := strings.TrimSpace(string(b))
+	raw = strings.TrimPrefix(raw, "@")
+	if nl := strings.IndexByte(raw, '\n'); nl >= 0 {
+		raw = strings.TrimSpace(raw[:nl])
+	}
+	var msg struct {
+		Peer string `json:"peer"`
+	}
+	if err := json.Unmarshal([]byte(raw), &msg); err == nil {
+		return strings.TrimSpace(msg.Peer)
+	}
+	return ""
 }
 
 func (p *tcpSerialPort) Write(b []byte) (int, error) {
@@ -546,3 +749,302 @@ func (p *tcpSerialPort) SetReadTimeout(d time.Duration) error {
 func (p *tcpSerialPort) ResetInputBuffer() error { return nil }
 
 func (p *tcpSerialPort) Close() error { return p.conn.Close() }
+
+func (t *Transport) udpRoundTrip(ctx context.Context, normEndpoint string, cmd string, timeout time.Duration) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	udpAddr, err := net.ResolveUDPAddr("udp4", normEndpoint)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.DialUDP("udp4", nil, udpAddr)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	if timeout <= 0 {
+		timeout = 700 * time.Millisecond
+	}
+	deadline := time.Now().Add(timeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = conn.SetDeadline(deadline)
+
+	if !strings.HasSuffix(cmd, "\n") {
+		cmd += "\n"
+	}
+	if _, err := conn.Write([]byte(cmd)); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 2048)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return nil, err
+	}
+	raw := strings.TrimSpace(string(buf[:n]))
+	raw = strings.TrimPrefix(raw, "@")
+	return []byte(raw), nil
+}
+
+// QueryBridgeStatus queries a specific PoE Bridge (`host:port`) over UDP `:5480` using `STATUS?`.
+func (t *Transport) QueryBridgeStatus(ctx context.Context, rawTarget string) (*BridgeStatus, error) {
+	norm, err := t.ValidateTarget(rawTarget)
+	if err != nil {
+		return nil, err
+	}
+	host, portStr, _ := net.SplitHostPort(norm)
+	port, _ := strconv.Atoi(portStr)
+	if port <= 0 {
+		port = t.discPort
+	}
+
+	// Send `DISCOVER?` because both v0.1.0 and v0.2.0+ firmware answer `DISCOVER?` with `format_bridge_json`.
+	raw, err := t.udpRoundTrip(ctx, norm, "DISCOVER?", 750*time.Millisecond)
+	if err != nil {
+		return nil, fmt.Errorf("PoE Bridge at %s did not respond: %w", norm, err)
+	}
+	var rep udpDiscoveryReply
+	if err := json.Unmarshal(raw, &rep); err != nil {
+		return nil, fmt.Errorf("invalid PoE Bridge status payload from %s: %w", norm, err)
+	}
+	board := strings.TrimSpace(rep.Board)
+	if board == "" || board == "ESP32-P4-POE-ETH" {
+		board = "ESP32-P4-WIFI6-POE-ETH"
+	}
+	dtr := true
+	if rep.DTR != nil {
+		dtr = *rep.DTR
+	}
+	rts := false
+	if rep.RTS != nil {
+		rts = *rep.RTS
+	}
+	linkUp := true
+	if rep.LinkUp != nil {
+		linkUp = *rep.LinkUp
+	}
+	dhcp := true
+	if rep.DHCP != nil {
+		dhcp = *rep.DHCP
+	}
+	ip := strings.TrimSpace(rep.IP)
+	if ip == "" {
+		ip = host
+	}
+	baud := rep.Baud
+	if baud <= 0 {
+		baud = 115200
+	}
+	tcpClients := rep.TCPClients
+	if tcpClients == 0 && rep.TCPConnected {
+		tcpClients = 1
+	}
+	maxClients := rep.MaxClients
+	if maxClients <= 0 {
+		maxClients = 1
+	}
+	return &BridgeStatus{
+		Host:          host,
+		Port:          port,
+		Endpoint:      norm,
+		Board:         board,
+		BridgeFW:      strings.TrimSpace(rep.BridgeFW),
+		UpMs:          rep.UpMs,
+		USBConnected:  rep.USBConnected,
+		USBVID:        strings.ToUpper(strings.TrimSpace(rep.USBVID)),
+		USBPID:        strings.ToUpper(strings.TrimSpace(rep.USBPID)),
+		Baud:          baud,
+		DTR:           dtr,
+		RTS:           rts,
+		IP:            ip,
+		Netmask:       strings.TrimSpace(rep.Netmask),
+		Gateway:       strings.TrimSpace(rep.Gateway),
+		StaticIP:      strings.TrimSpace(rep.StaticIP),
+		StaticNetmask: strings.TrimSpace(rep.StaticNetmask),
+		StaticGateway: strings.TrimSpace(rep.StaticGateway),
+		MAC:           strings.ToUpper(strings.TrimSpace(rep.MAC)),
+		LinkUp:        linkUp,
+		LinkSpeedMbps: rep.LinkSpeedMbps,
+		FullDuplex:    rep.FullDuplex,
+		DHCP:          dhcp,
+		TCPConnected:  rep.TCPConnected || tcpClients > 0,
+		TCPClients:    tcpClients,
+		MaxClients:    maxClients,
+		TCPPeer:       strings.TrimSpace(rep.TCPPeer),
+		RXBytes:       rep.RXBytes,
+		TXBytes:       rep.TXBytes,
+	}, nil
+}
+
+// SendBridgeAction executes an out-of-band management command against a PoE Bridge over UDP `:5480`.
+func (t *Transport) SendBridgeAction(ctx context.Context, rawTarget string, req BridgeActionRequest) (*BridgeActionResult, error) {
+	norm, err := t.ValidateTarget(rawTarget)
+	if err != nil {
+		return nil, err
+	}
+	action := strings.ToLower(strings.TrimSpace(req.Action))
+	switch action {
+	case "baud":
+		if req.Baud < 1200 || req.Baud > 4000000 {
+			return nil, errors.New("baud rate must be between 1200 and 4000000")
+		}
+		// `CTRL baud=<n>` works on both v0.1.0 and v0.2.0+ firmware!
+		if _, err := t.udpRoundTrip(ctx, norm, fmt.Sprintf("CTRL baud=%d", req.Baud), 800*time.Millisecond); err != nil {
+			return nil, fmt.Errorf("failed to update PoE Bridge baud rate: %w", err)
+		}
+		st, _ := t.QueryBridgeStatus(ctx, norm)
+		return &BridgeActionResult{
+			OK:      true,
+			Action:  action,
+			Target:  norm,
+			Message: fmt.Sprintf("USB-A baud rate set to %d.", req.Baud),
+			Bridge:  st,
+		}, nil
+
+	case "lines":
+		var parts []string
+		if req.DTR != nil {
+			parts = append(parts, fmt.Sprintf("dtr=%d", boolBit(*req.DTR)))
+		}
+		if req.RTS != nil {
+			parts = append(parts, fmt.Sprintf("rts=%d", boolBit(*req.RTS)))
+		}
+		if len(parts) == 0 {
+			return nil, errors.New("specify dtr or rts")
+		}
+		if _, err := t.udpRoundTrip(ctx, norm, "CTRL "+strings.Join(parts, " "), 800*time.Millisecond); err != nil {
+			return nil, fmt.Errorf("failed to update USB-A control lines: %w", err)
+		}
+		st, _ := t.QueryBridgeStatus(ctx, norm)
+		return &BridgeActionResult{
+			OK:      true,
+			Action:  action,
+			Target:  norm,
+			Message: "USB-A serial control lines updated.",
+			Bridge:  st,
+		}, nil
+
+	case "reset-usb":
+		if _, err := t.udpRoundTrip(ctx, norm, "CTRL dtr=0 rts=1", 600*time.Millisecond); err != nil {
+			return nil, fmt.Errorf("failed to pulse USB-A reset lines: %w", err)
+		}
+		time.Sleep(90 * time.Millisecond)
+		if _, err := t.udpRoundTrip(ctx, norm, "CTRL dtr=1 rts=0", 600*time.Millisecond); err != nil {
+			return nil, fmt.Errorf("failed to release USB-A reset lines: %w", err)
+		}
+		time.Sleep(180 * time.Millisecond)
+		st, _ := t.QueryBridgeStatus(ctx, norm)
+		return &BridgeActionResult{
+			OK:      true,
+			Action:  action,
+			Target:  norm,
+			Message: "Reset pulse sent to attached USB-A device.",
+			Bridge:  st,
+		}, nil
+
+	case "reset-counters":
+		rawAck, err := t.udpRoundTrip(ctx, norm, "RESET_COUNTERS", 800*time.Millisecond)
+		if err != nil {
+			return nil, fmt.Errorf("failed to reset traffic counters (ensure PoE Bridge firmware is v0.2.0+): %w", err)
+		}
+		var ack struct {
+			OK bool `json:"ok"`
+		}
+		_ = json.Unmarshal(rawAck, &ack)
+		st, _ := t.QueryBridgeStatus(ctx, norm)
+		return &BridgeActionResult{
+			OK:      ack.OK,
+			Action:  action,
+			Target:  norm,
+			Message: "USB-A serial traffic counters cleared.",
+			Bridge:  st,
+		}, nil
+
+	case "netcfg":
+		useDHCP := true
+		if req.DHCP != nil {
+			useDHCP = *req.DHCP
+		}
+		if useDHCP {
+			rawAck, err := t.udpRoundTrip(ctx, norm, "NETCFG DHCP", 900*time.Millisecond)
+			if err != nil {
+				return nil, fmt.Errorf("failed to enable DHCP on PoE Bridge (ensure firmware is v0.2.0+): %w", err)
+			}
+			var ack struct {
+				OK bool `json:"ok"`
+			}
+			if err := json.Unmarshal(rawAck, &ack); err == nil && !ack.OK {
+				return nil, errors.New("PoE Bridge rejected DHCP configuration")
+			}
+			time.Sleep(250 * time.Millisecond)
+			st, _ := t.QueryBridgeStatus(ctx, norm)
+			return &BridgeActionResult{
+				OK:      true,
+				Action:  action,
+				Target:  norm,
+				Message: "Network mode set to automatic DHCP + Link-Local.",
+				Bridge:  st,
+			}, nil
+		}
+
+		ip := strings.TrimSpace(req.IP)
+		mask := strings.TrimSpace(req.Netmask)
+		gw := strings.TrimSpace(req.Gateway)
+		if mask == "" {
+			mask = "255.255.255.0"
+		}
+		if gw == "" {
+			gw = "0.0.0.0"
+		}
+		if net.ParseIP(ip) == nil || net.ParseIP(ip).To4() == nil {
+			return nil, errors.New("enter a valid IPv4 address (for example 192.168.1.110)")
+		}
+		if net.ParseIP(mask) == nil || net.ParseIP(mask).To4() == nil {
+			return nil, errors.New("enter a valid IPv4 subnet mask (for example 255.255.255.0)")
+		}
+		if net.ParseIP(gw) == nil || net.ParseIP(gw).To4() == nil {
+			return nil, errors.New("enter a valid IPv4 gateway (or 0.0.0.0)")
+		}
+
+		cmd := fmt.Sprintf("NETCFG STATIC %s %s %s", ip, mask, gw)
+		rawAck, err := t.udpRoundTrip(ctx, norm, cmd, 900*time.Millisecond)
+		if err != nil {
+			return nil, fmt.Errorf("failed to apply static IP on PoE Bridge (ensure firmware is v0.2.0+): %w", err)
+		}
+		var ack struct {
+			OK bool `json:"ok"`
+		}
+		if err := json.Unmarshal(rawAck, &ack); err == nil && !ack.OK {
+			return nil, errors.New("PoE Bridge rejected static IPv4 settings")
+		}
+		_, portStr, _ := net.SplitHostPort(norm)
+		nextTarget := net.JoinHostPort(ip, portStr)
+		time.Sleep(220 * time.Millisecond)
+		st, _ := t.QueryBridgeStatus(ctx, nextTarget)
+		return &BridgeActionResult{
+			OK:      true,
+			Action:  action,
+			Target:  nextTarget,
+			Message: fmt.Sprintf("Static IPv4 %s (%s) saved and applied.", ip, mask),
+			Bridge:  st,
+		}, nil
+
+	case "reboot":
+		_, err := t.udpRoundTrip(ctx, norm, "REBOOT", 800*time.Millisecond)
+		if err != nil {
+			return nil, fmt.Errorf("failed to send reboot command (ensure PoE Bridge firmware is v0.2.0+): %w", err)
+		}
+		return &BridgeActionResult{
+			OK:      true,
+			Action:  action,
+			Target:  norm,
+			Message: "Rebooting PoE Bridge… Ethernet link will return in ~3 seconds.",
+		}, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported PoE Bridge action %q", req.Action)
+	}
+}
