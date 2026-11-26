@@ -8709,6 +8709,9 @@ body.is-gate-dragging * {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
+.flasher-pictorial-grid.is-three-col {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
 .flasher-pictorial-card {
   display: flex;
   flex-direction: column;
@@ -9021,6 +9024,7 @@ body.is-gate-dragging * {
   }
 
   .flasher-pictorial-grid,
+  .flasher-pictorial-grid.is-three-col,
   .flasher-fp-choices,
   .flasher-receipt {
     grid-template-columns: minmax(0, 1fr);
