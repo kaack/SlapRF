@@ -79,6 +79,12 @@ tags:
       - **Discovery, Pairing & Remembered Connect (`ports`, `connections`)**: Scan nearby `ble:<FP>` Hubs, pair unclaimed Hubs, reconnect remembered Hubs, cancel in-flight connection attempts, or wirelessly unpair and forget a Hub (`DELETE ...?forget=1`).
       - **Commands & Spectrum Survey (`:command`, `survey`)**: Send console commands and run `5.8 GHz` Raceband surveys over GATT NUS without USB cables.
 
+  - name: SlapRF Hardware (Network)
+    description: |
+      PoE Ethernet / TCP serial bridge transport for Seeed Studio XIAO ESP32-C5 Hubs connected via an ESP32-P4 PoE USB-Serial Bridge (`/v1/slaprf/network/*`).
+      - **LAN Discovery & Raw TCP Stream (`devices`, `ports`, `connections`)**: Discover PoE USB-Serial bridges over UDP `:5480` and stream `100 Hz` `0x1E`+`0xC5` telemetry over TCP `:5480` with `TCP_NODELAY`.
+      - **Commands & Spectrum Survey (`:command`, `survey`)**: Send serial console commands and run `5.8 GHz` Raceband surveys over Ethernet.
+
   - name: LapRF 8-Way Hardware
     description: |
       External ImmersionRC LapRF 8-Way hardware connections over Ethernet LAN or USB CDC serial (`/v1/laprf/*`).
@@ -4257,7 +4263,7 @@ paths:
 
     put:
       tags: [Timing Singletons]
-      summary: Switch active timing hardware backend (`slaprf`, `slaprf_ble`, `laprf`, `laprf_usb`, `rotorhazard`, `rotorhazard_usb`)
+      summary: Switch active timing hardware backend (`slaprf`, `slaprf_ble`, `slaprf_net`, `laprf`, `laprf_usb`, `rotorhazard`, `rotorhazard_usb`)
       operationId: putHardwareMode
       requestBody:
         required: true
@@ -4817,6 +4823,210 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/slaprf/network/devices:
+    get:
+      tags: [SlapRF Hardware (Network)]
+      summary: Discover PoE USB-Serial bridges on the local network over UDP `:5480`
+      operationId: discoverSlapRFNetworkDevices
+      responses:
+        "200":
+          description: Discovered PoE Ethernet serial bridges
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/slaprf/network/ports:
+    get:
+      tags: [SlapRF Hardware (Network)]
+      summary: List discovered PoE Ethernet serial endpoints as SlapRF port descriptors
+      operationId: listSlapRFNetworkPorts
+      responses:
+        "200":
+          description: Discovered network endpoints and connection pool snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/slaprf/network/connections:
+    get:
+      tags: [SlapRF Hardware (Network)]
+      summary: Get SlapRF PoE Ethernet connection pool snapshot
+      operationId: getSlapRFNetworkConnections
+      responses:
+        "200":
+          description: Network connection pool snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      tags: [SlapRF Hardware (Network)]
+      summary: Connect to a PoE USB-Serial bridge over TCP (`<host>:5480`)
+      operationId: connectSlapRFNetworkSlot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [portName]
+              properties:
+                slotIndex:
+                  type: integer
+                  example: 0
+                portName:
+                  type: string
+                  example: "192.168.1.110:5480"
+      responses:
+        "201":
+          description: Connected PoE bridge slot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/slaprf/network/connections:disconnectAll:
+    post:
+      tags: [SlapRF Hardware (Network)]
+      summary: Disconnect all active SlapRF network slots
+      operationId: disconnectAllSlapRFNetworkSlots
+      responses:
+        "200":
+          description: Updated network connection pool snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/slaprf/network/connections/{slotIndex}:
+    parameters:
+      - name: slotIndex
+        in: path
+        required: true
+        schema:
+          type: integer
+    put:
+      tags: [SlapRF Hardware (Network)]
+      summary: Connect or replace a specific SlapRF network slot (`0..2`)
+      operationId: putSlapRFNetworkSlot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [portName]
+              properties:
+                portName:
+                  type: string
+      responses:
+        "200":
+          description: Connected network slot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    delete:
+      tags: [SlapRF Hardware (Network)]
+      summary: Disconnect a SlapRF network slot (`0..2`)
+      operationId: disconnectSlapRFNetworkSlot
+      responses:
+        "200":
+          description: Updated network connection pool snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/slaprf/network:command:
+    post:
+      tags: [SlapRF Hardware (Network)]
+      summary: Send a serial console command over an active PoE TCP connection
+      operationId: sendSlapRFNetworkCommand
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [command]
+              properties:
+                slotIndex:
+                  type: integer
+                command:
+                  type: string
+                expectType:
+                  type: string
+                timeoutMs:
+                  type: integer
+      responses:
+        "200":
+          description: Command acknowledged or reply received
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/slaprf/network/survey:
+    get:
+      tags: [SlapRF Hardware (Network)]
+      summary: Read full-Raceband 5.8 GHz spectrum survey state for SlapRF Network
+      operationId: getSlapRFNetworkSurvey
+      responses:
+        "200":
+          description: Survey state
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    put:
+      tags: [SlapRF Hardware (Network)]
+      summary: Set full-Raceband 5.8 GHz spectrum survey mode over SlapRF Network
+      operationId: putSlapRFNetworkSurvey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [on]
+              properties:
+                on:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated survey state
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/sim/slaprf/network/devices:
+    get:
+      tags: [Simulator (SlapRF)]
+      summary: Discover virtual PoE USB-Serial bridges on the simulated LAN
+      operationId: discoverSimSlapRFNetworkDevices
+      responses:
+        "200":
+          description: Simulated PoE bridge devices
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
 
   /v1/slaprf/known-timers/{fp}:
     parameters:
@@ -7092,7 +7302,7 @@ components:
 
     TimingHardwareMode:
       type: string
-      enum: [slaprf, slaprf_ble, laprf, laprf_usb, rotorhazard, rotorhazard_usb]
+      enum: [slaprf, slaprf_ble, slaprf_net, laprf, laprf_usb, rotorhazard, rotorhazard_usb]
       example: slaprf
 
     TimerRole:

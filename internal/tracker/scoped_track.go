@@ -138,13 +138,13 @@ func (e *Engine) defaultNewTrackGatesLocked() []domain.TrackGate {
 		return e.defaultTrackSliceForModeLocked(true)
 	}
 	// Real hardware mode: auto-bind at most 1 online primary timer as Start/Finish (or empty if disconnected).
-	isBle := domain.NormalizeTimingHardwareMode(e.timingHardwareMode) == domain.HardwareModeSlapRFBLE
+	isPrimaryHub := domain.IsSlapRFPrimaryGateHubMode(e.timingHardwareMode)
 	ids := make([]int, 0, len(e.detected))
 	for id, d := range e.detected {
 		if d == nil || !d.Online {
 			continue
 		}
-		if d.IsHub && !isBle {
+		if d.IsHub && !isPrimaryHub {
 			continue
 		}
 		ids = append(ids, int(id))
@@ -184,7 +184,7 @@ func (e *Engine) defaultNewTrackGatesLocked() []domain.TrackGate {
 func (e *Engine) defaultTrackSliceForModeLocked(isSim bool) []domain.TrackGate {
 	if isSim {
 		switch domain.NormalizeTimingHardwareMode(e.timingHardwareMode) {
-		case domain.HardwareModeSlapRFBLE:
+		case domain.HardwareModeSlapRFBLE, domain.HardwareModeSlapRFNet:
 			gates, _ := defaultSimSlapRFBLELayoutLocked(time.Now())
 			return e.enrichTrackGatesLocked(gates)
 		case domain.HardwareModeLapRF, domain.HardwareModeLapRFUSB:
@@ -197,13 +197,13 @@ func (e *Engine) defaultTrackSliceForModeLocked(isSim bool) []domain.TrackGate {
 			return e.enrichTrackGatesLocked(domain.DefaultTrackGates())
 		}
 	}
-	isBle := domain.NormalizeTimingHardwareMode(e.timingHardwareMode) == domain.HardwareModeSlapRFBLE
+	isPrimaryHub := domain.IsSlapRFPrimaryGateHubMode(e.timingHardwareMode)
 	ids := make([]int, 0, len(e.detected))
 	for id, d := range e.detected {
 		if d == nil {
 			continue
 		}
-		if d.IsHub && !isBle {
+		if d.IsHub && !isPrimaryHub {
 			continue
 		}
 		ids = append(ids, int(id))

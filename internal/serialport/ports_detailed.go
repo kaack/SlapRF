@@ -31,6 +31,8 @@ func listUSBPorts() ([]PortInfo, error) {
 		prod := strings.TrimSpace(d.Product)
 		if isEsp && (prod == "" || strings.HasPrefix(strings.ToLower(prod), "usb serial device") || strings.HasPrefix(strings.ToLower(prod), "usb jtag") || strings.Contains(strings.ToLower(prod), "seeed xiao") || strings.Contains(strings.ToLower(prod), "esp32-c5")) {
 			prod = "ESP32-C5"
+		} else if vid == "1A86" && pid == "55D3" && (prod == "" || strings.EqualFold(prod, "USB Single Serial") || strings.HasPrefix(strings.ToLower(prod), "usb serial")) {
+			prod = "ESP32-P4 PoE Bridge (CH343)"
 		}
 		out = append(out, PortInfo{
 			Name:         d.Name,

@@ -28,6 +28,9 @@ type PersistedEngineState struct {
 	SavedSlapRFBLEGates    []domain.TrackGate          `json:"savedSlapRFBLEGates,omitempty"`
 	SavedSlapRFBLETimers   []domain.DetectedTimer      `json:"savedSlapRFBLETimers,omitempty"`
 	HasSavedSlapRFBLEState bool                        `json:"hasSavedSlapRFBLEState,omitempty"`
+	SavedSlapRFNetGates    []domain.TrackGate          `json:"savedSlapRFNetGates,omitempty"`
+	SavedSlapRFNetTimers   []domain.DetectedTimer      `json:"savedSlapRFNetTimers,omitempty"`
+	HasSavedSlapRFNetState bool                        `json:"hasSavedSlapRFNetState,omitempty"`
 	SavedLapRFGates       []domain.TrackGate          `json:"savedLapRFGates,omitempty"`
 	SavedLapRFTimers      []domain.DetectedTimer      `json:"savedLapRFTimers,omitempty"`
 	HasSavedLapRFState    bool                        `json:"hasSavedLapRFState,omitempty"`
@@ -161,6 +164,9 @@ func (e *Engine) ExportState() PersistedEngineState {
 		SavedSlapRFBLEGates:    append([]domain.TrackGate(nil), e.savedSlapRFBLEGates...),
 		SavedSlapRFBLETimers:   append([]domain.DetectedTimer(nil), e.savedSlapRFBLETimers...),
 		HasSavedSlapRFBLEState: e.hasSavedSlapRFBLEState,
+		SavedSlapRFNetGates:    append([]domain.TrackGate(nil), e.savedSlapRFNetGates...),
+		SavedSlapRFNetTimers:   append([]domain.DetectedTimer(nil), e.savedSlapRFNetTimers...),
+		HasSavedSlapRFNetState: e.hasSavedSlapRFNetState,
 		SavedLapRFGates:        append([]domain.TrackGate(nil), e.savedLapRFGates...),
 		SavedLapRFTimers:       append([]domain.DetectedTimer(nil), e.savedLapRFTimers...),
 		HasSavedLapRFState:     e.hasSavedLapRFState,
@@ -223,6 +229,9 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 	e.savedSlapRFBLEGates = append([]domain.TrackGate(nil), s.SavedSlapRFBLEGates...)
 	e.savedSlapRFBLETimers = append([]domain.DetectedTimer(nil), s.SavedSlapRFBLETimers...)
 	e.hasSavedSlapRFBLEState = s.HasSavedSlapRFBLEState
+	e.savedSlapRFNetGates = append([]domain.TrackGate(nil), s.SavedSlapRFNetGates...)
+	e.savedSlapRFNetTimers = append([]domain.DetectedTimer(nil), s.SavedSlapRFNetTimers...)
+	e.hasSavedSlapRFNetState = s.HasSavedSlapRFNetState
 	e.savedLapRFGates = append([]domain.TrackGate(nil), s.SavedLapRFGates...)
 	e.savedLapRFTimers = append([]domain.DetectedTimer(nil), s.SavedLapRFTimers...)
 	e.hasSavedLapRFState = s.HasSavedLapRFState
@@ -295,7 +304,7 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 
 	if markTimersOnline && len(e.detected) == 0 {
 		switch e.timingHardwareMode {
-		case domain.HardwareModeSlapRFBLE:
+		case domain.HardwareModeSlapRFBLE, domain.HardwareModeSlapRFNet:
 			e.gates, e.detected = defaultSimSlapRFBLELayoutLocked(now)
 			s.Gates = nil
 		case domain.HardwareModeLapRF, domain.HardwareModeLapRFUSB:
@@ -789,7 +798,7 @@ func (e *Engine) ResetTrackToDefault(isSim bool) {
 	e.mu.Lock()
 	if isSim {
 		switch domain.NormalizeTimingHardwareMode(e.timingHardwareMode) {
-		case domain.HardwareModeSlapRFBLE:
+		case domain.HardwareModeSlapRFBLE, domain.HardwareModeSlapRFNet:
 			e.gates, e.detected = defaultSimSlapRFBLELayoutLocked(time.Now())
 		case domain.HardwareModeLapRF, domain.HardwareModeLapRFUSB:
 			e.gates, e.detected = defaultSimLapRFLayoutLocked(time.Now())
@@ -801,11 +810,11 @@ func (e *Engine) ResetTrackToDefault(isSim bool) {
 		}
 	} else {
 		// Real hardware: one gate per Spoke in timer-ID order (the first is start/finish). In USB
-		// mode the Hub is a collector dongle and gets no gate by default; in Bluetooth Hub mode
-		// (`slaprf_ble`) the Hub itself is the single-gate timer.
+		// mode the Hub is a collector dongle and gets no gate by default; in Bluetooth / PoE Hub
+		// mode (`slaprf_ble`, `slaprf_net`) the Hub itself sits at the Start/Finish gate.
 		ids := make([]int, 0, len(e.detected))
 		for id, d := range e.detected {
-			if d.IsHub && domain.NormalizeTimingHardwareMode(e.timingHardwareMode) != domain.HardwareModeSlapRFBLE {
+			if d.IsHub && !domain.IsSlapRFPrimaryGateHubMode(e.timingHardwareMode) {
 				continue
 			}
 			ids = append(ids, int(id))

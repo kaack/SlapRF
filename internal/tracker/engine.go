@@ -96,6 +96,9 @@ type Engine struct {
 	savedSlapRFBLEGates    []domain.TrackGate
 	savedSlapRFBLETimers   []domain.DetectedTimer
 	hasSavedSlapRFBLEState bool
+	savedSlapRFNetGates    []domain.TrackGate
+	savedSlapRFNetTimers   []domain.DetectedTimer
+	hasSavedSlapRFNetState bool
 	savedLapRFGates       []domain.TrackGate
 	savedLapRFTimers      []domain.DetectedTimer
 	hasSavedLapRFState    bool

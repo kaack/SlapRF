@@ -156,6 +156,7 @@ func (m *Manager) connectInternal(slotIndex int, rawTarget string, allowKeyRecov
 	slot.authRejected = false
 	slot.lastError = ""
 	slot.lastStatus = nil
+	slot.lastBridge = nil
 	slot.lastStatusAtMs = 0
 	slot.lastRealJsonStatusMs = 0
 	slot.lastConfig = nil
@@ -860,6 +861,7 @@ func (m *Manager) runSlotLoops(ctx context.Context, slot *connSlot, port firmwar
 			slot.port = nil
 			slot.probing = false
 			slot.lastStatus = nil
+			slot.lastBridge = nil
 			slot.lastConfig = nil
 			if authRej {
 				slot.portName = ""
@@ -1543,6 +1545,12 @@ func (m *Manager) synthesizeHubStatusLocked(slot *connSlot, nowMs int64) map[str
 			st[k] = v
 		}
 	}
+	if slot.lastBridge != nil {
+		st["transport"] = "eth"
+		if ethMap, ok := slot.lastBridge["eth"]; ok {
+			st["eth"] = ethMap
+		}
+	}
 	slot.probing = false
 	slot.lastStatus = st
 	slot.lastStatusAtMs = nowMs
@@ -1601,6 +1609,36 @@ func (m *Manager) emitTextLine(slot *connSlot, raw []byte) {
 			}
 			m.resolveWaiters(slot, tStr, msg)
 			switch tStr {
+			case "bridge":
+				const noUsbMsg = "PoE Bridge online · Plug a XIAO ESP32-C5 Hub into the USB-A port"
+				usbConn, hasUsbField := msg["usbConnected"].(bool)
+				var emitSt map[string]any
+				slot.mu.Lock()
+				slot.lastBridge = msg
+				if hasUsbField && !usbConn {
+					slot.probing = false
+					slot.lastStatus = nil
+					slot.lastError = noUsbMsg
+				} else if slot.lastError == noUsbMsg {
+					slot.lastError = ""
+				}
+				if slot.lastStatus != nil {
+					slot.lastStatus["transport"] = "eth"
+					if ethMap, ok := msg["eth"]; ok {
+						slot.lastStatus["eth"] = ethMap
+					}
+					emitSt = make(map[string]any, len(slot.lastStatus))
+					for k, v := range slot.lastStatus {
+						emitSt[k] = v
+					}
+				}
+				slot.mu.Unlock()
+				m.emit(Event{Type: "bridge", SlotIndex: slot.index, Payload: msg})
+				if emitSt != nil {
+					m.emit(Event{Type: "status", SlotIndex: slot.index, Status: emitSt})
+				}
+				m.broadcastPoolState()
+				return
 			case "status":
 				nowMs := time.Now().UnixMilli()
 				fpStr, _ := msg["fp"].(string)
@@ -1610,6 +1648,21 @@ func (m *Manager) emitTextLine(slot *connSlot, raw []byte) {
 				}
 				slot.mu.Lock()
 				slot.probing = false
+				if strings.HasPrefix(slot.lastError, "PoE Bridge online") {
+					slot.lastError = ""
+				}
+				if slot.lastBridge != nil {
+					msg["transport"] = "eth"
+					if ethMap, ok := slot.lastBridge["eth"]; ok {
+						msg["eth"] = ethMap
+					}
+				} else if m.traits.SynthesizedStatusExtras != nil {
+					for k, v := range m.traits.SynthesizedStatusExtras(slot.lastStatus) {
+						if _, exists := msg[k]; !exists {
+							msg[k] = v
+						}
+					}
+				}
 				slot.lastStatus = msg
 				slot.lastStatusAtMs = nowMs
 				slot.lastRealJsonStatusMs = nowMs

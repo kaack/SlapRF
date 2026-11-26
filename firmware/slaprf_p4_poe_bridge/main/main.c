@@ -1,17 +1,19 @@
 /*
- * SlapRF PoE Ethernet <-> USB Host Bridge Firmware
+ * Generic PoE Ethernet <-> USB Serial/JTAG Bridge Firmware
  * Target: Waveshare ESP32-P4-POE-ETH / ESP32-P4-WIFI6-POE-ETH (ESP32-P4 + IP101GRI RMII + USB 2.0 Host)
  *
- * Architecture:
- *  - Drives GPIO54 (C6_RST) LOW at boot so any onboard ESP32-C6 co-processor remains powered off
- *    in reset (~0 mA, zero 2.4 GHz RF noise near the Seeed Studio XIAO ESP32-C5 Hub's ESP-NOW radio).
+ * Design:
+ *  - Pure, protocol-agnostic raw TCP <-> USB CDC-ACM / USB-Serial-JTAG bridge on TCP port 5480:
+ *      * Every byte received on TCP :5480 is transmitted verbatim to the attached USB serial device.
+ *      * Every byte received from the attached USB serial device is streamed verbatim to TCP :5480
+ *        with TCP_NODELAY=1 (<0.5 ms latency) and zero protocol inspection or injected bytes.
+ *      * Works with Seeed Studio XIAO ESP32-C5 (USB-Serial-JTAG), ESP32-S3/C6, STM32/RP2040 CDC-ACM,
+ *        LapRF USB, RotorHazard USB nodes, or any bulk-endpoint USB serial adapter.
+ *  - Holds GPIO54 (C6_RST) LOW at boot so any onboard ESP32-C6 co-processor stays powered off in reset.
  *  - Brings up 100 Mbps RMII Ethernet (IP101GRI) with DHCP + RFC 3927 AutoIP (169.254.x.x) fallback
- *    plus optional persistent static IP configuration in NVS (`NETCFG STATIC <ip> <mask> <gw>`).
- *  - Supervises USB Type-A Host CDC-ACM (`0x303A:0x1001` XIAO ESP32-C5) with live hot-plug/replug
- *    and automatic DTR/RTS recovery if a XIAO C5 boots latched in ROM download mode.
- *  - Serves `UDP :5480` (`SLAPRF_DISCOVER?` broadcast & unicast responder) and `TCP :5480`
- *    (`TCP_NODELAY=1`, transparent <0.5 ms ring-buffer bridge preserving 100 Hz `0x1E`+`0xC5` Hub
- *    + Spoke binary telemetry frames, `SLAPRF02` readouts, and `@JSON` console commands).
+ *    plus optional persistent static IP configuration via local UART0 (`NETCFG STATIC <ip> <mask> <gw>`).
+ *  - Out-of-band UDP :5480 discovery responder (`DISCOVER?` / `SLAPRF_DISCOVER?`) reports IP, MAC,
+ *    Ethernet link speed, and attached USB VID:PID without touching the serial byte stream.
  */
 
 #include <ctype.h>
@@ -44,7 +46,8 @@
 #include "usb/usb_host.h"
 
 #define BRIDGE_FW_VERSION       "0.1.0"
-#define SLAPRF_NET_PORT         5480
+#define BRIDGE_TCP_PORT         5480
+#define DEFAULT_USB_BAUD        115200
 
 /* Waveshare ESP32-P4-(WIFI6-)POE-ETH hardware pin map */
 #define P4_C6_RST_GPIO          54
@@ -59,21 +62,17 @@
 #define P4_ETH_RXD0_GPIO        29
 #define P4_ETH_RXD1_GPIO        30
 
-/* Seeed Studio XIAO ESP32-C5 built-in USB-Serial-JTAG VID/PID */
-#define XIAO_ESP32C5_VID        0x303A
-#define XIAO_ESP32C5_PID        0x1001
-
 #define USB_RX_RING_SIZE        65536
-#define PASSIVE_LINE_MAX        1536
 
-static const char *TAG = "slaprf_poe";
+static const char *TAG = "usb_eth_bridge";
 
 typedef struct {
     bool static_ip;
     char ip[16];
     char netmask[16];
     char gateway[16];
-} net_cfg_t;
+    uint32_t baud_rate;
+} bridge_cfg_t;
 
 typedef struct {
     bool eth_link_up;
@@ -86,18 +85,13 @@ typedef struct {
     bool using_static_ip;
 
     bool usb_connected;
+    uint16_t last_seen_vid;
+    uint16_t last_seen_pid;
     uint16_t usb_vid;
     uint16_t usb_pid;
+    uint32_t usb_baud;
     uint64_t usb_rx_bytes;
     uint64_t usb_tx_bytes;
-    uint64_t last_status_us;
-
-    /* Cached XIAO ESP32-C5 identity parsed passively from @{"t":"status",...} */
-    char timer_fp[16];
-    char timer_label[32];
-    char timer_fw[24];
-    int timer_role;
-    int timer_sweep_hz;
 } bridge_state_t;
 
 static SemaphoreHandle_t g_state_mu = NULL;
@@ -106,7 +100,7 @@ static SemaphoreHandle_t g_usb_disc_sem = NULL;
 static SemaphoreHandle_t g_ring_mu = NULL;
 
 static bridge_state_t g_state;
-static net_cfg_t g_net_cfg;
+static bridge_cfg_t g_cfg;
 static esp_netif_t *g_eth_netif = NULL;
 static cdc_acm_dev_hdl_t g_cdc_dev = NULL;
 
@@ -117,12 +111,6 @@ static uint8_t g_rx_ring[USB_RX_RING_SIZE];
 static size_t g_rx_head = 0;
 static size_t g_rx_tail = 0;
 static size_t g_rx_count = 0;
-
-/* Passive stream parser state (skips 0x1E <len> binary frames cleanly) */
-static int g_bin_skip_rem = -1; /* -1 = normal, -2 = awaiting len byte after 0x1E, >0 = payload bytes left */
-static char g_line_buf[PASSIVE_LINE_MAX];
-static size_t g_line_len = 0;
-static volatile bool g_saw_rom_download_banner = false;
 
 static void hold_onboard_c6_in_reset(void)
 {
@@ -136,6 +124,8 @@ static void hold_onboard_c6_in_reset(void)
     gpio_config(&io_conf);
     gpio_set_level(P4_C6_RST_GPIO, 0);
 }
+
+/* ---- Lock-protected ring buffer: USB RX -> TCP TX ------------------------------------------ */
 
 static void ring_push_bytes(const uint8_t *data, size_t len)
 {
@@ -205,165 +195,7 @@ static void ring_clear(void)
     xSemaphoreGive(g_ring_mu);
 }
 
-static bool extract_json_string(const char *json, const char *key, char *out, size_t out_sz)
-{
-    char pat[40];
-    snprintf(pat, sizeof(pat), "\"%s\":\"", key);
-    const char *p = strstr(json, pat);
-    if (!p) {
-        return false;
-    }
-    p += strlen(pat);
-    size_t i = 0;
-    while (*p && *p != '"' && i + 1 < out_sz) {
-        if (*p == '\\' && p[1] != '\0') {
-            p++;
-        }
-        out[i++] = *p++;
-    }
-    out[i] = '\0';
-    return i > 0;
-}
-
-static bool extract_json_int(const char *json, const char *key, int *out_val)
-{
-    char pat[40];
-    snprintf(pat, sizeof(pat), "\"%s\":", key);
-    const char *p = strstr(json, pat);
-    if (!p) {
-        return false;
-    }
-    p += strlen(pat);
-    while (*p == ' ') {
-        p++;
-    }
-    if (*p != '-' && !isdigit((unsigned char)*p)) {
-        return false;
-    }
-    *out_val = atoi(p);
-    return true;
-}
-
-static void update_netif_hostname_from_label(const char *label)
-{
-    if (!g_eth_netif || !label || !label[0]) {
-        return;
-    }
-    char host[40] = "slaprf-";
-    size_t pos = strlen(host);
-    for (size_t i = 0; label[i] != '\0' && pos + 1 < sizeof(host); i++) {
-        unsigned char c = (unsigned char)label[i];
-        if (isalnum(c)) {
-            host[pos++] = (char)tolower(c);
-        } else if (c == '-' || c == '_') {
-            host[pos++] = '-';
-        }
-    }
-    host[pos] = '\0';
-    if (pos > strlen("slaprf-")) {
-        esp_netif_set_hostname(g_eth_netif, host);
-    }
-}
-
-static void inspect_console_line(const char *line)
-{
-    if (strstr(line, "waiting for download") != NULL) {
-        g_saw_rom_download_banner = true;
-        return;
-    }
-    if (line[0] != '@' || line[1] != '{') {
-        return;
-    }
-    if (strstr(line, "\"t\":\"status\"") == NULL) {
-        return;
-    }
-
-    char fp[16] = {0};
-    char label[32] = {0};
-    char fw[24] = {0};
-    int role = 0;
-    int sweep_hz = 0;
-
-    bool has_fp = extract_json_string(line, "fp", fp, sizeof(fp));
-    bool has_label = extract_json_string(line, "label", label, sizeof(label));
-    bool has_fw = extract_json_string(line, "fw", fw, sizeof(fw));
-    bool has_role = extract_json_int(line, "role", &role);
-    bool has_sweep = extract_json_int(line, "sweepHz", &sweep_hz);
-
-    bool label_changed = false;
-    bool first_status = false;
-    xSemaphoreTake(g_state_mu, portMAX_DELAY);
-    if (g_state.last_status_us == 0) {
-        first_status = true;
-    }
-    g_state.last_status_us = (uint64_t)esp_timer_get_time();
-    if (has_fp) {
-        snprintf(g_state.timer_fp, sizeof(g_state.timer_fp), "%s", fp);
-    }
-    if (has_label) {
-        if (strcmp(g_state.timer_label, label) != 0) {
-            label_changed = true;
-        }
-        snprintf(g_state.timer_label, sizeof(g_state.timer_label), "%s", label);
-    }
-    if (has_fw) {
-        snprintf(g_state.timer_fw, sizeof(g_state.timer_fw), "%s", fw);
-    }
-    if (has_role) {
-        g_state.timer_role = role;
-    }
-    if (has_sweep) {
-        g_state.timer_sweep_hz = sweep_hz;
-    }
-    xSemaphoreGive(g_state_mu);
-
-    if (label_changed) {
-        update_netif_hostname_from_label(label);
-    }
-    if (first_status || label_changed) {
-        ESP_LOGI(TAG, "Detected SlapRF timer on USB-A: label=%s fp=%s fw=%s role=%d sweepHz=%d", label, fp, fw, role, sweep_hz);
-    }
-}
-
-static void passive_parse_xiao_bytes(const uint8_t *data, size_t len)
-{
-    for (size_t i = 0; i < len; i++) {
-        uint8_t b = data[i];
-        if (g_bin_skip_rem == -2) {
-            if (b > 0 && b <= 96) {
-                g_bin_skip_rem = (int)b;
-            } else {
-                g_bin_skip_rem = -1;
-            }
-            continue;
-        }
-        if (g_bin_skip_rem > 0) {
-            g_bin_skip_rem--;
-            if (g_bin_skip_rem == 0) {
-                g_bin_skip_rem = -1;
-            }
-            continue;
-        }
-        if (b == 0x1E) {
-            g_bin_skip_rem = -2;
-            continue;
-        }
-        if (b == '\r') {
-            continue;
-        }
-        if (b == '\n') {
-            if (g_line_len > 0) {
-                g_line_buf[g_line_len] = '\0';
-                inspect_console_line(g_line_buf);
-                g_line_len = 0;
-            }
-            continue;
-        }
-        if (g_line_len + 1 < sizeof(g_line_buf)) {
-            g_line_buf[g_line_len++] = (char)b;
-        }
-    }
-}
+/* ---- Out-of-band status JSON (for UDP :5480 discovery & UART0 console only) ----------------- */
 
 static size_t format_bridge_json(char *buf, size_t buf_sz, bool as_at_line)
 {
@@ -376,42 +208,28 @@ static size_t format_bridge_json(char *buf, size_t buf_sz, bool as_at_line)
     int n = snprintf(
         buf,
         buf_sz,
-        "%s{\"t\":\"bridge\",\"proto\":\"slaprf-eth\",\"ver\":2,"
+        "%s{\"t\":\"bridge\",\"proto\":\"usb-serial-eth\",\"ver\":1,"
         "\"board\":\"ESP32-P4-POE-ETH\",\"bridgeFw\":\"%s\",\"port\":%d,\"upMs\":%" PRIu64 ","
-        "\"usbConnected\":%s,\"fp\":\"%s\",\"label\":\"%s\",\"fw\":\"%s\",\"role\":%d,\"sweepHz\":%d,"
-        "\"ip\":\"%s\",\"mac\":\"%s\",\"linkUp\":%s,\"linkSpeedMbps\":%d,\"fullDuplex\":%s,\"dhcp\":%s,"
-        "\"eth\":{\"linkUp\":%s,\"ip\":\"%s\",\"netmask\":\"%s\",\"gateway\":\"%s\",\"mac\":\"%s\","
-        "\"linkSpeedMbps\":%d,\"fullDuplex\":%s,\"dhcp\":%s,\"bridgeFw\":\"%s\",\"usbConnected\":%s},"
-        "\"usb\":{\"connected\":%s,\"vid\":\"%04X\",\"pid\":\"%04X\",\"rxBytes\":%" PRIu64 ",\"txBytes\":%" PRIu64 "}}%s",
+        "\"usbConnected\":%s,\"usbVid\":\"%04X\",\"usbPid\":\"%04X\",\"baud\":%" PRIu32 ","
+        "\"ip\":\"%s\",\"netmask\":\"%s\",\"gateway\":\"%s\",\"mac\":\"%s\","
+        "\"linkUp\":%s,\"linkSpeedMbps\":%d,\"fullDuplex\":%s,\"dhcp\":%s,"
+        "\"rxBytes\":%" PRIu64 ",\"txBytes\":%" PRIu64 "}%s",
         as_at_line ? "@" : "",
         BRIDGE_FW_VERSION,
-        SLAPRF_NET_PORT,
+        BRIDGE_TCP_PORT,
         up_ms,
         snap.usb_connected ? "true" : "false",
-        snap.timer_fp,
-        snap.timer_label[0] ? snap.timer_label : "H1",
-        snap.timer_fw,
-        snap.timer_role > 0 ? snap.timer_role : 1,
-        snap.timer_sweep_hz > 0 ? snap.timer_sweep_hz : 100,
-        snap.ip_str,
-        snap.mac_str,
-        snap.eth_link_up ? "true" : "false",
-        snap.link_speed_mbps,
-        snap.full_duplex ? "true" : "false",
-        snap.using_static_ip ? "false" : "true",
-        snap.eth_link_up ? "true" : "false",
+        snap.usb_vid,
+        snap.usb_pid,
+        snap.usb_baud,
         snap.ip_str,
         snap.netmask_str,
         snap.gw_str,
         snap.mac_str,
+        snap.eth_link_up ? "true" : "false",
         snap.link_speed_mbps,
         snap.full_duplex ? "true" : "false",
         snap.using_static_ip ? "false" : "true",
-        BRIDGE_FW_VERSION,
-        snap.usb_connected ? "true" : "false",
-        snap.usb_connected ? "true" : "false",
-        snap.usb_vid,
-        snap.usb_pid,
         snap.usb_rx_bytes,
         snap.usb_tx_bytes,
         as_at_line ? "\n" : ""
@@ -422,19 +240,21 @@ static size_t format_bridge_json(char *buf, size_t buf_sz, bool as_at_line)
     return (size_t)n < buf_sz ? (size_t)n : (buf_sz - 1);
 }
 
-static void push_bridge_line_to_tcp(void)
+/* ---- Generic USB Host CDC-ACM / USB-Serial-JTAG Pump --------------------------------------- */
+
+static void usb_new_dev_cb(usb_device_handle_t usb_dev)
 {
-    if (g_tcp_client_fd < 0) {
-        return;
-    }
-    char line[768];
-    size_t n = format_bridge_json(line, sizeof(line), true);
-    if (n > 0) {
-        ring_push_bytes((const uint8_t *)line, n);
+    const usb_device_desc_t *desc = NULL;
+    if (usb_host_get_device_descriptor(usb_dev, &desc) == ESP_OK && desc != NULL) {
+        xSemaphoreTake(g_state_mu, portMAX_DELAY);
+        g_state.last_seen_vid = desc->idVendor;
+        g_state.last_seen_pid = desc->idProduct;
+        xSemaphoreGive(g_state_mu);
+        ESP_LOGI(TAG, "USB device enumerated on Type-A port: VID=%04X PID=%04X", desc->idVendor, desc->idProduct);
     }
 }
 
-static esp_err_t cdc_send_bytes(const uint8_t *data, size_t len, uint32_t timeout_ms)
+static esp_err_t cdc_send_bytes_raw(const uint8_t *data, size_t len)
 {
     if (len == 0) {
         return ESP_OK;
@@ -443,10 +263,22 @@ static esp_err_t cdc_send_bytes(const uint8_t *data, size_t len, uint32_t timeou
     cdc_acm_dev_hdl_t hdl = g_cdc_dev;
     esp_err_t err = ESP_ERR_INVALID_STATE;
     if (hdl != NULL) {
-        err = cdc_acm_host_data_tx_blocking(hdl, data, len, timeout_ms);
-        if (err == ESP_OK) {
+        size_t off = 0;
+        err = ESP_OK;
+        while (off < len) {
+            size_t chunk = len - off;
+            if (chunk > 1024) {
+                chunk = 1024;
+            }
+            err = cdc_acm_host_data_tx_blocking(hdl, data + off, chunk, 500);
+            if (err != ESP_OK) {
+                break;
+            }
+            off += chunk;
+        }
+        if (off > 0) {
             xSemaphoreTake(g_state_mu, portMAX_DELAY);
-            g_state.usb_tx_bytes += len;
+            g_state.usb_tx_bytes += off;
             xSemaphoreGive(g_state_mu);
         }
     }
@@ -464,8 +296,8 @@ static bool cdc_rx_callback(const uint8_t *data, size_t data_len, void *arg)
     g_state.usb_rx_bytes += data_len;
     xSemaphoreGive(g_state_mu);
 
+    /* Forward raw USB RX bytes verbatim into the TCP TX ring buffer */
     ring_push_bytes(data, data_len);
-    passive_parse_xiao_bytes(data, data_len);
     return true;
 }
 
@@ -477,10 +309,10 @@ static void cdc_event_callback(const cdc_acm_host_dev_event_data_t *event, void 
     }
     switch (event->type) {
     case CDC_ACM_HOST_ERROR:
-        ESP_LOGW(TAG, "CDC-ACM host error=%d", event->data.error);
+        ESP_LOGW(TAG, "USB CDC error=%d", event->data.error);
         break;
     case CDC_ACM_HOST_DEVICE_DISCONNECTED:
-        ESP_LOGI(TAG, "USB timer disconnected from Type-A port");
+        ESP_LOGI(TAG, "USB serial device disconnected from Type-A port");
         xSemaphoreTake(g_cdc_tx_mu, portMAX_DELAY);
         g_cdc_dev = NULL;
         xSemaphoreGive(g_cdc_tx_mu);
@@ -494,28 +326,11 @@ static void cdc_event_callback(const cdc_acm_host_dev_event_data_t *event, void 
         if (event->data.cdc_hdl != NULL) {
             cdc_acm_host_close(event->data.cdc_hdl);
         }
-        push_bridge_line_to_tcp();
         xSemaphoreGive(g_usb_disc_sem);
         break;
     default:
         break;
     }
-}
-
-/* Matches internal/firmware/readout.go RebootESP32C5IntoApp so a XIAO C5 latched in ROM download
- * mode (`waiting for download`) resets cleanly into normal application firmware. */
-static void reboot_esp32c5_into_app(cdc_acm_dev_hdl_t hdl)
-{
-    ESP_LOGW(TAG, "Recovering XIAO ESP32-C5 from ROM bootloader latch via DTR/RTS pulse");
-    cdc_acm_host_set_control_line_state(hdl, false, false);
-    vTaskDelay(pdMS_TO_TICKS(25));
-    cdc_acm_host_set_control_line_state(hdl, true, true);
-    vTaskDelay(pdMS_TO_TICKS(30));
-    cdc_acm_host_set_control_line_state(hdl, false, true);
-    vTaskDelay(pdMS_TO_TICKS(100));
-    cdc_acm_host_set_control_line_state(hdl, false, false);
-    vTaskDelay(pdMS_TO_TICKS(60));
-    cdc_acm_host_set_control_line_state(hdl, true, false);
 }
 
 static void usb_lib_task(void *arg)
@@ -544,16 +359,16 @@ static void usb_cdc_supervisor_task(void *arg)
 
     while (true) {
         cdc_acm_dev_hdl_t hdl = NULL;
-        uint16_t opened_vid = XIAO_ESP32C5_VID;
-        uint16_t opened_pid = XIAO_ESP32C5_PID;
+        esp_err_t err = ESP_ERR_NOT_FOUND;
 
-        esp_err_t err = cdc_acm_host_open(XIAO_ESP32C5_VID, XIAO_ESP32C5_PID, 0, &dev_cfg, &hdl);
-        if (err != ESP_OK) {
-            cdc_acm_host_device_config_t any_cfg = dev_cfg;
-            any_cfg.connection_timeout_ms = 500;
-            err = cdc_acm_host_open(CDC_HOST_ANY_VID, CDC_HOST_ANY_PID, 0, &any_cfg, &hdl);
-            opened_vid = 0;
-            opened_pid = 0;
+        /* Try interface 0 first (standard CDC-ACM & ESP32 USB-Serial-JTAG), then 1 & 2 for composite devices */
+        for (uint8_t iface = 0; iface <= 2; iface++) {
+            cdc_acm_host_device_config_t try_cfg = dev_cfg;
+            try_cfg.connection_timeout_ms = (iface == 0) ? 1000 : 150;
+            err = cdc_acm_host_open(CDC_HOST_ANY_VID, CDC_HOST_ANY_PID, iface, &try_cfg, &hdl);
+            if (err == ESP_OK && hdl != NULL) {
+                break;
+            }
         }
         if (err != ESP_OK || hdl == NULL) {
             vTaskDelay(pdMS_TO_TICKS(250));
@@ -561,16 +376,15 @@ static void usb_cdc_supervisor_task(void *arg)
         }
 
         xSemaphoreTake(g_usb_disc_sem, 0);
-        g_bin_skip_rem = -1;
-        g_line_len = 0;
-        g_saw_rom_download_banner = false;
 
+        uint32_t baud = g_cfg.baud_rate > 0 ? g_cfg.baud_rate : DEFAULT_USB_BAUD;
         cdc_acm_line_coding_t coding = {
-            .dwDTERate = 115200,
+            .dwDTERate = baud,
             .bCharFormat = 0,
             .bParityType = 0,
             .bDataBits = 8,
         };
+        /* Best-effort line coding + DTR=1, RTS=0 (ignored cleanly if device does not implement PSTN control) */
         cdc_acm_host_line_coding_set(hdl, &coding);
         cdc_acm_host_set_control_line_state(hdl, true, false);
 
@@ -578,72 +392,52 @@ static void usb_cdc_supervisor_task(void *arg)
         g_cdc_dev = hdl;
         xSemaphoreGive(g_cdc_tx_mu);
 
-        uint64_t attach_us = (uint64_t)esp_timer_get_time();
+        uint16_t vid = 0, pid = 0;
         xSemaphoreTake(g_state_mu, portMAX_DELAY);
         g_state.usb_connected = true;
-        g_state.usb_vid = opened_vid;
-        g_state.usb_pid = opened_pid;
+        g_state.usb_vid = g_state.last_seen_vid;
+        g_state.usb_pid = g_state.last_seen_pid;
+        g_state.usb_baud = baud;
+        vid = g_state.usb_vid;
+        pid = g_state.usb_pid;
         xSemaphoreGive(g_state_mu);
 
-        ESP_LOGI(TAG, "USB CDC timer attached on Type-A Host port (VID=%04X PID=%04X)", opened_vid, opened_pid);
-        push_bridge_line_to_tcp();
+        ESP_LOGI(TAG, "Bridging USB serial device (VID=%04X PID=%04X @ %" PRIu32 " baud) <-> TCP :%d", vid, pid, baud, BRIDGE_TCP_PORT);
 
-        vTaskDelay(pdMS_TO_TICKS(60));
-        const char *probe = "\nSTATUS?\n";
-        cdc_send_bytes((const uint8_t *)probe, strlen(probe), 250);
-
-        vTaskDelay(pdMS_TO_TICKS(650));
-        bool got_status = false;
-        bool still_connected = false;
-        xSemaphoreTake(g_state_mu, portMAX_DELAY);
-        still_connected = g_state.usb_connected;
-        got_status = (g_state.last_status_us >= attach_us);
-        xSemaphoreGive(g_state_mu);
-
-        if (still_connected && (!got_status || g_saw_rom_download_banner)) {
-            xSemaphoreTake(g_cdc_tx_mu, portMAX_DELAY);
-            if (g_cdc_dev == hdl) {
-                reboot_esp32c5_into_app(hdl);
-            }
-            xSemaphoreGive(g_cdc_tx_mu);
-            vTaskDelay(pdMS_TO_TICKS(500));
-            cdc_send_bytes((const uint8_t *)probe, strlen(probe), 250);
-        }
-
-        /* Block until CDC_ACM_HOST_DEVICE_DISCONNECTED fires, periodically refreshing cached
-         * identity when no TCP host is actively polling STATUS?. */
-        while (xSemaphoreTake(g_usb_disc_sem, pdMS_TO_TICKS(5000)) != pdTRUE) {
-            if (g_tcp_client_fd < 0) {
-                const char *bg_probe = "STATUS?\n";
-                cdc_send_bytes((const uint8_t *)bg_probe, strlen(bg_probe), 200);
-            }
-        }
+        /* Wait until USB device is unplugged */
+        xSemaphoreTake(g_usb_disc_sem, portMAX_DELAY);
     }
 }
 
-/* ---- NVS Static IP / DHCP configuration (`NETCFG`) ------------------------------------------ */
+/* ---- NVS Network / Baud Configuration (UART0 local management only) ------------------------ */
 
-static void load_net_cfg(void)
+static void load_bridge_cfg(void)
 {
-    memset(&g_net_cfg, 0, sizeof(g_net_cfg));
+    memset(&g_cfg, 0, sizeof(g_cfg));
+    g_cfg.baud_rate = DEFAULT_USB_BAUD;
+
     nvs_handle_t h;
-    if (nvs_open("slaprf_net", NVS_READONLY, &h) != ESP_OK) {
+    if (nvs_open("poe_bridge", NVS_READONLY, &h) != ESP_OK) {
         return;
+    }
+    uint32_t baud = 0;
+    if (nvs_get_u32(h, "baud", &baud) == ESP_OK && baud >= 1200 && baud <= 4000000) {
+        g_cfg.baud_rate = baud;
     }
     uint8_t is_static = 0;
     size_t sz = 0;
     if (nvs_get_u8(h, "static", &is_static) == ESP_OK && is_static == 1) {
-        sz = sizeof(g_net_cfg.ip);
-        if (nvs_get_str(h, "ip", g_net_cfg.ip, &sz) == ESP_OK) {
-            sz = sizeof(g_net_cfg.netmask);
-            if (nvs_get_str(h, "mask", g_net_cfg.netmask, &sz) != ESP_OK) {
-                snprintf(g_net_cfg.netmask, sizeof(g_net_cfg.netmask), "255.255.255.0");
+        sz = sizeof(g_cfg.ip);
+        if (nvs_get_str(h, "ip", g_cfg.ip, &sz) == ESP_OK) {
+            sz = sizeof(g_cfg.netmask);
+            if (nvs_get_str(h, "mask", g_cfg.netmask, &sz) != ESP_OK) {
+                snprintf(g_cfg.netmask, sizeof(g_cfg.netmask), "255.255.255.0");
             }
-            sz = sizeof(g_net_cfg.gateway);
-            if (nvs_get_str(h, "gw", g_net_cfg.gateway, &sz) != ESP_OK) {
-                snprintf(g_net_cfg.gateway, sizeof(g_net_cfg.gateway), "0.0.0.0");
+            sz = sizeof(g_cfg.gateway);
+            if (nvs_get_str(h, "gw", g_cfg.gateway, &sz) != ESP_OK) {
+                snprintf(g_cfg.gateway, sizeof(g_cfg.gateway), "0.0.0.0");
             }
-            g_net_cfg.static_ip = true;
+            g_cfg.static_ip = true;
         }
     }
     nvs_close(h);
@@ -654,7 +448,7 @@ static esp_err_t apply_net_cfg_to_netif(void)
     if (!g_eth_netif) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (!g_net_cfg.static_ip) {
+    if (!g_cfg.static_ip) {
         esp_netif_dhcpc_start(g_eth_netif);
         xSemaphoreTake(g_state_mu, portMAX_DELAY);
         g_state.using_static_ip = false;
@@ -664,9 +458,9 @@ static esp_err_t apply_net_cfg_to_netif(void)
 
     esp_netif_ip_info_t info;
     memset(&info, 0, sizeof(info));
-    info.ip.addr = esp_ip4addr_aton(g_net_cfg.ip);
-    info.netmask.addr = esp_ip4addr_aton(g_net_cfg.netmask);
-    info.gw.addr = esp_ip4addr_aton(g_net_cfg.gateway);
+    info.ip.addr = esp_ip4addr_aton(g_cfg.ip);
+    info.netmask.addr = esp_ip4addr_aton(g_cfg.netmask);
+    info.gw.addr = esp_ip4addr_aton(g_cfg.gateway);
     if (info.ip.addr == IPADDR_NONE || info.ip.addr == 0 || info.netmask.addr == IPADDR_NONE || info.netmask.addr == 0) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -675,9 +469,9 @@ static esp_err_t apply_net_cfg_to_netif(void)
     if (err == ESP_OK) {
         xSemaphoreTake(g_state_mu, portMAX_DELAY);
         g_state.using_static_ip = true;
-        snprintf(g_state.ip_str, sizeof(g_state.ip_str), "%s", g_net_cfg.ip);
-        snprintf(g_state.netmask_str, sizeof(g_state.netmask_str), "%s", g_net_cfg.netmask);
-        snprintf(g_state.gw_str, sizeof(g_state.gw_str), "%s", g_net_cfg.gateway);
+        snprintf(g_state.ip_str, sizeof(g_state.ip_str), "%s", g_cfg.ip);
+        snprintf(g_state.netmask_str, sizeof(g_state.netmask_str), "%s", g_cfg.netmask);
+        snprintf(g_state.gw_str, sizeof(g_state.gw_str), "%s", g_cfg.gateway);
         xSemaphoreGive(g_state_mu);
     }
     return err;
@@ -694,7 +488,7 @@ static bool save_and_apply_net_cfg(bool is_static, const char *ip, const char *m
         }
     }
     nvs_handle_t h;
-    if (nvs_open("slaprf_net", NVS_READWRITE, &h) != ESP_OK) {
+    if (nvs_open("poe_bridge", NVS_READWRITE, &h) != ESP_OK) {
         return false;
     }
     nvs_set_u8(h, "static", is_static ? 1 : 0);
@@ -702,60 +496,48 @@ static bool save_and_apply_net_cfg(bool is_static, const char *ip, const char *m
         nvs_set_str(h, "ip", ip);
         nvs_set_str(h, "mask", mask);
         nvs_set_str(h, "gw", gw);
-        g_net_cfg.static_ip = true;
-        snprintf(g_net_cfg.ip, sizeof(g_net_cfg.ip), "%s", ip);
-        snprintf(g_net_cfg.netmask, sizeof(g_net_cfg.netmask), "%s", mask);
-        snprintf(g_net_cfg.gateway, sizeof(g_net_cfg.gateway), "%s", gw);
+        g_cfg.static_ip = true;
+        snprintf(g_cfg.ip, sizeof(g_cfg.ip), "%s", ip);
+        snprintf(g_cfg.netmask, sizeof(g_cfg.netmask), "%s", mask);
+        snprintf(g_cfg.gateway, sizeof(g_cfg.gateway), "%s", gw);
     } else {
-        g_net_cfg.static_ip = false;
+        g_cfg.static_ip = false;
     }
     nvs_commit(h);
     nvs_close(h);
     return apply_net_cfg_to_netif() == ESP_OK;
 }
 
-/* Handles bridge-local commands (`BRIDGE?`, `NETCFG...`, `P4REBOOT`). Returns true if consumed
- * locally (not forwarded to XIAO C5), or false if the line belongs to the XIAO C5 console. */
-static bool handle_local_bridge_cmd(const char *cmd_line, char *reply, size_t reply_sz, bool is_uart0)
+static bool save_and_apply_baud(uint32_t baud)
 {
-    while (*cmd_line == ' ' || *cmd_line == '\t') {
-        cmd_line++;
+    if (baud < 1200 || baud > 4000000) {
+        return false;
     }
-    if (strcasecmp(cmd_line, "BRIDGE?") == 0 || (is_uart0 && strcasecmp(cmd_line, "STATUS?") == 0)) {
-        format_bridge_json(reply, reply_sz, true);
-        return true;
+    nvs_handle_t h;
+    if (nvs_open("poe_bridge", NVS_READWRITE, &h) != ESP_OK) {
+        return false;
     }
-    if (strcasecmp(cmd_line, "NETCFG?") == 0) {
-        format_bridge_json(reply, reply_sz, true);
-        return true;
+    nvs_set_u32(h, "baud", baud);
+    nvs_commit(h);
+    nvs_close(h);
+    g_cfg.baud_rate = baud;
+
+    xSemaphoreTake(g_cdc_tx_mu, portMAX_DELAY);
+    if (g_cdc_dev != NULL) {
+        cdc_acm_line_coding_t coding = {
+            .dwDTERate = baud,
+            .bCharFormat = 0,
+            .bParityType = 0,
+            .bDataBits = 8,
+        };
+        cdc_acm_host_line_coding_set(g_cdc_dev, &coding);
     }
-    if (strcasecmp(cmd_line, "NETCFG DHCP") == 0) {
-        bool ok = save_and_apply_net_cfg(false, "", "", "");
-        snprintf(reply, reply_sz, "@{\"t\":\"netcfg\",\"ok\":%s,\"mode\":\"dhcp\"}\n", ok ? "true" : "false");
-        return true;
-    }
-    if (strncasecmp(cmd_line, "NETCFG STATIC ", 14) == 0) {
-        char ip[20] = {0}, mask[20] = {0}, gw[20] = "0.0.0.0";
-        int parts = sscanf(cmd_line + 14, "%19s %19s %19s", ip, mask, gw);
-        bool ok = (parts >= 2) && save_and_apply_net_cfg(true, ip, mask, gw);
-        snprintf(
-            reply,
-            reply_sz,
-            "@{\"t\":\"netcfg\",\"ok\":%s,\"mode\":\"static\",\"ip\":\"%s\",\"netmask\":\"%s\",\"gateway\":\"%s\"}\n",
-            ok ? "true" : "false",
-            ip,
-            mask,
-            gw
-        );
-        return true;
-    }
-    if (strcasecmp(cmd_line, "P4REBOOT") == 0 || (is_uart0 && strcasecmp(cmd_line, "REBOOT") == 0)) {
-        snprintf(reply, reply_sz, "@{\"t\":\"ack\",\"cmd\":\"REBOOT\"}\n");
-        vTaskDelay(pdMS_TO_TICKS(50));
-        esp_restart();
-        return true;
-    }
-    return false;
+    xSemaphoreGive(g_cdc_tx_mu);
+
+    xSemaphoreTake(g_state_mu, portMAX_DELAY);
+    g_state.usb_baud = baud;
+    xSemaphoreGive(g_state_mu);
+    return true;
 }
 
 /* ---- Ethernet Events & Initialization ------------------------------------------------------- */
@@ -818,7 +600,7 @@ static void got_ip_event_handler(void *arg, esp_event_base_t event_base, int32_t
     snprintf(g_state.netmask_str, sizeof(g_state.netmask_str), IPSTR, IP2STR(&event->ip_info.netmask));
     snprintf(g_state.gw_str, sizeof(g_state.gw_str), IPSTR, IP2STR(&event->ip_info.gw));
     xSemaphoreGive(g_state_mu);
-    ESP_LOGI(TAG, "Ethernet ready on %s:%d", g_state.ip_str, SLAPRF_NET_PORT);
+    ESP_LOGI(TAG, "TCP serial bridge ready at %s:%d", g_state.ip_str, BRIDGE_TCP_PORT);
 }
 
 static void init_ethernet(void)
@@ -875,7 +657,7 @@ static void init_ethernet(void)
     ESP_ERROR_CHECK(esp_eth_start(eth_handle));
 }
 
-/* ---- UDP :5480 Discovery & TCP :5480 Wire Bridge ------------------------------------------- */
+/* ---- Out-of-Band UDP :5480 Discovery & Pure Raw TCP :5480 Serial Pipe ---------------------- */
 
 static void udp_discovery_task(void *arg)
 {
@@ -892,18 +674,18 @@ static void udp_discovery_task(void *arg)
 
     struct sockaddr_in bind_addr = {
         .sin_family = AF_INET,
-        .sin_port = htons(SLAPRF_NET_PORT),
+        .sin_port = htons(BRIDGE_TCP_PORT),
         .sin_addr.s_addr = htonl(INADDR_ANY),
     };
     if (bind(sock, (struct sockaddr *)&bind_addr, sizeof(bind_addr)) < 0) {
-        ESP_LOGE(TAG, "UDP discovery bind(:%d) failed: errno=%d", SLAPRF_NET_PORT, errno);
+        ESP_LOGE(TAG, "UDP discovery bind(:%d) failed: errno=%d", BRIDGE_TCP_PORT, errno);
         close(sock);
         vTaskDelete(NULL);
         return;
     }
 
     char rx_buf[128];
-    char tx_buf[768];
+    char tx_buf[512];
     while (true) {
         struct sockaddr_in src_addr;
         socklen_t socklen = sizeof(src_addr);
@@ -912,10 +694,49 @@ static void udp_discovery_task(void *arg)
             continue;
         }
         rx_buf[n] = '\0';
-        if (strncmp(rx_buf, "SLAPRF_DISCOVER?", 16) == 0) {
+        if (strncmp(rx_buf, "DISCOVER?", 9) == 0 || strncmp(rx_buf, "SLAPRF_DISCOVER?", 16) == 0) {
             size_t len = format_bridge_json(tx_buf, sizeof(tx_buf), false);
             if (len > 0) {
                 sendto(sock, tx_buf, len, 0, (struct sockaddr *)&src_addr, socklen);
+            }
+        } else if (strncmp(rx_buf, "CTRL ", 5) == 0) {
+            /* Out-of-band serial control lines (`CTRL dtr=1 rts=0 baud=115200`) so TCP :5480
+             * stays 100% pure unescaped serial bytes while still supporting remote DTR/RTS/baud! */
+            int dtr = -1, rts = -1;
+            unsigned long baud = 0;
+            const char *p_dtr = strstr(rx_buf + 5, "dtr=");
+            const char *p_rts = strstr(rx_buf + 5, "rts=");
+            const char *p_baud = strstr(rx_buf + 5, "baud=");
+            if (p_dtr) {
+                dtr = atoi(p_dtr + 4) ? 1 : 0;
+            }
+            if (p_rts) {
+                rts = atoi(p_rts + 4) ? 1 : 0;
+            }
+            if (p_baud) {
+                baud = strtoul(p_baud + 5, NULL, 10);
+            }
+            if (baud >= 1200 && baud <= 4000000) {
+                save_and_apply_baud((uint32_t)baud);
+            }
+            if (dtr >= 0 || rts >= 0) {
+                static bool cur_dtr = true;
+                static bool cur_rts = false;
+                if (dtr >= 0) {
+                    cur_dtr = (dtr != 0);
+                }
+                if (rts >= 0) {
+                    cur_rts = (rts != 0);
+                }
+                xSemaphoreTake(g_cdc_tx_mu, portMAX_DELAY);
+                if (g_cdc_dev != NULL) {
+                    cdc_acm_host_set_control_line_state(g_cdc_dev, cur_dtr, cur_rts);
+                }
+                xSemaphoreGive(g_cdc_tx_mu);
+            }
+            int ack_n = snprintf(tx_buf, sizeof(tx_buf), "{\"ok\":true}");
+            if (ack_n > 0) {
+                sendto(sock, tx_buf, (size_t)ack_n, 0, (struct sockaddr *)&src_addr, socklen);
             }
         }
     }
@@ -968,23 +789,19 @@ static void tcp_server_task(void *arg)
 
     struct sockaddr_in bind_addr = {
         .sin_family = AF_INET,
-        .sin_port = htons(SLAPRF_NET_PORT),
+        .sin_port = htons(BRIDGE_TCP_PORT),
         .sin_addr.s_addr = htonl(INADDR_ANY),
     };
     if (bind(listen_fd, (struct sockaddr *)&bind_addr, sizeof(bind_addr)) < 0 || listen(listen_fd, 2) < 0) {
-        ESP_LOGE(TAG, "TCP bind/listen(:%d) failed: errno=%d", SLAPRF_NET_PORT, errno);
+        ESP_LOGE(TAG, "TCP bind/listen(:%d) failed: errno=%d", BRIDGE_TCP_PORT, errno);
         close(listen_fd);
         vTaskDelete(NULL);
         return;
     }
 
-    ESP_LOGI(TAG, "Listening on TCP/UDP :%d", SLAPRF_NET_PORT);
+    ESP_LOGI(TAG, "Raw TCP serial server listening on :%d", BRIDGE_TCP_PORT);
 
-    uint8_t rx_buf[512];
-    char cmd_line[256];
-    size_t cmd_len = 0;
-    char reply[768];
-
+    uint8_t rx_buf[1024];
     while (true) {
         struct sockaddr_in client_addr;
         socklen_t addr_len = sizeof(client_addr);
@@ -1008,16 +825,10 @@ static void tcp_server_task(void *arg)
 
             ring_clear();
             g_tcp_client_fd = client_fd;
-            cmd_len = 0;
 
             char peer_ip[16] = {0};
             inet_ntoa_r(client_addr.sin_addr, peer_ip, sizeof(peer_ip) - 1);
             ESP_LOGI(TAG, "TCP client connected from %s", peer_ip);
-
-            /* Immediately announce bridge + Ethernet status and request fresh STATUS? from XIAO C5 */
-            push_bridge_line_to_tcp();
-            const char *init_probe = "STATUS?\n";
-            cdc_send_bytes((const uint8_t *)init_probe, strlen(init_probe), 200);
 
             int next_client_fd = -1;
             struct sockaddr_in next_addr;
@@ -1065,42 +876,8 @@ static void tcp_server_task(void *arg)
                     break;
                 }
 
-                /* Parse line-by-line so bridge-local commands (`BRIDGE?`, `NETCFG...`) are answered by
-                 * the P4 while all timer commands (`STATUS?`, `SLAPRF?`, `SCAN`, `NETCHANNELS`, etc.)
-                 * stream straight through to the XIAO ESP32-C5 on USB-A. */
-                for (ssize_t i = 0; i < n; i++) {
-                    char c = (char)rx_buf[i];
-                    if (c == '\r') {
-                        continue;
-                    }
-                    if (c == '\n') {
-                        cmd_line[cmd_len] = '\0';
-                        if (cmd_len == 0) {
-                            const uint8_t nl = '\n';
-                            cdc_send_bytes(&nl, 1, 100);
-                        } else if (handle_local_bridge_cmd(cmd_line, reply, sizeof(reply), false)) {
-                            ring_push_bytes((const uint8_t *)reply, strlen(reply));
-                        } else {
-                            bool usb_up = false;
-                            xSemaphoreTake(g_state_mu, portMAX_DELAY);
-                            usb_up = g_state.usb_connected;
-                            xSemaphoreGive(g_state_mu);
-
-                            if (usb_up) {
-                                cmd_line[cmd_len] = '\n';
-                                cdc_send_bytes((const uint8_t *)cmd_line, cmd_len + 1, 250);
-                                if (strncasecmp(cmd_line, "STATUS?", 7) == 0) {
-                                    push_bridge_line_to_tcp();
-                                }
-                            } else if (strncasecmp(cmd_line, "STATUS?", 7) == 0) {
-                                push_bridge_line_to_tcp();
-                            }
-                        }
-                        cmd_len = 0;
-                    } else if (cmd_len + 2 < sizeof(cmd_line)) {
-                        cmd_line[cmd_len++] = c;
-                    }
-                }
+                /* Pure transparent passthrough: write every TCP byte verbatim to USB TX */
+                cdc_send_bytes_raw(rx_buf, (size_t)n);
             }
 
             ESP_LOGI(TAG, "TCP client disconnected (%s)", peer_ip);
@@ -1113,7 +890,7 @@ static void tcp_server_task(void *arg)
     }
 }
 
-/* ---- UART0 USB-C Local Console (`BRIDGE?`, `STATUS?`, `NETCFG`) ---------------------------- */
+/* ---- UART0 USB-C Local Management Console (`STATUS?`, `BAUD <n>`, `NETCFG`) ---------------- */
 
 static void uart0_console_task(void *arg)
 {
@@ -1123,7 +900,7 @@ static void uart0_console_task(void *arg)
     uint8_t ch = 0;
     char line[256];
     size_t len = 0;
-    char reply[768];
+    char reply[512];
 
     while (true) {
         int r = uart_read_bytes(UART_NUM_0, &ch, 1, pdMS_TO_TICKS(100));
@@ -1135,9 +912,48 @@ static void uart0_console_task(void *arg)
         }
         if (ch == '\n') {
             line[len] = '\0';
-            if (len > 0) {
-                if (handle_local_bridge_cmd(line, reply, sizeof(reply), true)) {
+            const char *cmd = line;
+            while (*cmd == ' ' || *cmd == '\t') {
+                cmd++;
+            }
+            if (*cmd != '\0') {
+                if (strcasecmp(cmd, "STATUS?") == 0 || strcasecmp(cmd, "BRIDGE?") == 0 || strcasecmp(cmd, "NETCFG?") == 0) {
+                    format_bridge_json(reply, sizeof(reply), true);
                     uart_write_bytes(UART_NUM_0, reply, strlen(reply));
+                } else if (strncasecmp(cmd, "BAUD ", 5) == 0) {
+                    uint32_t b = (uint32_t)strtoul(cmd + 5, NULL, 10);
+                    bool ok = save_and_apply_baud(b);
+                    int n = snprintf(reply, sizeof(reply), "@{\"t\":\"baud\",\"ok\":%s,\"baud\":%" PRIu32 "}\n", ok ? "true" : "false", b);
+                    if (n > 0) {
+                        uart_write_bytes(UART_NUM_0, reply, (size_t)n);
+                    }
+                } else if (strcasecmp(cmd, "NETCFG DHCP") == 0) {
+                    bool ok = save_and_apply_net_cfg(false, "", "", "");
+                    int n = snprintf(reply, sizeof(reply), "@{\"t\":\"netcfg\",\"ok\":%s,\"mode\":\"dhcp\"}\n", ok ? "true" : "false");
+                    if (n > 0) {
+                        uart_write_bytes(UART_NUM_0, reply, (size_t)n);
+                    }
+                } else if (strncasecmp(cmd, "NETCFG STATIC ", 14) == 0) {
+                    char ip[20] = {0}, mask[20] = {0}, gw[20] = "0.0.0.0";
+                    int parts = sscanf(cmd + 14, "%19s %19s %19s", ip, mask, gw);
+                    bool ok = (parts >= 2) && save_and_apply_net_cfg(true, ip, mask, gw);
+                    int n = snprintf(
+                        reply,
+                        sizeof(reply),
+                        "@{\"t\":\"netcfg\",\"ok\":%s,\"mode\":\"static\",\"ip\":\"%s\",\"netmask\":\"%s\",\"gateway\":\"%s\"}\n",
+                        ok ? "true" : "false",
+                        ip,
+                        mask,
+                        gw
+                    );
+                    if (n > 0) {
+                        uart_write_bytes(UART_NUM_0, reply, (size_t)n);
+                    }
+                } else if (strcasecmp(cmd, "REBOOT") == 0) {
+                    const char *ack = "@{\"t\":\"ack\",\"cmd\":\"REBOOT\"}\n";
+                    uart_write_bytes(UART_NUM_0, ack, strlen(ack));
+                    vTaskDelay(pdMS_TO_TICKS(50));
+                    esp_restart();
                 }
             }
             len = 0;
@@ -1157,23 +973,22 @@ void app_main(void)
     g_ring_mu = xSemaphoreCreateMutex();
     g_usb_disc_sem = xSemaphoreCreateBinary();
     memset(&g_state, 0, sizeof(g_state));
-    snprintf(g_state.timer_label, sizeof(g_state.timer_label), "H1");
-    g_state.timer_role = 1;
-    g_state.timer_sweep_hz = 100;
+    g_state.usb_baud = DEFAULT_USB_BAUD;
 
-    /* 2. Initialize NVS & load optional static IP configuration */
+    /* 2. Initialize NVS & load optional static IP / baud configuration */
     esp_err_t nvs_err = nvs_flash_init();
     if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         nvs_err = nvs_flash_init();
     }
     ESP_ERROR_CHECK(nvs_err);
-    load_net_cfg();
+    load_bridge_cfg();
+    g_state.usb_baud = g_cfg.baud_rate;
 
     /* 3. Bring up 100 Mbps RMII Ethernet (`IP101GRI`) */
     init_ethernet();
 
-    /* 4. Install USB 2.0 Host + CDC-ACM driver for XIAO ESP32-C5 on Type-A Host port */
+    /* 4. Install USB 2.0 Host + generic CDC-ACM / USB-Serial-JTAG driver on Type-A Host port */
     const usb_host_config_t host_cfg = {
         .skip_phy_setup = false,
         .intr_flags = ESP_INTR_FLAG_LEVEL1,
@@ -1185,16 +1000,16 @@ void app_main(void)
         .driver_task_stack_size = 4096,
         .driver_task_priority = 19,
         .xCoreID = tskNO_AFFINITY,
-        .new_dev_cb = NULL,
+        .new_dev_cb = usb_new_dev_cb,
     };
     ESP_ERROR_CHECK(cdc_acm_host_install(&cdc_drv_cfg));
 
-    /* 5. Launch bridge pump, discovery responder, TCP :5480 listener, USB supervisor, and UART0 console */
+    /* 5. Launch raw TCP <-> USB pump, out-of-band UDP discovery, and local UART0 console */
     xTaskCreate(tcp_tx_pump_task, "tcp_tx", 4096, NULL, 18, &g_tcp_tx_task);
     xTaskCreate(usb_cdc_supervisor_task, "usb_sup", 6144, NULL, 15, NULL);
     xTaskCreate(udp_discovery_task, "udp_disc", 4096, NULL, 12, NULL);
     xTaskCreate(tcp_server_task, "tcp_srv", 6144, NULL, 14, NULL);
     xTaskCreate(uart0_console_task, "uart0_con", 4096, NULL, 8, NULL);
 
-    ESP_LOGI(TAG, "SlapRF PoE Ethernet Bridge v%s started (C6 held OFF on GPIO%d)", BRIDGE_FW_VERSION, P4_C6_RST_GPIO);
+    ESP_LOGI(TAG, "Generic USB-Serial <-> TCP Bridge v%s started on :%d", BRIDGE_FW_VERSION, BRIDGE_TCP_PORT);
 }

@@ -34,9 +34,11 @@ func (s *Server) serveHubSurvey(w http.ResponseWriter, r *http.Request, wantMode
 			return
 		}
 		if req.On && (s.sim.IsRunning() || s.realEngine.TimingHardwareMode() != wantMode) {
-			msg := "the USB band survey requires SlapRF (USB) mode (not Simulator or Bluetooth)"
+			msg := "the USB band survey requires SlapRF (USB) mode"
 			if wantMode == domain.HardwareModeSlapRFBLE {
-				msg = "the Bluetooth band survey requires SlapRF (Bluetooth) mode (not Simulator or USB)"
+				msg = "the Bluetooth band survey requires SlapRF (Bluetooth) mode"
+			} else if wantMode == domain.HardwareModeSlapRFNet {
+				msg = "the PoE network band survey requires SlapRF (Network) mode"
 			}
 			writeJSONNoStore(w, http.StatusConflict, map[string]any{"error": msg})
 			return

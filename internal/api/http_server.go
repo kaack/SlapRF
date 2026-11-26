@@ -299,6 +299,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/sim:packBurst", wrap(s.handleSimPackBurst))
 	mux.HandleFunc("POST /v1/sim/pilots/{slotIndex}", wrap(s.handleSimPilotCustomAction))
 	mux.HandleFunc("GET /v1/sim/slaprf/usb-hellos", s.handleSimUSBHellos)
+	mux.HandleFunc("GET /v1/sim/slaprf/network/devices", s.handleSimSlapRFNetDiscover)
 	mux.HandleFunc("POST /v1/sim/slaprf/timers", wrap(s.handleCreateSimTimer))
 	mux.HandleFunc("POST /v1/sim/slaprf/timers:reset", wrap(s.handleResetSimTimers))
 	mux.HandleFunc("PATCH /v1/sim/slaprf/timers/{timerId}", wrap(s.handlePatchSimTimer))

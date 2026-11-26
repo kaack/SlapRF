@@ -34,6 +34,7 @@ import (
 	"slaprf/internal/serialport"
 	"slaprf/internal/slaprf"
 	slaprfble "slaprf/internal/slaprf/bluetooth"
+	slaprfnet "slaprf/internal/slaprf/network"
 	slaprfusb "slaprf/internal/slaprf/usb"
 	"slaprf/internal/storage"
 	"slaprf/internal/tracestore"
@@ -131,6 +132,8 @@ type Server struct {
 	usbMgr           *slaprf.Manager
 	bleTransport     *slaprfble.Transport
 	bleMgr           *slaprf.Manager
+	netTransport     *slaprfnet.Transport
+	netMgr           *slaprf.Manager
 	laprfMgr         *laprfManager
 	rhMgr            *rhManager
 	laprfEmulatorMgr *laprfEmulatorManager
@@ -353,6 +356,17 @@ func NewServer(cfg Config) *Server {
 		AppLog:          appLogger,
 		Logf:            s.logf,
 	})
+	s.netTransport = slaprfnet.NewTransport(slaprfnet.Config{})
+	s.netMgr = slaprf.NewManager(slaprf.Config{
+		Transport:       s.netTransport,
+		Timers:          sharedTimers,
+		Engine:          realEngine,
+		HubRx:           realHubRx,
+		SkipHubOutbound: true,
+		Store:           store,
+		AppLog:          appLogger,
+		Logf:            s.logf,
+	})
 	realHubRx.SetOutboundSender(func(pkt []byte) {
 		s.activeSlapRFManager().SendNetChannelsFrame(pkt)
 	})
@@ -382,11 +396,15 @@ func NewServer(cfg Config) *Server {
 
 		wantUSB := wantMode == domain.HardwareModeSlapRF
 		wantBLE := wantMode == domain.HardwareModeSlapRFBLE
+		wantNet := wantMode == domain.HardwareModeSlapRFNet
 		if !wantUSB {
 			s.usbMgr.SetActiveWithRestore(false, simRunning, false)
 		}
 		if !wantBLE {
 			s.bleMgr.SetActiveWithRestore(false, simRunning, false)
+		}
+		if !wantNet {
+			s.netMgr.SetActiveWithRestore(false, simRunning, false)
 		}
 		if modeChanged && wantMode != "" {
 			realHubRx.Reset()
@@ -396,6 +414,9 @@ func NewServer(cfg Config) *Server {
 		}
 		if wantBLE {
 			s.bleMgr.SetActiveWithRestore(true, simRunning, restoreSaved)
+		}
+		if wantNet {
+			s.netMgr.SetActiveWithRestore(true, simRunning, restoreSaved)
 		}
 	}
 
@@ -577,8 +598,13 @@ func (s *Server) AppLog() *applog.Logger {
 }
 
 func (s *Server) activeSlapRFManager() *slaprf.Manager {
-	if s.realEngine != nil && s.realEngine.TimingHardwareMode() == domain.HardwareModeSlapRFBLE {
-		return s.bleMgr
+	if s.realEngine != nil {
+		switch s.realEngine.TimingHardwareMode() {
+		case domain.HardwareModeSlapRFBLE:
+			return s.bleMgr
+		case domain.HardwareModeSlapRFNet:
+			return s.netMgr
+		}
 	}
 	return s.usbMgr
 }
@@ -603,6 +629,9 @@ func (s *Server) Close() {
 	}
 	if s.rhMgr != nil {
 		s.rhMgr.close()
+	}
+	if s.netMgr != nil {
+		s.netMgr.Close()
 	}
 	if s.bleMgr != nil {
 		s.bleMgr.Close()
@@ -671,6 +700,19 @@ func (s *Server) RegisterAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/slaprf/bluetooth/survey", s.handleBluetoothSurvey)
 	mux.HandleFunc("PUT /v1/slaprf/bluetooth/survey", s.handleBluetoothSurvey)
 	mux.HandleFunc("GET /v1/ws/slaprf/bluetooth", s.handleBluetoothWS)
+
+	// SlapRF PoE Ethernet / TCP Serial Bridge
+	mux.HandleFunc("GET /v1/slaprf/network/ports", s.handleNetworkPorts)
+	mux.HandleFunc("GET /v1/slaprf/network/devices", s.handleNetworkDevices)
+	mux.HandleFunc("GET /v1/slaprf/network/connections", s.handleNetworkStatus)
+	mux.HandleFunc("POST /v1/slaprf/network/connections", s.handleNetworkConnect)
+	mux.HandleFunc("POST /v1/slaprf/network/connections:disconnectAll", s.handleNetworkDisconnectAll)
+	mux.HandleFunc("PUT /v1/slaprf/network/connections/{slotIndex}", s.handleNetworkConnect)
+	mux.HandleFunc("DELETE /v1/slaprf/network/connections/{slotIndex}", s.handleNetworkDisconnectSlot)
+	mux.HandleFunc("POST /v1/slaprf/network:command", s.handleNetworkCommand)
+	mux.HandleFunc("GET /v1/slaprf/network/survey", s.handleNetworkSurvey)
+	mux.HandleFunc("PUT /v1/slaprf/network/survey", s.handleNetworkSurvey)
+	mux.HandleFunc("GET /v1/ws/slaprf/network", s.handleNetworkWS)
 
 	// Shared SlapRF timer inventory
 	mux.HandleFunc("DELETE /v1/slaprf/known-timers/{fp}", s.handleSlapRFKnownForget)

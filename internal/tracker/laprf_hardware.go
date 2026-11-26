@@ -178,6 +178,9 @@ func (e *Engine) SetTimingHardwareMode(mode domain.TimingHardwareMode, isSim boo
 		e.savedSlapRFBLEGates = nil
 		e.savedSlapRFBLETimers = nil
 		e.hasSavedSlapRFBLEState = false
+		e.savedSlapRFNetGates = nil
+		e.savedSlapRFNetTimers = nil
+		e.hasSavedSlapRFNetState = false
 		e.savedLapRFGates = nil
 		e.savedLapRFTimers = nil
 		e.hasSavedLapRFState = false
@@ -197,6 +200,10 @@ func (e *Engine) SetTimingHardwareMode(mode domain.TimingHardwareMode, isSim boo
 			e.savedSlapRFBLEGates = append([]domain.TrackGate(nil), e.gates...)
 			e.savedSlapRFBLETimers = cloneTimersMapToSlice(e.detected)
 			e.hasSavedSlapRFBLEState = true
+		case domain.HardwareModeSlapRFNet:
+			e.savedSlapRFNetGates = append([]domain.TrackGate(nil), e.gates...)
+			e.savedSlapRFNetTimers = cloneTimersMapToSlice(e.detected)
+			e.hasSavedSlapRFNetState = true
 		case domain.HardwareModeLapRF:
 			e.savedLapRFGates = append([]domain.TrackGate(nil), e.gates...)
 			e.savedLapRFTimers = cloneTimersMapToSlice(e.detected)
@@ -223,7 +230,7 @@ func (e *Engine) SetTimingHardwareMode(mode domain.TimingHardwareMode, isSim boo
 	now := time.Now()
 	if isSim {
 		switch next {
-		case domain.HardwareModeSlapRFBLE:
+		case domain.HardwareModeSlapRFBLE, domain.HardwareModeSlapRFNet:
 			e.gates, e.detected = defaultSimSlapRFBLELayoutLocked(now)
 		case domain.HardwareModeLapRF, domain.HardwareModeLapRFUSB:
 			e.gates, e.detected = defaultSimLapRFLayoutLocked(now)
@@ -239,6 +246,14 @@ func (e *Engine) SetTimingHardwareMode(mode domain.TimingHardwareMode, isSim boo
 			if e.hasSavedSlapRFBLEState {
 				e.gates = append([]domain.TrackGate(nil), e.savedSlapRFBLEGates...)
 				e.detected = restoreTimersSliceToMap(e.savedSlapRFBLETimers)
+			} else {
+				e.gates = []domain.TrackGate{}
+				e.detected = make(map[uint8]*domain.DetectedTimer)
+			}
+		case domain.HardwareModeSlapRFNet:
+			if e.hasSavedSlapRFNetState {
+				e.gates = append([]domain.TrackGate(nil), e.savedSlapRFNetGates...)
+				e.detected = restoreTimersSliceToMap(e.savedSlapRFNetTimers)
 			} else {
 				e.gates = []domain.TrackGate{}
 				e.detected = make(map[uint8]*domain.DetectedTimer)

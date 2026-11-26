@@ -34,6 +34,7 @@ type SlotSnapshot struct {
 	ReconnectFailed bool                   `json:"reconnectFailed"`
 	LastError       string                 `json:"lastError,omitempty"`
 	LastStatus      map[string]any         `json:"lastStatus,omitempty"`
+	LastBridge      map[string]any         `json:"lastBridge,omitempty"`
 	LastConfig      *firmware.TimerReadout `json:"lastConfig,omitempty"`
 }
 
@@ -109,6 +110,7 @@ type connSlot struct {
 	authRejected         bool
 	lastError            string
 	lastStatus           map[string]any
+	lastBridge           map[string]any
 	lastStatusAtMs       int64
 	lastRealJsonStatusMs int64
 	lastConfig           *firmware.TimerReadout
@@ -474,6 +476,13 @@ func (m *Manager) Snapshot() PoolSnapshot {
 				stCopy[k] = v
 			}
 		}
+		var brCopy map[string]any
+		if s.lastBridge != nil {
+			brCopy = make(map[string]any, len(s.lastBridge))
+			for k, v := range s.lastBridge {
+				brCopy[k] = v
+			}
+		}
 		var cfgCopy *firmware.TimerReadout
 		if s.lastConfig != nil {
 			c := *s.lastConfig
@@ -491,6 +500,7 @@ func (m *Manager) Snapshot() PoolSnapshot {
 			ReconnectFailed: s.reconnectFailed,
 			LastError:       s.lastError,
 			LastStatus:      stCopy,
+			LastBridge:      brCopy,
 			LastConfig:      cfgCopy,
 		}
 		s.mu.Unlock()

@@ -78,8 +78,8 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 					break
 				}
 			}
-			needsBleAutoGate := domain.NormalizeTimingHardwareMode(e.timingHardwareMode) == domain.HardwareModeSlapRFBLE && len(e.gates) == 0
-			if ok1 && d1.IsHub && !hasDupHub && !needsBleAutoGate &&
+			needsPrimaryHubGate := domain.IsSlapRFPrimaryGateHubMode(e.timingHardwareMode) && len(e.gates) == 0
+			if ok1 && d1.IsHub && !hasDupHub && !needsPrimaryHubGate &&
 				(fingerprint == "" || d1.Fingerprint == fingerprint) &&
 				(timerLabel == "" || d1.TimerLabel == timerLabel) &&
 				d1.FirmwareVersion == ver {
@@ -372,7 +372,7 @@ func (e *Engine) provisionCollectorHubLocked(fingerprint, label, ver string) uin
 	now := time.Now()
 	d.Online = true
 	d.LastSeenAt = now
-	if domain.NormalizeTimingHardwareMode(e.timingHardwareMode) == domain.HardwareModeSlapRFBLE && len(e.gates) == 0 {
+	if domain.IsSlapRFPrimaryGateHubMode(e.timingHardwareMode) && len(e.gates) == 0 {
 		gateLabel := d.TimerLabel
 		if gateLabel == "" {
 			gateLabel = domain.DefaultSimHubLabel

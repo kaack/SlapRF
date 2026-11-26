@@ -404,6 +404,48 @@ func (s *Server) handleSimUSBHellos(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
+func (s *Server) handleSimSlapRFNetDiscover(w http.ResponseWriter, _ *http.Request) {
+	timers := s.simEngine.DetectedTimersSnapshot()
+	hubLabel := "H1"
+	hubFP := "A1B2C3D4"
+	hubOnline := true
+	for _, tm := range timers {
+		if tm.IsHub {
+			if tm.TimerLabel != "" {
+				hubLabel = tm.TimerLabel
+			}
+			if tm.Fingerprint != "" {
+				hubFP = tm.Fingerprint
+			}
+			hubOnline = tm.Online
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"subnet": "192.168.1.0/24 (Simulated LAN)",
+		"devices": []map[string]any{
+			{
+				"host":          "192.168.1.110",
+				"port":          5480,
+				"endpoint":      "192.168.1.110:5480",
+				"fp":            hubFP,
+				"label":         hubLabel,
+				"fw":            domain.LatestFirmwareVersion,
+				"bridgeFw":      "0.1.0",
+				"usbConnected":  true,
+				"usbVid":        "303A",
+				"usbPid":        "1001",
+				"baud":          115200,
+				"mac":           "AA:BB:CC:54:80:01",
+				"linkSpeedMbps": 100,
+				"fullDuplex":    true,
+				"connected":     hubOnline,
+				"verified":      true,
+			},
+		},
+	})
+}
+
 func (s *Server) handleSimLapRFDiscover(w http.ResponseWriter, _ *http.Request) {
 	type discoveredItem struct {
 		Host      string `json:"host"`

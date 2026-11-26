@@ -3,8 +3,12 @@ package serialport
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"slaprf/internal/firmware"
 )
@@ -78,6 +82,9 @@ func OpenContext(ctx context.Context, opener firmware.SerialOpener, portName str
 		return nil, ErrOpenCancelled
 	}
 	portName = strings.TrimSpace(portName)
+	if strings.HasPrefix(strings.ToLower(portName), "tcp://") {
+		return openTCPBridgePort(ctx, portName[len("tcp://"):], baud)
+	}
 	if opener == nil {
 		opener = DefaultOpener
 	}
@@ -108,3 +115,120 @@ func OpenContext(ctx context.Context, opener firmware.SerialOpener, portName str
 		return r.p, r.err
 	}
 }
+
+type tcpBridgeSerialPort struct {
+	conn        net.Conn
+	ctrlAddr    string
+	mu          sync.Mutex
+	readTimeout time.Duration
+	dtr         bool
+	rts         bool
+}
+
+func openTCPBridgePort(ctx context.Context, addr string, baud int) (firmware.SerialPort, error) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return nil, errors.New("missing tcp:// host:port address")
+	}
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		addr = net.JoinHostPort(addr, "5480")
+	}
+	dialer := net.Dialer{Timeout: 2500 * time.Millisecond, KeepAlive: 2 * time.Second}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ErrOpenCancelled
+		}
+		return nil, err
+	}
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		_ = tcpConn.SetNoDelay(true)
+		_ = tcpConn.SetKeepAlive(true)
+		_ = tcpConn.SetKeepAlivePeriod(2 * time.Second)
+	}
+	p := &tcpBridgeSerialPort{
+		conn:        conn,
+		ctrlAddr:    addr,
+		readTimeout: 120 * time.Millisecond,
+		dtr:         true,
+		rts:         false,
+	}
+	if baud > 0 {
+		p.sendCtrl(fmt.Sprintf("CTRL baud=%d dtr=1 rts=0\n", baud))
+	}
+	return p, nil
+}
+
+func (p *tcpBridgeSerialPort) sendCtrl(msg string) {
+	if udpAddr, err := net.ResolveUDPAddr("udp", p.ctrlAddr); err == nil {
+		if c, dErr := net.DialUDP("udp", nil, udpAddr); dErr == nil {
+			_ = c.SetWriteDeadline(time.Now().Add(80 * time.Millisecond))
+			_, _ = c.Write([]byte(msg))
+			_ = c.Close()
+		}
+	}
+}
+
+func (p *tcpBridgeSerialPort) Read(b []byte) (int, error) {
+	p.mu.Lock()
+	tmo := p.readTimeout
+	p.mu.Unlock()
+	if tmo > 0 {
+		_ = p.conn.SetReadDeadline(time.Now().Add(tmo))
+	} else {
+		_ = p.conn.SetReadDeadline(time.Time{})
+	}
+	n, err := p.conn.Read(b)
+	if err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return n, nil
+		}
+	}
+	return n, err
+}
+
+func (p *tcpBridgeSerialPort) Write(b []byte) (int, error) {
+	_ = p.conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
+	return p.conn.Write(b)
+}
+
+func (p *tcpBridgeSerialPort) SetReadTimeout(d time.Duration) error {
+	p.mu.Lock()
+	p.readTimeout = d
+	p.mu.Unlock()
+	return nil
+}
+
+func (p *tcpBridgeSerialPort) SetDTR(v bool) error {
+	p.mu.Lock()
+	p.dtr = v
+	d, r := 0, 0
+	if p.dtr {
+		d = 1
+	}
+	if p.rts {
+		r = 1
+	}
+	p.mu.Unlock()
+	p.sendCtrl(fmt.Sprintf("CTRL dtr=%d rts=%d\n", d, r))
+	return nil
+}
+
+func (p *tcpBridgeSerialPort) SetRTS(v bool) error {
+	p.mu.Lock()
+	p.rts = v
+	d, r := 0, 0
+	if p.dtr {
+		d = 1
+	}
+	if p.rts {
+		r = 1
+	}
+	p.mu.Unlock()
+	p.sendCtrl(fmt.Sprintf("CTRL dtr=%d rts=%d\n", d, r))
+	return nil
+}
+
+func (p *tcpBridgeSerialPort) ResetInputBuffer() error { return nil }
+func (p *tcpBridgeSerialPort) Close() error            { return p.conn.Close() }
