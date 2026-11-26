@@ -18,7 +18,6 @@ Download the latest native SlapRF release from [GitHub Releases](https://github.
 | macOS (`Apple Silicon`) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Apple Silicon (`slaprf-macos-arm64`, `CoreBluetooth` and `/dev/cu.usbmodem*`); Intel (`amd64`) binary also built in CI. |
 | Linux Desktop (`x86_64`) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Ubuntu `x86_64` (`slaprf-linux-amd64`, `BlueZ` and `/dev/ttyACM*`). |
 | Raspberry Pi 4 (`ARM64`) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Raspberry Pi 4 Model B (`Raspberry Pi OS 64-bit`); requires `5 GHz` Wi-Fi or Ethernet for Bluetooth Hub. |
-| Raspberry Pi (`32-bit OS` / Zero W) | {{< no >}} | {{< no >}} | {{< no >}} | {{< no >}} | `32-bit` (`armhf` / `armv6`) OS installs are not supported as a timing server. |
 
 ## Platform Setup
 
