@@ -857,6 +857,80 @@ describe("services/announcer — Phonetic Names, Lap Formatting, Queue Dedup & W
     }
   });
 
+  it("bridges iOS WKWebView messageHandlers.slaprf and __slaprf_sync__ prompt calls", () => {
+    window.localStorage.removeItem("gate-timer.announcer");
+    installFakeSpeechAndAudio();
+    const posted: Array<Record<string, unknown>> = [];
+    const prefsMap = new Map<string, string>();
+    let lanEnabled = false;
+    let speaking = false;
+    const origPrompt = window.prompt;
+    const win = window as unknown as {
+      webkit?: { messageHandlers?: { slaprf?: { postMessage(msg: unknown): void } } };
+    };
+
+    window.prompt = ((message?: string): string | null => {
+      if (typeof message === "string" && message.startsWith("__slaprf_sync__:")) {
+        const req = JSON.parse(message.slice("__slaprf_sync__:".length)) as Record<string, unknown>;
+        switch (req.op) {
+          case "getLanStatusJson":
+            return JSON.stringify({
+              enabled: lanEnabled,
+              port: lanEnabled ? 8090 : 0,
+              urls: lanEnabled ? ["http://192.168.1.44:8090"] : [],
+            });
+          case "setLanEnabled":
+            lanEnabled = Boolean(req.enabled);
+            return JSON.stringify({
+              enabled: lanEnabled,
+              port: lanEnabled ? 8090 : 0,
+              urls: lanEnabled ? ["http://192.168.1.44:8090"] : [],
+            });
+          case "getStringPref":
+            return prefsMap.get(String(req.key ?? "")) ?? "";
+          case "isSpeaking":
+            return speaking ? "1" : "0";
+        }
+      }
+      return "";
+    }) as typeof window.prompt;
+
+    win.webkit = {
+      messageHandlers: {
+        slaprf: {
+          postMessage(msg: unknown) {
+            const m = msg as Record<string, unknown>;
+            posted.push(m);
+            if (m.op === "speak") speaking = true;
+            if (m.op === "stopSpeech") speaking = false;
+            if (m.op === "setStringPref") prefsMap.set(String(m.key ?? ""), String(m.value ?? ""));
+          },
+        },
+      },
+    };
+
+    const store = makeStore({
+      operatingMode: "practice",
+      pilots: [makePilot(1, { callsign: "MAVERICK" })],
+    });
+    const ann = new Announcer(store);
+    try {
+      expect(ann.voices().some((v) => v.name === "iOS System Voice")).toBe(true);
+      ann.update({ enabled: true });
+      expect(posted.some((m) => m.op === "speak" && m.text === "Announcer on")).toBe(true);
+
+      downloadTextFile("race.csv", "text/csv", "pilot,lap\nMAVERICK,12.34\n");
+      const saveMsg = posted.find((m) => m.op === "saveBase64File");
+      expect(saveMsg).toBeDefined();
+      expect(saveMsg!.filename).toBe("race.csv");
+      expect(atob(String(saveMsg!.base64Data))).toBe("pilot,lap\nMAVERICK,12.34\n");
+    } finally {
+      ann.stop();
+      window.prompt = origPrompt;
+      delete win.webkit;
+    }
+  });
+
   it("recovers from browser autoplay not-allowed errors on first click or single Announcer button press", () => {
     const rig = installFakeSpeechAndAudio();
     rig.rejectWithNotAllowed = true;

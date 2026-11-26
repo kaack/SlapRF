@@ -1,9 +1,13 @@
 /**
- * Typed accessors for the optional `@JavascriptInterface` (`window.SlapRFAndroid`)
- * injected when SlapRF runs inside the native Android host shell (`SlapRFHost.java`).
+ * Typed accessors for the native mobile host bridge injected inside:
+ * - Android WebView (`SlapRFHost.java` -> `@JavascriptInterface window.SlapRFAndroid`)
+ * - iOS / iPadOS WKWebView (`SlapRFViewController.swift` -> `WKUserScript window.SlapRFNative`
+ *   and/or `window.webkit.messageHandlers.slaprf` + `__slaprf_sync__:` prompt bridge).
  *
  * Returns `null` / `false` in standard desktop and mobile web browsers.
  */
+
+export type NativeHostPlatform = "android" | "ios";
 
 export interface AndroidLanStatus {
   enabled: boolean;
@@ -13,7 +17,9 @@ export interface AndroidLanStatus {
 }
 
 export interface SlapRFAndroidBridge {
+  platform?: string;
   isAndroidApp(): boolean;
+  isIosApp?(): boolean;
   speak(text: string, rate: number, volume: number, flush: boolean): void;
   stopSpeech(): void;
   isSpeaking(): boolean;
@@ -27,19 +33,107 @@ export interface SlapRFAndroidBridge {
   setStringPref?(key: string, value: string): void;
 }
 
-interface WindowWithAndroidBridge {
+interface WebKitMessageHandler {
+  postMessage(message: unknown): void;
+}
+
+interface WindowWithNativeBridges {
+  SlapRFNative?: SlapRFAndroidBridge;
   SlapRFAndroid?: SlapRFAndroidBridge;
+  webkit?: {
+    messageHandlers?: {
+      slaprf?: WebKitMessageHandler;
+    };
+  };
+}
+
+const IOS_SYNC_PROMPT_PREFIX = "__slaprf_sync__:";
+
+let cachedWebKitFallbackBridge: SlapRFAndroidBridge | null = null;
+let cachedWebKitHandlerRef: WebKitMessageHandler | null = null;
+
+function createWebKitBridge(handler: WebKitMessageHandler): SlapRFAndroidBridge {
+  const post = (msg: Record<string, unknown>): void => {
+    try {
+      handler.postMessage(msg);
+    } catch {
+      // Ignore WebKit IPC failures
+    }
+  };
+  const syncCall = (msg: Record<string, unknown>): string => {
+    if (typeof window === "undefined" || typeof window.prompt !== "function") return "";
+    try {
+      const res = window.prompt(IOS_SYNC_PROMPT_PREFIX + JSON.stringify(msg), "");
+      return typeof res === "string" ? res : "";
+    } catch {
+      return "";
+    }
+  };
+  return {
+    platform: "ios",
+    isAndroidApp: () => true,
+    isIosApp: () => true,
+    speak: (text: string, rate: number, volume: number, flush: boolean) => {
+      post({ op: "speak", text, rate, volume, flush });
+    },
+    stopSpeech: () => post({ op: "stopSpeech" }),
+    isSpeaking: () => syncCall({ op: "isSpeaking" }) === "1",
+    playBeep: (freqHz: number, durationMs: number, volume: number) => {
+      post({ op: "playBeep", freqHz, durationMs, volume });
+    },
+    setKeepScreenOn: (enabled: boolean) => post({ op: "setKeepScreenOn", enabled }),
+    setThemeMode: (mode: string) => post({ op: "setThemeMode", mode }),
+    getLanStatusJson: () => syncCall({ op: "getLanStatusJson" }),
+    setLanEnabled: (enabled: boolean) => syncCall({ op: "setLanEnabled", enabled }),
+    getStringPref: (key: string) => syncCall({ op: "getStringPref", key }),
+    setStringPref: (key: string, value: string) => post({ op: "setStringPref", key, value }),
+    saveBase64File: (filename: string, mimeType: string, base64Data: string) => {
+      post({ op: "saveBase64File", filename, mimeType, base64Data });
+    },
+  };
 }
 
 export function getAndroidBridge(): SlapRFAndroidBridge | null {
   if (typeof window === "undefined") return null;
-  const b = (window as unknown as WindowWithAndroidBridge).SlapRFAndroid;
-  if (!b || typeof b.isAndroidApp !== "function") return null;
-  try {
-    return b.isAndroidApp() ? b : null;
-  } catch {
-    return null;
+  const w = window as unknown as WindowWithNativeBridges;
+  const direct = w.SlapRFNative ?? w.SlapRFAndroid;
+  if (direct && typeof direct.isAndroidApp === "function") {
+    try {
+      if (direct.isAndroidApp()) return direct;
+    } catch {
+      // Fall through to WebKit handler check
+    }
   }
+  const wkHandler = w.webkit?.messageHandlers?.slaprf;
+  if (wkHandler && typeof wkHandler.postMessage === "function") {
+    if (cachedWebKitHandlerRef !== wkHandler || !cachedWebKitFallbackBridge) {
+      cachedWebKitHandlerRef = wkHandler;
+      cachedWebKitFallbackBridge = createWebKitBridge(wkHandler);
+    }
+    return cachedWebKitFallbackBridge;
+  }
+  return null;
+}
+
+export function getNativeHostPlatform(): NativeHostPlatform | null {
+  const b = getAndroidBridge();
+  if (!b) return null;
+  try {
+    if (b.platform === "ios" || (typeof b.isIosApp === "function" && b.isIosApp())) {
+      return "ios";
+    }
+  } catch {
+    // Default to android
+  }
+  return "android";
+}
+
+export function isIosHostApp(): boolean {
+  return getNativeHostPlatform() === "ios";
+}
+
+export function isNativeHostApp(): boolean {
+  return getAndroidBridge() !== null;
 }
 
 export function isAndroidHostApp(): boolean {
@@ -96,8 +190,8 @@ function utf8ToBase64(text: string): string {
 }
 
 /**
- * Triggers a binary file save using Android's native `ACTION_CREATE_DOCUMENT` dialog when inside
- * the Android app, or falls back to a standard `<a download>` Blob link in web browsers.
+ * Triggers a binary file save using the native mobile host export dialog when inside
+ * the Android or iOS app, or falls back to a standard `<a download>` Blob link in web browsers.
  */
 export function downloadBinaryFile(filename: string, mimeType: string, bytes: Uint8Array): void {
   const b = getAndroidBridge();
@@ -121,8 +215,8 @@ export function downloadBinaryFile(filename: string, mimeType: string, bytes: Ui
 }
 
 /**
- * Triggers a file save using Android's native `ACTION_CREATE_DOCUMENT` dialog when inside
- * the Android app, or falls back to a standard `<a download>` Blob link in web browsers.
+ * Triggers a file save using the native mobile host export dialog when inside
+ * the Android or iOS app, or falls back to a standard `<a download>` Blob link in web browsers.
  */
 export function downloadTextFile(filename: string, mimeType: string, content: string): void {
   const b = getAndroidBridge();

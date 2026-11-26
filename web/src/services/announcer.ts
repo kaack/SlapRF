@@ -1,4 +1,4 @@
-import { getAndroidBridge } from "../core/android_bridge";
+import { getAndroidBridge, isIosHostApp } from "../core/android_bridge";
 import { setWakeLockEnabled } from "../core/wake_lock";
 import { capabilitiesSnapshot, isServerDisconnectedLockout } from "../services/capabilities";
 import {
@@ -67,6 +67,13 @@ export const ANDROID_SYSTEM_VOICE_URI = "android:system";
 const ANDROID_SYSTEM_VOICE: SpeechSynthesisVoice = {
   voiceURI: ANDROID_SYSTEM_VOICE_URI,
   name: "Android System Voice",
+  lang: "en-US",
+  localService: true,
+  default: true,
+};
+const IOS_SYSTEM_VOICE: SpeechSynthesisVoice = {
+  voiceURI: ANDROID_SYSTEM_VOICE_URI,
+  name: "iOS System Voice",
   lang: "en-US",
   localService: true,
   default: true,
@@ -340,12 +347,14 @@ export class Announcer {
   }
 
   public voices(): SpeechSynthesisVoice[] {
-    const androidVoice = getAndroidBridge() ? [ANDROID_SYSTEM_VOICE] : [];
-    if (!("speechSynthesis" in window)) return androidVoice;
+    const nativeVoice = getAndroidBridge()
+      ? [isIosHostApp() ? IOS_SYSTEM_VOICE : ANDROID_SYSTEM_VOICE]
+      : [];
+    if (!("speechSynthesis" in window)) return nativeVoice;
     const all = speechSynthesis.getVoices();
     const english = all.filter((v) => /^en(?:[-_]|$)/i.test(v.lang));
     const base = english.length > 0 ? english : all;
-    return androidVoice.length > 0 ? [...androidVoice, ...base] : base;
+    return nativeVoice.length > 0 ? [...nativeVoice, ...base] : base;
   }
 
   public piperVoices(): PiperVoiceDescriptor[] {
