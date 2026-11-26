@@ -1,6 +1,8 @@
 import { Router } from "../core/router";
 import { Sidebar } from "../layout/Sidebar";
 import { ApiClient } from "../services/api_client";
+import { createBackendPortHandle } from "../services/sim_serial_port";
+import { usbPool } from "../services/timer_console";
 import { PoeBridgeView } from "../views/PoeBridgeView";
 import { describe, expect, flushMicrotasks, it, makeMockApiClient, makeStore, mountHtml } from "./harness";
 
@@ -9,58 +11,60 @@ async function settle(): Promise<void> {
 }
 
 describe("PoE Bridge top-level navigation, LAN discovery, and management controls", () => {
-  it("shows the PoE Bridge sidebar tab only when SlapRF (Network) is selected", () => {
-    const store = makeStore({ timingHardwareMode: "slaprf" });
+  it("shows the PoE Bridge sidebar tab only when SlapRF (Network) is actively connected, and hides it on disconnect", () => {
+    const store = makeStore({ timingHardwareMode: "slaprf_net" });
     const router = new Router();
     const root = mountHtml(`<aside id="sb"></aside>`);
     const sidebar = new Sidebar(root.querySelector("#sb")!, store, router);
     try {
       const poeLinks = Array.from(root.querySelectorAll<HTMLElement>('[data-route="poe"]'));
       expect(poeLinks.length).toBeGreaterThan(0);
+
+      // Even in slaprf_net mode, PoE Bridge tab stays hidden while disconnected.
+      usbPool.mainConsole.applyBackendSlotSnapshot({
+        slotIndex: 0,
+        connected: false,
+        probing: false,
+        reconnecting: false,
+        reconnectAttempt: 0,
+        reconnectFailed: false,
+      });
+      (sidebar as unknown as { syncConditionalNav: () => void }).syncConditionalNav();
       expect(poeLinks.every((el) => el.style.display === "none")).toBe(true);
 
-      // Switching to SlapRF (Network) reveals PoE Bridge in navigation.
-      store.hydrate({
-        serverTimestampUs: 1000,
-        timingHardwareMode: "slaprf_net",
-        pilots: [],
-        gates: [],
-        timers: [],
-        laps: [],
-        crossings: [],
-        filtered: [],
-        summaries: [],
-        rules: store.rules,
-        simulatorRunning: true,
-        raceArmed: false,
-        laprfEmulatorStatus: store.laprfEmulator,
-        raceState: store.raceState,
-        eventState: store.eventState,
-        practiceState: store.practiceState,
+      // Connecting to a PoE Bridge reveals PoE Bridge in navigation.
+      usbPool.mainConsole.applyBackendSlotSnapshot({
+        slotIndex: 0,
+        connected: true,
+        portName: "10.0.0.28:5480",
+        probing: false,
+        reconnecting: false,
+        reconnectAttempt: 0,
+        reconnectFailed: false,
       });
+      (usbPool as unknown as { notify: () => void }).notify();
       expect(poeLinks.every((el) => el.style.display === "")).toBe(true);
 
-      // Switching to SlapRF (Bluetooth) hides PoE Bridge again.
-      store.hydrate({
-        serverTimestampUs: 2000,
-        timingHardwareMode: "slaprf_ble",
-        pilots: [],
-        gates: [],
-        timers: [],
-        laps: [],
-        crossings: [],
-        filtered: [],
-        summaries: [],
-        rules: store.rules,
-        simulatorRunning: true,
-        raceArmed: false,
-        laprfEmulatorStatus: store.laprfEmulator,
-        raceState: store.raceState,
-        eventState: store.eventState,
-        practiceState: store.practiceState,
+      // Disconnecting from the PoE Bridge immediately hides the PoE Bridge tab again.
+      usbPool.mainConsole.applyBackendSlotSnapshot({
+        slotIndex: 0,
+        connected: false,
+        probing: false,
+        reconnecting: false,
+        reconnectAttempt: 0,
+        reconnectFailed: false,
       });
+      (usbPool as unknown as { notify: () => void }).notify();
       expect(poeLinks.every((el) => el.style.display === "none")).toBe(true);
     } finally {
+      usbPool.mainConsole.applyBackendSlotSnapshot({
+        slotIndex: 0,
+        connected: false,
+        probing: false,
+        reconnecting: false,
+        reconnectAttempt: 0,
+        reconnectFailed: false,
+      });
       sidebar.destroy();
     }
   });
@@ -103,9 +107,12 @@ describe("PoE Bridge top-level navigation, LAN discovery, and management control
     }
   });
 
-  it("renders PoeBridgeView status and applies static IPv4, baud rate, and reboot actions", async () => {
+  it("renders single-column IPv4 form in both DHCP and Static modes, compact baud Apply, and clean Reboot card", async () => {
     const store = makeStore({ simulatorRunning: true, timingHardwareMode: "slaprf_net" });
     const { api } = makeMockApiClient(store);
+
+    // Simulate active PoE Bridge connection in usbPool.mainConsole
+    (usbPool.mainConsole as unknown as { port: unknown }).port = createBackendPortHandle("10.0.0.28:5480");
 
     let bridgeState = {
       host: "10.0.0.28",
@@ -131,10 +138,10 @@ describe("PoE Bridge top-level navigation, LAN discovery, and management control
       linkSpeedMbps: 100,
       fullDuplex: true,
       dhcp: true,
-      tcpConnected: false,
-      tcpClients: 0,
+      tcpConnected: true,
+      tcpClients: 1,
       maxClients: 1,
-      tcpPeer: "",
+      tcpPeer: "10.0.0.55",
       rxBytes: 20480,
       txBytes: 1024,
     };
@@ -142,11 +149,11 @@ describe("PoE Bridge top-level navigation, LAN discovery, and management control
     const actionsSent: Array<Record<string, unknown>> = [];
     (api as unknown as { fetchPoeBridgeStatus: () => Promise<unknown> }).fetchPoeBridgeStatus = async () => ({
       target: bridgeState.endpoint,
-      activeTarget: "",
-      connectedSlot: -1,
+      activeTarget: bridgeState.endpoint,
+      connectedSlot: 0,
       subnet: "10.0.0.0/24",
       bridge: { ...bridgeState },
-      devices: [{ ...bridgeState }],
+      devices: [],
     });
     (api as unknown as { sendPoeBridgeAction: (p: Record<string, unknown>) => Promise<unknown> }).sendPoeBridgeAction =
       async (p: Record<string, unknown>) => {
@@ -180,10 +187,15 @@ describe("PoE Bridge top-level navigation, LAN discovery, and management control
       expect(text).toContain("ESP32-P4-WIFI6-POE-ETH");
       expect(text).toContain("10.0.0.28:5480");
       expect(text).toContain("Espressif XIAO ESP32-C5 (303A:1001)");
-      expect(text).toContain("Available (0/1)");
+      expect(text).not.toContain("Open Flasher");
       expect(text).not.toContain("\u2014");
 
-      // Change baud rate to 921600
+      // IPv4 form is present even in DHCP mode (read-only) and unlocks in Static IPv4 mode
+      const dhcpIpInput = root.querySelector<HTMLInputElement>("input[data-field='net-ip']")!;
+      expect(dhcpIpInput).not.toBeNull();
+      expect(dhcpIpInput.disabled).toBe(true);
+
+      // Change baud rate to 921600 and click Apply
       const baudSel = root.querySelector<HTMLSelectElement>("select[data-field='bridge-baud']")!;
       baudSel.value = "921600";
       baudSel.dispatchEvent(new Event("change", { bubbles: true }));
@@ -194,9 +206,10 @@ describe("PoE Bridge top-level navigation, LAN discovery, and management control
 
       // Switch to Static IPv4 and save
       root.querySelector<HTMLButtonElement>("button[data-net-mode='static']")!.click();
-      const ipIn = root.querySelector<HTMLInputElement>("input[data-field='net-ip']")!;
-      ipIn.value = "10.0.0.29";
-      ipIn.dispatchEvent(new Event("input", { bubbles: true }));
+      const staticIpInput = root.querySelector<HTMLInputElement>("input[data-field='net-ip']")!;
+      expect(staticIpInput.disabled).toBe(false);
+      staticIpInput.value = "10.0.0.29";
+      staticIpInput.dispatchEvent(new Event("input", { bubbles: true }));
       root.querySelector<HTMLButtonElement>("button[data-action='save-netcfg']")!.click();
       await settle();
       expect(actionsSent.some((a) => a.action === "netcfg" && a.dhcp === false && a.ip === "10.0.0.29")).toBe(true);
@@ -206,6 +219,7 @@ describe("PoE Bridge top-level navigation, LAN discovery, and management control
       await settle();
       expect(actionsSent.some((a) => a.action === "reboot")).toBe(true);
     } finally {
+      (usbPool.mainConsole as unknown as { port: unknown }).port = null;
       view.destroy();
     }
   });

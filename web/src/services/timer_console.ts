@@ -2834,7 +2834,6 @@ export class UsbConnectionPool {
       this.listeners.delete(fn);
     };
   }
-
   private notify(): void {
     this.persistActiveSimSlots();
     this.listeners.forEach((fn) => {

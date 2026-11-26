@@ -89,13 +89,12 @@ func (s *Server) handleNetworkBridgeStatus(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	qTarget := strings.TrimSpace(r.URL.Query().Get("target"))
-	skipScan := r.URL.Query().Get("scan") == "0"
 
 	connectedSlot := -1
 	activeTarget := ""
 	pool := s.netMgr.Snapshot()
 	for _, sl := range pool.Slots {
-		if sl.PortName != "" && (sl.Connected || sl.Connecting || sl.Reconnecting) {
+		if sl.PortName != "" && (sl.Connected || sl.Reconnecting) {
 			connectedSlot = sl.SlotIndex
 			activeTarget = sl.PortName
 			break
@@ -106,41 +105,36 @@ func (s *Server) handleNetworkBridgeStatus(w http.ResponseWriter, r *http.Reques
 		target = activeTarget
 	}
 
-	var devs []slaprfnet.DiscoveredDevice
-	var subnet string
-	if !skipScan || target == "" {
-		discDevs, discSubnet, err := s.netTransport.DiscoverDevices(r.Context())
-		if err == nil && discDevs != nil {
-			devs = discDevs
-			subnet = discSubnet
-		}
-		if target == "" && len(devs) > 0 {
-			target = devs[0].Endpoint
-		}
-	}
-	if devs == nil {
-		devs = []slaprfnet.DiscoveredDevice{}
+	if target == "" {
+		writeJSONNoStore(w, http.StatusOK, map[string]any{
+			"target":        "",
+			"activeTarget":  "",
+			"connectedSlot": -1,
+			"subnet":        "",
+			"bridge":        nil,
+			"devices":       []slaprfnet.DiscoveredDevice{},
+			"error":         "Not connected to a PoE Bridge.",
+		})
+		return
 	}
 
 	var bridge *slaprfnet.BridgeStatus
 	var queryErr string
-	if target != "" {
-		st, err := s.netTransport.QueryBridgeStatus(r.Context(), target)
-		if err != nil {
-			queryErr = err.Error()
-		} else {
-			bridge = st
-			target = st.Endpoint
-		}
+	st, err := s.netTransport.QueryBridgeStatus(r.Context(), target)
+	if err != nil {
+		queryErr = err.Error()
+	} else {
+		bridge = st
+		target = st.Endpoint
 	}
 
 	writeJSONNoStore(w, http.StatusOK, map[string]any{
 		"target":        target,
 		"activeTarget":  activeTarget,
 		"connectedSlot": connectedSlot,
-		"subnet":        subnet,
+		"subnet":        "",
 		"bridge":        bridge,
-		"devices":       devs,
+		"devices":       []slaprfnet.DiscoveredDevice{},
 		"error":         queryErr,
 	})
 }
@@ -164,19 +158,14 @@ func (s *Server) handleNetworkBridgeAction(w http.ResponseWriter, r *http.Reques
 	if target == "" {
 		pool := s.netMgr.Snapshot()
 		for _, sl := range pool.Slots {
-			if sl.PortName != "" && (sl.Connected || sl.Connecting || sl.Reconnecting) {
+			if sl.PortName != "" && (sl.Connected || sl.Reconnecting) {
 				target = sl.PortName
 				break
 			}
 		}
 	}
 	if target == "" {
-		if devs, _, err := s.netTransport.DiscoverDevices(r.Context()); err == nil && len(devs) > 0 {
-			target = devs[0].Endpoint
-		}
-	}
-	if target == "" {
-		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "no PoE Bridge target specified or discovered on the local network"})
+		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "not connected to a PoE Bridge"})
 		return
 	}
 

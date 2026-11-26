@@ -1226,6 +1226,9 @@ export class NetworkView extends Component {
           this.savePrefs();
           this.lastSlaprfNetFieldsSig = "";
           this.renderAll();
+          if (usbPool.mainConsole.connected) {
+            await usbPool.mainConsole.disconnectCleanly();
+          }
           const s = await usbPool.connectNetworkEndpoint(this.slaprfNetHost, this.slaprfNetPort);
           if (s?.role === 1) {
             this.selectTopologySlot(1);
@@ -2090,14 +2093,6 @@ export class NetworkView extends Component {
           </button>`;
       } else if (viaEthernet) {
         actionsHtml = `
-          <a
-            href="#/poe"
-            class="btn btn-ghost net-conn-btn"
-            title="Inspect PoE Bridge link status, IPv4, USB-A baud rate, and reboot"
-          >
-            ${icons.plug(14)}
-            <span>PoE Bridge</span>
-          </a>
           <button
             type="button"
             class="btn net-conn-btn"
@@ -2108,6 +2103,16 @@ export class NetworkView extends Component {
           >
             ${icons.plugOff(14)}
             <span>Disconnect</span>
+          </button>
+          <button
+            type="button"
+            class="btn net-conn-btn"
+            data-action="slaprf-net-scan"
+            ${supported && !isWriting ? "" : "disabled"}
+            title="Discover SlapRF PoE Bridges on the local network (UDP :5480)"
+          >
+            ${icons.target(14)}
+            <span>Discover</span>
           </button>`;
       } else {
         actionsHtml = `

@@ -23,6 +23,7 @@ import {
 } from "../services/capabilities";
 import { sharedLapRFEmulatorRelay } from "../services/laprf_emulator_relay";
 import { sharedMultiGPService } from "../services/multigp_service";
+import { usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
 
 const PRIMARY_MOBILE_ROUTES = new Set<RouteId>(["races", "practice", "pilots", "network"]);
@@ -294,6 +295,11 @@ export class Sidebar extends Component {
         this.syncConditionalNav();
       })
     );
+    this.onDispose(
+      usbPool.onChange(() => {
+        this.syncConditionalNav();
+      })
+    );
     this.syncConditionalNav();
     this.syncMobileSubPageState();
     this.scheduleMoreDrawerGpuPrewarm(200);
@@ -455,7 +461,10 @@ export class Sidebar extends Component {
     this.el.querySelectorAll<HTMLElement>("[data-laprf-emulator-only]").forEach((a) => {
       a.style.display = emulOn ? "" : "none";
     });
-    const poeOn = !lockedOut && this.store.timingHardwareMode === "slaprf_net";
+    const poeConnected =
+      this.store.timingHardwareMode === "slaprf_net" &&
+      (usbPool.mainConsole.connected || usbPool.mainConsole.reconnecting);
+    const poeOn = !lockedOut && poeConnected;
     this.el.querySelectorAll<HTMLElement>("[data-poe-only]").forEach((a) => {
       a.style.display = poeOn ? "" : "none";
     });

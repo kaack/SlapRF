@@ -2,7 +2,6 @@ import { Component } from "../core/component";
 import { scanCustomSelects } from "../core/custom_select";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
-import { pushAppHash } from "../core/router";
 import { ApiClient } from "../services/api_client";
 import {
   PORTABLE_RELEASES_URL,
@@ -10,22 +9,22 @@ import {
   orderedPortableAssets,
   subscribeCapabilities,
 } from "../services/capabilities";
+import { usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
 
 type BridgeSnapshot = NonNullable<Awaited<ReturnType<ApiClient["fetchPoeBridgeStatus"]>>["bridge"]>;
-type DiscoveredBridge = Awaited<ReturnType<ApiClient["fetchPoeBridgeStatus"]>>["devices"][number];
 
 const BAUD_OPTIONS = [
-  { value: 9600, label: "9,600 baud" },
-  { value: 19200, label: "19,200 baud" },
-  { value: 38400, label: "38,400 baud" },
-  { value: 57600, label: "57,600 baud" },
-  { value: 115200, label: "115,200 baud (Default)" },
-  { value: 230400, label: "230,400 baud" },
-  { value: 460800, label: "460,800 baud" },
-  { value: 921600, label: "921,600 baud" },
-  { value: 1000000, label: "1,000,000 baud" },
-  { value: 2000000, label: "2,000,000 baud" },
+  { value: 9600, label: "9,600" },
+  { value: 19200, label: "19,200" },
+  { value: 38400, label: "38,400" },
+  { value: 57600, label: "57,600" },
+  { value: 115200, label: "115,200 (Default)" },
+  { value: 230400, label: "230,400" },
+  { value: 460800, label: "460,800" },
+  { value: 921600, label: "921,600" },
+  { value: 1000000, label: "1,000,000" },
+  { value: 2000000, label: "2,000,000" },
 ];
 
 function formatBytes(n: number): string {
@@ -77,9 +76,7 @@ export class PoeBridgeView extends Component {
 
   private selectedTarget = "";
   private activeTarget = "";
-  private subnet = "";
   private bridge: BridgeSnapshot | null = null;
-  private devices: DiscoveredBridge[] = [];
   private statusError = "";
   private feedbackTone: "good" | "bad" | null = null;
   private feedbackMsg = "";
@@ -124,43 +121,21 @@ export class PoeBridgeView extends Component {
         const nextDhcp = netModeBtn.dataset.netMode === "dhcp";
         if (nextDhcp !== this.formDhcp) {
           this.formDhcp = nextDhcp;
+          if (!nextDhcp && this.bridge) {
+            if (!this.formIp) this.formIp = this.bridge.staticIp || this.bridge.ip || "";
+            if (!this.formNetmask) this.formNetmask = this.bridge.staticNetmask || this.bridge.netmask || "255.255.255.0";
+            if (!this.formGateway) this.formGateway = this.bridge.staticGateway || this.bridge.gateway || "";
+          }
           this.formDirtyNet = true;
           this.renderNetConfigSection();
         }
         return;
       }
 
-      const openFlasherBtn = target.closest<HTMLButtonElement>("button[data-action='open-flasher']");
-      if (openFlasherBtn) {
-        pushAppHash("#/flasher");
-        return;
-      }
-
-      const scanBtn = target.closest<HTMLButtonElement>("button[data-action='scan-bridges']");
-      if (scanBtn && !this.busyAction) {
-        this.clearFeedback();
-        void this.refreshBridge(true);
-        return;
-      }
-
       const refreshBtn = target.closest<HTMLButtonElement>("button[data-action='refresh-bridge']");
       if (refreshBtn && !this.busyAction) {
         this.clearFeedback();
-        void this.refreshBridge(false);
-        return;
-      }
-
-      const applyTargetBtn = target.closest<HTMLButtonElement>("button[data-action='select-target']");
-      if (applyTargetBtn && !this.busyAction) {
-        const input = this.el.querySelector<HTMLInputElement>("input[data-field='manual-target']");
-        if (input && input.value.trim()) {
-          this.selectedTarget = input.value.trim();
-          this.hydratedTargetKey = "";
-          this.formDirtyNet = false;
-          this.formDirtyBaud = false;
-          this.clearFeedback();
-          void this.refreshBridge(false);
-        }
+        void this.refreshBridge();
         return;
       }
 
@@ -182,12 +157,6 @@ export class PoeBridgeView extends Component {
         return;
       }
 
-      const resetCountersBtn = target.closest<HTMLButtonElement>("button[data-action='reset-counters']");
-      if (resetCountersBtn && !this.busyAction) {
-        void this.runQuickAction("reset-counters");
-        return;
-      }
-
       const rebootBtn = target.closest<HTMLButtonElement>("button[data-action='reboot-bridge']");
       if (rebootBtn && !this.busyAction) {
         void this.rebootBridge();
@@ -196,34 +165,12 @@ export class PoeBridgeView extends Component {
 
     this.listen(el, "change", (e) => {
       const t = e.target as HTMLElement;
-      if (t.matches("select[data-field='bridge-picker']")) {
-        const val = (t as HTMLSelectElement).value.trim();
-        if (val && val !== this.selectedTarget) {
-          this.selectedTarget = val;
-          this.hydratedTargetKey = "";
-          this.formDirtyNet = false;
-          this.formDirtyBaud = false;
-          this.clearFeedback();
-          void this.refreshBridge(false);
-        }
-        return;
-      }
       if (t.matches("select[data-field='bridge-baud']")) {
         const parsed = Number((t as HTMLSelectElement).value);
         if (Number.isFinite(parsed) && parsed > 0) {
           this.formBaud = parsed;
           this.formDirtyBaud = true;
         }
-        return;
-      }
-      if (t.matches("input[data-action='toggle-dtr']")) {
-        const checked = (t as HTMLInputElement).checked;
-        void this.toggleControlLine("dtr", checked);
-        return;
-      }
-      if (t.matches("input[data-action='toggle-rts']")) {
-        const checked = (t as HTMLInputElement).checked;
-        void this.toggleControlLine("rts", checked);
       }
     });
 
@@ -241,22 +188,6 @@ export class PoeBridgeView extends Component {
       }
     });
 
-    this.listen(el, "keydown", (e) => {
-      if (e.key === "Enter") {
-        const t = e.target as HTMLElement;
-        if (t.matches("input[data-field='manual-target']")) {
-          e.preventDefault();
-          const val = (t as HTMLInputElement).value.trim();
-          if (val && !this.busyAction) {
-            this.selectedTarget = val;
-            this.hydratedTargetKey = "";
-            this.clearFeedback();
-            void this.refreshBridge(false);
-          }
-        }
-      }
-    });
-
     this.onDispose(
       store.subscribe(["status", "config"], () => {
         if (!this.viewActive) return;
@@ -264,25 +195,45 @@ export class PoeBridgeView extends Component {
       })
     );
     this.onDispose(
+      usbPool.onChange(() => {
+        if (!usbPool.mainConsole.connected && !usbPool.mainConsole.reconnecting && this.rebootingUntilMs === 0) {
+          this.selectedTarget = "";
+          this.activeTarget = "";
+          this.bridge = null;
+          this.hydratedTargetKey = "";
+          this.formDirtyNet = false;
+          this.formDirtyBaud = false;
+          if (this.viewActive) {
+            this.renderDynamicSlots();
+            this.renderAllControlSections();
+          }
+          return;
+        }
+        if (this.viewActive) {
+          void this.refreshBridge();
+        }
+      })
+    );
+    this.onDispose(
       subscribeCapabilities(() => {
         if (!this.viewActive) return;
         this.shellBuilt = false;
         this.renderShellIfNeeded();
-        void this.refreshBridge(true);
+        void this.refreshBridge();
       })
     );
     this.onDispose(() => this.stopPolling());
 
     this.renderShellIfNeeded();
     this.startPolling();
-    void this.refreshBridge(true);
+    void this.refreshBridge();
   }
 
   override onActivate(): void {
     this.viewActive = true;
     this.renderShellIfNeeded();
     this.startPolling();
-    void this.refreshBridge(false);
+    void this.refreshBridge();
   }
 
   override onDeactivate(): void {
@@ -294,7 +245,7 @@ export class PoeBridgeView extends Component {
     this.stopPolling();
     this.pollTimer = setInterval(() => {
       if (!this.viewActive || this.inFlight || this.busyAction) return;
-      void this.refreshBridge(false);
+      void this.refreshBridge();
     }, 2500);
   }
 
@@ -321,20 +272,26 @@ export class PoeBridgeView extends Component {
     return Boolean(caps.portable || this.store.simulatorRunning);
   }
 
-  private async refreshBridge(scanLan: boolean): Promise<void> {
+  private async refreshBridge(): Promise<void> {
     if (!this.canReachBridgeBackend() || this.inFlight) return;
+    if (!usbPool.mainConsole.connected && !usbPool.mainConsole.reconnecting && Date.now() >= this.rebootingUntilMs) {
+      this.bridge = null;
+      this.statusError = "Not connected to a PoE Bridge.";
+      if (this.viewActive) {
+        this.renderDynamicSlots();
+      }
+      return;
+    }
     this.inFlight = true;
     try {
       const res = await this.api.fetchPoeBridgeStatus({
         target: this.selectedTarget || undefined,
-        scan: scanLan,
+        scan: false,
       });
       this.activeTarget = res.activeTarget || "";
-      if (scanLan || this.devices.length === 0) {
-        this.devices = res.devices ?? [];
-        if (res.subnet) this.subnet = res.subnet;
-      }
-      if (!this.selectedTarget && res.target) {
+      if (res.activeTarget) {
+        this.selectedTarget = res.activeTarget;
+      } else if (!this.selectedTarget && res.target) {
         this.selectedTarget = res.target;
       }
       const hadBridge = Boolean(this.bridge);
@@ -349,9 +306,7 @@ export class PoeBridgeView extends Component {
       } else {
         this.bridge = null;
         if (hadBridge) {
-          this.renderNetConfigSection();
-          this.renderSerialSection();
-          this.renderMaintenanceSection();
+          this.renderAllControlSections();
         }
         if (Date.now() < this.rebootingUntilMs) {
           this.statusError = "Waiting for PoE Bridge to finish rebooting…";
@@ -386,9 +341,7 @@ export class PoeBridgeView extends Component {
     }
     if (firstForTarget || forceSections) {
       this.hydratedTargetKey = b.endpoint;
-      this.renderNetConfigSection();
-      this.renderSerialSection();
-      this.renderMaintenanceSection();
+      this.renderAllControlSections();
     }
   }
 
@@ -444,7 +397,7 @@ export class PoeBridgeView extends Component {
       if (res.bridge) {
         this.bridge = res.bridge;
       }
-      this.setFeedback("good", res.message || `USB-A baud rate set to ${this.formBaud.toLocaleString()}.`);
+      this.setFeedback("good", res.message || `Baud rate set to ${this.formBaud.toLocaleString()}.`);
     } catch (err) {
       this.setFeedback("bad", err instanceof Error ? err.message : String(err));
     } finally {
@@ -454,29 +407,7 @@ export class PoeBridgeView extends Component {
     }
   }
 
-  private async toggleControlLine(line: "dtr" | "rts", value: boolean): Promise<void> {
-    this.busyAction = "lines";
-    this.clearFeedback();
-    try {
-      const res = await this.api.sendPoeBridgeAction({
-        target: this.selectedTarget || undefined,
-        action: "lines",
-        ...(line === "dtr" ? { dtr: value } : { rts: value }),
-      });
-      if (res.bridge) {
-        this.bridge = res.bridge;
-      }
-      this.setFeedback("good", `${line.toUpperCase()} line ${value ? "enabled" : "disabled"}.`);
-    } catch (err) {
-      this.setFeedback("bad", err instanceof Error ? err.message : String(err));
-    } finally {
-      this.busyAction = null;
-      this.renderDynamicSlots();
-      this.renderAllControlSections();
-    }
-  }
-
-  private async runQuickAction(action: "reset-usb" | "reset-counters"): Promise<void> {
+  private async runQuickAction(action: "reset-usb"): Promise<void> {
     this.busyAction = action;
     this.clearFeedback();
     this.renderAllControlSections();
@@ -488,7 +419,7 @@ export class PoeBridgeView extends Component {
       if (res.bridge) {
         this.bridge = res.bridge;
       }
-      this.setFeedback("good", res.message || "Command completed.");
+      this.setFeedback("good", res.message || "USB-A device restarted.");
     } catch (err) {
       this.setFeedback("bad", err instanceof Error ? err.message : String(err));
     } finally {
@@ -548,10 +479,10 @@ export class PoeBridgeView extends Component {
           <section class="settings-section" data-section-anchor="portable">
             <div class="settings-intro">
               <h2>SlapRF Server required for LAN hardware</h2>
-              <p>Browser tabs cannot send raw UDP or TCP sockets to a physical PoE Bridge directly. Run SlapRF Portable or the SlapRF Android app on your network, or enable Simulation active to preview PoE Bridge controls.</p>
+              <p>Browser tabs cannot open raw UDP or TCP sockets to a physical PoE Bridge directly. Run SlapRF Portable or the SlapRF Android app on your network, or enable Simulation active to preview PoE Bridge controls.</p>
             </div>
             <div class="card">
-              <div class="option-row" style="border-bottom:0;">
+              <div class="option-row">
                 <div>
                   <div class="option-title">Download SlapRF Portable</div>
                   <div class="option-sub">Standalone single-file server with built-in PoE Ethernet discovery, TCP :5480 low-latency streaming, and live bridge management.</div>
@@ -581,33 +512,31 @@ export class PoeBridgeView extends Component {
 
         <section class="settings-section" data-section-anchor="network">
           <div class="settings-intro">
-            <h2>IPv4 network settings</h2>
-            <p>Keep automatic DHCP (with link-local fallback when plugged straight into a laptop), or assign a fixed static IPv4 address.</p>
+            <h2>IPv4 settings</h2>
+            <p>Use automatic DHCP (with link-local fallback on a direct laptop PoE cable) or assign a fixed static IPv4 address.</p>
           </div>
-          <div class="card" data-slot="poe-netcfg"></div>
+          <div class="settings-cards" data-slot="poe-netcfg"></div>
         </section>
 
         <section class="settings-section" data-section-anchor="serial">
           <div class="settings-intro">
-            <h2>USB-A serial & device controls</h2>
-            <p>Configure default USB-A UART baud rate, toggle DTR/RTS control lines, or remotely reset the attached USB-A timer over Ethernet.</p>
+            <h2>USB-A serial</h2>
+            <p>Configure serial baud rate for UART-bridged USB timers, or restart the attached USB-A device remotely over Ethernet.</p>
           </div>
-          <div class="card" data-slot="poe-serial"></div>
+          <div class="settings-cards" data-slot="poe-serial"></div>
         </section>
 
         <section class="settings-section" data-section-anchor="maintenance">
           <div class="settings-intro">
             <h2>Maintenance</h2>
-            <p>Restart the PoE Bridge remotely over Ethernet, or open the USB-C firmware flasher to update bridge firmware.</p>
+            <p>Restart the PoE Bridge remotely over Ethernet.</p>
           </div>
-          <div class="card" data-slot="poe-maintenance"></div>
+          <div class="settings-cards" data-slot="poe-maintenance"></div>
         </section>
       </div>`;
 
     this.renderDynamicSlots();
-    this.renderNetConfigSection();
-    this.renderSerialSection();
-    this.renderMaintenanceSection();
+    this.renderAllControlSections();
   }
 
   private renderFeedbackSlot(): void {
@@ -643,70 +572,21 @@ export class PoeBridgeView extends Component {
         : "is-bad";
 
     const headline = b
-      ? `${esc(b.board)} (${esc(b.endpoint)}) · ${b.linkUp ? `${b.linkSpeedMbps || 100} Mbps ${b.fullDuplex ? "Full-Duplex" : "Half-Duplex"}` : "Link down"}${
-          this.activeTarget === b.endpoint ? " · Active timing bridge" : ""
-        }`
-      : esc(this.statusError || "Scanning local network for PoE Bridges…");
-
-    const knownEndpoints = new Set<string>();
-    const options: Array<{ endpoint: string; label: string }> = [];
-    if (this.activeTarget) {
-      knownEndpoints.add(this.activeTarget);
-      options.push({ endpoint: this.activeTarget, label: `${this.activeTarget} (Connected)` });
-    }
-    for (const d of this.devices) {
-      if (!knownEndpoints.has(d.endpoint)) {
-        knownEndpoints.add(d.endpoint);
-        options.push({
-          endpoint: d.endpoint,
-          label: `${d.endpoint}${d.mac ? ` · ${d.mac}` : ""}`,
-        });
-      }
-    }
-    if (this.selectedTarget && !knownEndpoints.has(this.selectedTarget)) {
-      knownEndpoints.add(this.selectedTarget);
-      options.push({ endpoint: this.selectedTarget, label: this.selectedTarget });
-    }
+      ? `${esc(b.board)} (${esc(b.endpoint)}) · ${b.linkUp ? `${b.linkSpeedMbps || 100} Mbps ${b.fullDuplex ? "Full-Duplex" : "Half-Duplex"}` : "Link down"}`
+      : esc(this.statusError || "Reading connected PoE Bridge…");
 
     const sig = JSON.stringify({
       b,
       err: this.statusError,
       sel: this.selectedTarget,
       act: this.activeTarget,
-      opts: options,
       busy: this.busyAction,
       reb: isRebooting,
     });
-    const manualFocused = Boolean(
-      document.activeElement &&
-        statusSlot.contains(document.activeElement) &&
-        (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "SELECT")
-    );
-    if (manualFocused || sig === this.lastStatusSig) {
+    if (sig === this.lastStatusSig) {
       return;
     }
     this.lastStatusSig = sig;
-
-    const pickerHtml =
-      options.length > 0
-        ? `<select class="input mono" data-field="bridge-picker" aria-label="Target PoE Bridge" style="min-width:190px;height:32px;padding:0 28px 0 10px;">
-            ${options
-              .map(
-                (o) =>
-                  `<option value="${esc(o.endpoint)}" ${o.endpoint === this.selectedTarget ? "selected" : ""}>${esc(o.label)}</option>`
-              )
-              .join("")}
-          </select>`
-        : `<input
-            type="text"
-            class="input mono"
-            data-field="manual-target"
-            value="${esc(this.selectedTarget)}"
-            placeholder="192.168.1.110:5480"
-            aria-label="PoE Bridge IP and port"
-            style="width:185px;height:32px;"
-          />
-          <button type="button" class="btn btn-sm" data-action="select-target">Probe</button>`;
 
     const ethBadge = b
       ? b.linkUp
@@ -726,11 +606,7 @@ export class PoeBridgeView extends Component {
           <span class="status-dot ${ledCls}"></span>
           <span class="debug-head-note">${headline}</span>
         </span>
-        <div class="debug-connect-actions" style="flex-wrap:wrap;">
-          ${pickerHtml}
-          <button type="button" class="btn btn-sm btn-ghost" data-action="scan-bridges" title="Broadcast UDP :5480 discovery on LAN">
-            ${icons.wifi(14)}<span>Discover</span>
-          </button>
+        <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm btn-ghost" data-action="refresh-bridge" title="Refresh status now">
             ${icons.reset(14)}<span>Refresh</span>
           </button>
@@ -782,15 +658,11 @@ export class PoeBridgeView extends Component {
           <dl class="debug-kv-list">
             <div class="debug-kv-row">
               <dt>USB-A device</dt>
-              <dd>${b ? esc(describeUsbUsbPort(b)) : "Not available"}</dd>
+              <dd>${b ? esc(describeUsbVidPid(b.usbConnected, b.usbVid, b.usbPid)) : "Not available"}</dd>
             </div>
             <div class="debug-kv-row">
-              <dt>UART line coding</dt>
-              <dd>${
-                b
-                  ? `<span class="mono">${b.baud.toLocaleString()} 8N1</span> <span class="note">· DTR ${b.dtr ? "ON" : "OFF"} · RTS ${b.rts ? "ON" : "OFF"}</span>`
-                  : "Not available"
-              }</dd>
+              <dt>Baud rate</dt>
+              <dd>${b ? `<span class="mono">${b.baud.toLocaleString()} 8N1</span>` : "Not available"}</dd>
             </div>
             <div class="debug-kv-row">
               <dt>TCP :5480 serial</dt>
@@ -815,86 +687,88 @@ export class PoeBridgeView extends Component {
   private renderNetConfigSection(): void {
     const slot = this.el.querySelector<HTMLElement>("[data-slot='poe-netcfg']");
     if (!slot) return;
+    const b = this.bridge;
     const saving = this.busyAction === "netcfg";
-    const staticDis = this.formDhcp || saving ? "disabled" : "";
+    const fieldsReadOnly = this.formDhcp || saving || !b;
+
+    const shownIp = this.formDhcp ? b?.ip || this.formIp : this.formIp;
+    const shownMask = this.formDhcp ? b?.netmask || this.formNetmask || "255.255.255.0" : this.formNetmask;
+    const shownGw = this.formDhcp ? b?.gateway || this.formGateway : this.formGateway;
 
     slot.innerHTML = `
-      <div class="option-row">
-        <div>
-          <div class="option-title">IPv4 mode</div>
-          <div class="option-sub">Automatic uses DHCP on router networks and falls back to 169.254.x.x on a direct laptop PoE cable.</div>
+      <div class="card">
+        <div class="option-row">
+          <div>
+            <div class="option-title">IPv4 mode</div>
+            <div class="option-sub">Automatic acquires an IP via DHCP (or 169.254.x.x link-local on a direct cable). Static uses the fixed IPv4 below.</div>
+          </div>
+          <div class="option-actions diag-log-actions">
+            <div class="segmented" role="radiogroup" aria-label="IPv4 addressing mode">
+              <button
+                type="button"
+                role="radio"
+                aria-checked="${this.formDhcp}"
+                class="${this.formDhcp ? "is-active" : ""}"
+                data-net-mode="dhcp"
+                ${saving ? "disabled" : ""}
+              >Automatic (DHCP)</button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked="${!this.formDhcp}"
+                class="${!this.formDhcp ? "is-active" : ""}"
+                data-net-mode="static"
+                ${saving ? "disabled" : ""}
+              >Static IPv4</button>
+            </div>
+          </div>
         </div>
-        <div class="segmented" role="radiogroup" aria-label="IPv4 addressing mode">
-          <button
-            type="button"
-            role="radio"
-            aria-checked="${this.formDhcp}"
-            class="${this.formDhcp ? "is-active" : ""}"
-            data-net-mode="dhcp"
-            ${saving ? "disabled" : ""}
-          >Automatic (DHCP)</button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked="${!this.formDhcp}"
-            class="${!this.formDhcp ? "is-active" : ""}"
-            data-net-mode="static"
-            ${saving ? "disabled" : ""}
-          >Static IPv4</button>
-        </div>
-      </div>
 
-      ${
-        this.formDhcp
-          ? ""
-          : `<div class="option-row" style="align-items:flex-end;flex-wrap:wrap;gap:12px;">
-              <div style="flex:1 1 170px;">
-                <label class="flasher-field-label" style="display:block;margin-bottom:4px;">IPv4 address</label>
-                <input
-                  type="text"
-                  class="input mono"
-                  data-field="net-ip"
-                  value="${esc(this.formIp)}"
-                  placeholder="192.168.1.110"
-                  aria-label="Static IPv4 address"
-                  ${staticDis}
-                />
-              </div>
-              <div style="flex:1 1 170px;">
-                <label class="flasher-field-label" style="display:block;margin-bottom:4px;">Subnet mask</label>
-                <input
-                  type="text"
-                  class="input mono"
-                  data-field="net-mask"
-                  value="${esc(this.formNetmask)}"
-                  placeholder="255.255.255.0"
-                  aria-label="Static IPv4 subnet mask"
-                  ${staticDis}
-                />
-              </div>
-              <div style="flex:1 1 170px;">
-                <label class="flasher-field-label" style="display:block;margin-bottom:4px;">Default gateway</label>
-                <input
-                  type="text"
-                  class="input mono"
-                  data-field="net-gw"
-                  value="${esc(this.formGateway)}"
-                  placeholder="192.168.1.1"
-                  aria-label="Static IPv4 default gateway"
-                  ${staticDis}
-                />
-              </div>
-            </div>`
-      }
-
-      <div class="option-row" style="border-bottom:0;">
-        <div>
-          <div class="option-title">Save network configuration</div>
-          <div class="option-sub">Stores the IPv4 mode in bridge NVS flash and applies it immediately without touching USB-A timing settings.</div>
+        <div class="datasource-server-panel">
+          <div class="poe-netcfg-fields">
+            <label class="poe-netcfg-field">
+              <span class="poe-netcfg-label">IPv4 address</span>
+              <input
+                type="text"
+                class="input mono"
+                data-field="net-ip"
+                value="${esc(shownIp)}"
+                placeholder="192.168.1.110"
+                aria-label="IPv4 address"
+                ${fieldsReadOnly ? "disabled" : ""}
+              />
+            </label>
+            <label class="poe-netcfg-field">
+              <span class="poe-netcfg-label">Subnet mask</span>
+              <input
+                type="text"
+                class="input mono"
+                data-field="net-mask"
+                value="${esc(shownMask)}"
+                placeholder="255.255.255.0"
+                aria-label="Subnet mask"
+                ${fieldsReadOnly ? "disabled" : ""}
+              />
+            </label>
+            <label class="poe-netcfg-field">
+              <span class="poe-netcfg-label">Default gateway</span>
+              <input
+                type="text"
+                class="input mono"
+                data-field="net-gw"
+                value="${esc(shownGw)}"
+                placeholder="192.168.1.1"
+                aria-label="Default gateway"
+                ${fieldsReadOnly ? "disabled" : ""}
+              />
+            </label>
+          </div>
+          <div class="poe-netcfg-foot">
+            <button type="button" class="btn btn-sm" data-action="save-netcfg" ${saving || !b ? "disabled" : ""}>
+              ${icons.check(14)}<span>${saving ? "Applying…" : "Apply"}</span>
+            </button>
+          </div>
         </div>
-        <button type="button" class="btn" data-action="save-netcfg" ${saving || !this.bridge ? "disabled" : ""}>
-          ${icons.check(14)}<span>${saving ? "Applying…" : "Apply Network Settings"}</span>
-        </button>
       </div>`;
   }
 
@@ -906,59 +780,37 @@ export class PoeBridgeView extends Component {
     const hasCustomBaud = !BAUD_OPTIONS.some((o) => o.value === this.formBaud);
 
     slot.innerHTML = `
-      <div class="option-row">
-        <div>
-          <div class="option-title">USB-A default baud rate</div>
-          <div class="option-sub">Applies to UART-bridged USB timers (CH34x, CP210x, FTDI). XIAO ESP32-C5 USB-Serial/JTAG transfers at full USB 2.0 speed regardless of baud rate.</div>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-          <select class="input mono" data-field="bridge-baud" aria-label="USB-A baud rate" style="min-width:195px;" ${busy || !b ? "disabled" : ""}>
-            ${hasCustomBaud ? `<option value="${this.formBaud}" selected>${this.formBaud.toLocaleString()} baud</option>` : ""}
-            ${BAUD_OPTIONS.map(
-              (opt) => `<option value="${opt.value}" ${opt.value === this.formBaud ? "selected" : ""}>${esc(opt.label)}</option>`
-            ).join("")}
-          </select>
-          <button type="button" class="btn" data-action="save-baud" ${busy || !b ? "disabled" : ""}>
-            <span>${this.busyAction === "baud" ? "Saving…" : "Set Baud"}</span>
-          </button>
-        </div>
-      </div>
-
-      <div class="option-row">
-        <div>
-          <div class="option-title">USB-A control lines (DTR / RTS)</div>
-          <div class="option-sub">Keep DTR enabled and RTS disabled for normal Hub H1 operation.</div>
-        </div>
-        <div style="display:flex;align-items:center;gap:16px;">
-          <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;">
-            <span class="mono">DTR</span>
-            <span class="switch">
-              <input type="checkbox" data-action="toggle-dtr" ${b?.dtr !== false ? "checked" : ""} ${busy || !b ? "disabled" : ""} />
-              <span></span>
-            </span>
-          </label>
-          <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;">
-            <span class="mono">RTS</span>
-            <span class="switch">
-              <input type="checkbox" data-action="toggle-rts" ${b?.rts ? "checked" : ""} ${busy || !b ? "disabled" : ""} />
-              <span></span>
-            </span>
-          </label>
+      <div class="card">
+        <div class="option-row">
+          <div>
+            <div class="option-title">Baud rate</div>
+            <div class="option-sub">Serial speed for UART-bridged USB timers. XIAO ESP32-C5 USB-Serial/JTAG runs at full USB speed regardless of baud rate.</div>
+          </div>
+          <div class="option-actions diag-log-actions poe-baud-actions">
+            <select class="input input-sm mono poe-baud-select" data-field="bridge-baud" aria-label="USB-A baud rate" ${busy || !b ? "disabled" : ""}>
+              ${hasCustomBaud ? `<option value="${this.formBaud}" selected>${this.formBaud.toLocaleString()}</option>` : ""}
+              ${BAUD_OPTIONS.map(
+                (opt) => `<option value="${opt.value}" ${opt.value === this.formBaud ? "selected" : ""}>${esc(opt.label)}</option>`
+              ).join("")}
+            </select>
+            <button type="button" class="btn btn-sm" data-action="save-baud" ${busy || !b ? "disabled" : ""}>
+              <span>${this.busyAction === "baud" ? "Applying…" : "Apply"}</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      <div class="option-row" style="border-bottom:0;">
-        <div>
-          <div class="option-title">Attached USB-A device & counters</div>
-          <div class="option-sub">Pulse DTR/RTS to restart Hub H1 at the gate remotely, or clear cumulative RX/TX byte counters.</div>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-          <button type="button" class="btn btn-sm btn-ghost" data-action="reset-counters" ${busy || !b ? "disabled" : ""}>
-            <span>Clear Counters</span>
-          </button>
-          <button type="button" class="btn btn-sm" data-action="reset-usb" ${busy || !b || !b.usbConnected ? "disabled" : ""}>
-            ${icons.reset(14)}<span>${this.busyAction === "reset-usb" ? "Resetting USB…" : "Reset USB-A Device"}</span>
-          </button>
+      <div class="card">
+        <div class="option-row">
+          <div>
+            <div class="option-title">Restart USB-A timer</div>
+            <div class="option-sub">Remotely restarts Hub H1 or any timer plugged into the USB-A port without walking out to the gate.</div>
+          </div>
+          <div class="option-actions diag-log-actions">
+            <button type="button" class="btn btn-sm" data-action="reset-usb" ${busy || !b || !b.usbConnected ? "disabled" : ""}>
+              ${icons.reset(14)}<span>${this.busyAction === "reset-usb" ? "Restarting…" : "Restart USB Device"}</span>
+            </button>
+          </div>
         </div>
       </div>`;
     scanCustomSelects(slot);
@@ -971,28 +823,18 @@ export class PoeBridgeView extends Component {
     const busy = Boolean(this.busyAction);
 
     slot.innerHTML = `
-      <div class="option-row">
-        <div>
-          <div class="option-title">Reboot PoE Bridge</div>
-          <div class="option-sub">Restarts the ESP32-P4 over Ethernet. PoE link and Hub H1 stream resume automatically in about 3 seconds.</div>
+      <div class="card">
+        <div class="option-row">
+          <div>
+            <div class="option-title">Reboot PoE Bridge</div>
+            <div class="option-sub">Restarts the Waveshare ESP32-P4 over Ethernet. PoE link and Hub H1 stream return in about 3 seconds.</div>
+          </div>
+          <div class="option-actions diag-log-actions">
+            <button type="button" class="btn btn-sm" data-action="reboot-bridge" ${busy || !b ? "disabled" : ""}>
+              ${icons.power(14)}<span>${this.busyAction === "reboot" ? "Rebooting…" : "Reboot Bridge"}</span>
+            </button>
+          </div>
         </div>
-        <button type="button" class="btn" data-action="reboot-bridge" ${busy || !b ? "disabled" : ""}>
-          ${icons.power(14)}<span>${this.busyAction === "reboot" ? "Rebooting…" : "Reboot Bridge"}</span>
-        </button>
-      </div>
-
-      <div class="option-row" style="border-bottom:0;">
-        <div>
-          <div class="option-title">Update PoE Bridge firmware</div>
-          <div class="option-sub">Plug the Waveshare board's USB-C port into this computer and use the Firmware Flasher to write the latest bridge image.</div>
-        </div>
-        <button type="button" class="btn btn-ghost" data-action="open-flasher">
-          ${icons.cpu(14)}<span>Open Flasher</span>
-        </button>
       </div>`;
   }
-}
-
-function describeUsbUsbPort(b: BridgeSnapshot): string {
-  return describeUsbVidPid(b.usbConnected, b.usbVid, b.usbPid);
 }

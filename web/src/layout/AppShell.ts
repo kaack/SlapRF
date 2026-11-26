@@ -28,6 +28,7 @@ import {
   subscribeCapabilities,
 } from "../services/capabilities";
 import { sharedLapRFEmulatorRelay } from "../services/laprf_emulator_relay";
+import { usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
 import { PracticeView } from "../views/PracticeView";
 import { LapRFEmulatorView } from "../views/LapRFEmulatorView";
@@ -150,18 +151,29 @@ export class AppShell extends Component {
         }
       })
     );
+    const isPoeNavActive = () =>
+      this.store.timingHardwareMode === "slaprf_net" &&
+      (usbPool.mainConsole.connected || usbPool.mainConsole.reconnecting);
+
     this.onDispose(
       store.subscribe(["status", "config", "race"], () => {
         if (this.store.hasHydrated && !this.store.simulatorRunning && this.router.route === "sim") {
           this.router.navigateSection("races");
           return;
         }
-        if (this.store.hasHydrated && this.store.timingHardwareMode !== "slaprf_net" && this.router.route === "poe") {
+        if (this.store.hasHydrated && !isPoeNavActive() && this.router.route === "poe") {
           this.router.navigateSection("network");
           return;
         }
         if (this.store.hasHydrated) {
           this.scheduleIdleNeighborWarmup();
+        }
+      })
+    );
+    this.onDispose(
+      usbPool.onChange(() => {
+        if (this.store.hasHydrated && !isPoeNavActive() && this.router.route === "poe") {
+          this.router.navigateSection("network");
         }
       })
     );
@@ -211,7 +223,10 @@ export class AppShell extends Component {
       if (r.hiddenFromNav) continue;
       if (r.simOnly && !simOn) continue;
       if (r.laprfEmulatorOnly && !emulOn) continue;
-      if (r.poeBridgeOnly && this.store.timingHardwareMode !== "slaprf_net") continue;
+      const poeOn =
+        this.store.timingHardwareMode === "slaprf_net" &&
+        (usbPool.mainConsole.connected || usbPool.mainConsole.reconnecting);
+      if (r.poeBridgeOnly && !poeOn) continue;
       visibleSet.add(r.id);
       if (!primarySet.has(r.id)) {
         secondary.push(r.id);
@@ -1038,7 +1053,10 @@ export class AppShell extends Component {
       this.router.navigateSection("setup");
       return;
     }
-    if (route === "poe" && this.store.hasHydrated && this.store.timingHardwareMode !== "slaprf_net") {
+    const poeActive =
+      this.store.timingHardwareMode === "slaprf_net" &&
+      (usbPool.mainConsole.connected || usbPool.mainConsole.reconnecting);
+    if (route === "poe" && this.store.hasHydrated && !poeActive) {
       this.router.navigateSection("network");
       return;
     }

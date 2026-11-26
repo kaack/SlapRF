@@ -2926,6 +2926,35 @@ html[data-theme="light"] .bar-time {
   padding: 0 28px 0 11px;
   font-size: 12.5px;
 }
+.poe-netcfg-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 420px;
+}
+.poe-netcfg-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.poe-netcfg-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+.poe-netcfg-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding-top: 2px;
+}
+.poe-baud-select,
+.poe-baud-actions .custom-select {
+  width: 190px;
+  min-width: 165px;
+  flex: 0 1 auto;
+}
 .mgp-key-row {
   align-items: flex-start;
   gap: 16px;
