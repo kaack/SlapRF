@@ -60,6 +60,12 @@ jobs:
           name: firmware-ble
           path: web/firmware
 
+      - name: Download compiled PoE Bridge firmware image
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-poe-bridge
+          path: web/firmware
+
       - name: Build static SPA and Go WASM simulation engine
         run: go run ./cmd/build-web -web ./web -out ./_site
 

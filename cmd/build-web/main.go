@@ -66,6 +66,13 @@ func main() {
 	} else {
 		log.Printf("[build-web] Firmware: %s not built, the Bluetooth hub option will be disabled", firmware.BLEImageName)
 	}
+	poeSrc := filepath.Join(*webDir, "firmware", firmware.PoEBridgeImageName)
+	if _, err := os.Stat(poeSrc); err == nil {
+		mustCopyFile(poeSrc, filepath.Join(*outDir, "firmware", firmware.PoEBridgeImageName))
+		log.Printf("[build-web] Firmware: compiled %s", firmware.PoEBridgeImageName)
+	} else {
+		log.Printf("[build-web] Firmware: %s not built, the PoE bridge option will be disabled", firmware.PoEBridgeImageName)
+	}
 	// 1. Copy index.html (and 404.html for GitHub Pages SPA fallback) and styles/*.css
 	mustCopyFile(filepath.Join(*webDir, "index.html"), filepath.Join(*outDir, "index.html"))
 	mustCopyFile(filepath.Join(*webDir, "index.html"), filepath.Join(*outDir, "404.html"))

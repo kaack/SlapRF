@@ -22,11 +22,11 @@ func TestImageNameFor(t *testing.T) {
 			t.Errorf("ImageNameFor(%d, %q) = %q, want %q", c.role, c.link, got, c.want)
 		}
 	}
-	if BLEImageName != "slaprf-xiao-c5-ble.bin" || ImageName != "slaprf-xiao-c5.bin" {
-		t.Fatalf("unexpected image names %q / %q", ImageName, BLEImageName)
+	if BLEImageName != "slaprf-xiao-c5-ble.bin" || ImageName != "slaprf-xiao-c5.bin" || PoEBridgeImageName != "slaprf-p4-poe-bridge.bin" {
+		t.Fatalf("unexpected image names %q / %q / %q", ImageName, BLEImageName, PoEBridgeImageName)
 	}
 	names := ImageNames()
-	if len(names) != 2 || names[0] != ImageName || names[1] != BLEImageName {
+	if len(names) != 3 || names[0] != ImageName || names[1] != BLEImageName || names[2] != PoEBridgeImageName {
 		t.Fatalf("ImageNames() = %v", names)
 	}
 }

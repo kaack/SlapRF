@@ -70,6 +70,12 @@ func main() {
 			mustCopy(bleSrc, filepath.Join(fwDir, firmware.BLEImageName))
 			log.Printf("[build-docs] Staged %s", firmware.BLEImageName)
 		}
+
+		poeSrc := filepath.Join(*webDir, "firmware", firmware.PoEBridgeImageName)
+		if _, err := os.Stat(poeSrc); err == nil {
+			mustCopy(poeSrc, filepath.Join(fwDir, firmware.PoEBridgeImageName))
+			log.Printf("[build-docs] Staged %s", firmware.PoEBridgeImageName)
+		}
 	}
 
 	if *outDir != "" {

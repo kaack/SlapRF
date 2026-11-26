@@ -43,6 +43,12 @@ jobs:
           name: firmware-ble
           path: web/firmware
 
+      - name: Download compiled PoE Bridge firmware image
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-poe-bridge
+          path: web/firmware
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -187,6 +193,12 @@ jobs:
           name: firmware-ble
           path: web/firmware
 
+      - name: Download compiled PoE Bridge firmware image
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-poe-bridge
+          path: web/firmware
+
       - name: Download SlapRF Portable binaries
         uses: actions/download-artifact@v4
         with:
@@ -237,5 +249,6 @@ jobs:
           files: |
             web/firmware/slaprf-xiao-c5.bin
             web/firmware/slaprf-xiao-c5-ble.bin
+            web/firmware/slaprf-p4-poe-bridge.bin
             dist/slaprf-*
           fail_on_unmatched_files: true

@@ -22,6 +22,10 @@ const (
 	// flasher shows the Bluetooth option disabled.
 	BLEImageName = "slaprf-xiao-c5-ble.bin"
 
+	// PoEBridgeImageName is the merged ESP32-P4 PoE Ethernet <-> USB Host bridge image built
+	// from firmware/slaprf_p4_poe_bridge and served as web/firmware/<PoEBridgeImageName>.
+	PoEBridgeImageName = "slaprf-p4-poe-bridge.bin"
+
 	// SweepHz is the 5.8 GHz sweep rate compiled into the firmware (SWEEP_HZ in main.c).
 	SweepHz = 100
 
@@ -50,7 +54,7 @@ func ParseHubLink(s string) HubLink {
 
 // ImageNames lists every firmware image file the web flasher may serve, USB image first.
 func ImageNames() []string {
-	return []string{ImageName, BLEImageName}
+	return []string{ImageName, BLEImageName, PoEBridgeImageName}
 }
 
 // ImageNameFor returns the firmware image file for a timer role and Hub link. Spokes always get

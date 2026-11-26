@@ -74,3 +74,32 @@ jobs:
           name: firmware-ble
           path: firmware/slaprf_ble/build/slaprf-xiao-c5-ble.bin
           if-no-files-found: error
+
+  # PoE Ethernet Bridge image: firmware/slaprf_p4_poe_bridge for Waveshare ESP32-P4-(WIFI6-)POE-ETH,
+  # merged (bootloader + partition table + app) at offset 0x0 and published as
+  # `slaprf-p4-poe-bridge.bin` in its own `firmware-poe-bridge` artifact.
+  build-poe-bridge:
+    name: Build ESP32-P4 PoE Bridge firmware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build with ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32p4
+          path: firmware/slaprf_p4_poe_bridge
+          command: idf.py build && cd build && python -m esptool --chip esp32p4 merge_bin -o slaprf-p4-poe-bridge.bin @flash_args
+
+      - name: Verify merged ESP32-P4 image
+        run: |
+          bin="firmware/slaprf_p4_poe_bridge/build/slaprf-p4-poe-bridge.bin"
+          test -s "$bin" || { echo "Missing $bin"; exit 1; }
+          ls -lh "$bin"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-poe-bridge
+          path: firmware/slaprf_p4_poe_bridge/build/slaprf-p4-poe-bridge.bin
+          if-no-files-found: error
