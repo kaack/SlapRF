@@ -2869,11 +2869,13 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
         mock.calls.some(
           (c) =>
             c.method === "startMLTraining" &&
-            (c.args[0] as { continueModelId?: string })?.continueModelId === "ai-base-v1"
+            (c.args[0] as { baseModelId?: string; targetModelId?: string })?.baseModelId ===
+              "ai-base-v1" &&
+            !(c.args[0] as { targetModelId?: string })?.targetModelId
         )
       ).toBe(true);
 
-      // 4. Add a new untrained model via the top Search / + Add bar -> Training Box switches to Untrained (`Train` only!)
+      // 4. Add a new untrained model via the top Search / + Add bar -> Training Box shows Base model selector (`Empty` -> `Train`, or another model -> `Fine-Tune`)!
       const searchInput = host.querySelector<HTMLInputElement>("[data-ai-search-input]")!;
       const addModelBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="create-model"]')!;
       const listHostEl = host.querySelector<HTMLElement>("[data-ai-models-list-host]")!;
@@ -2893,6 +2895,9 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       expect(
         host.querySelector<HTMLElement>("[data-ai-training-box]")?.dataset.modelState
       ).toBe("untrained");
+      const baseModelSelect = host.querySelector<HTMLSelectElement>("[data-ai-base-model]")!;
+      expect(baseModelSelect).not.toBeNull();
+      expect(baseModelSelect.value).toBe("");
       expect(host.querySelector('[data-ai-act="train-more"]')).toBeNull();
       expect(host.querySelector(".ai-scorecard-box")).toBeNull();
       const trainFreshBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="train-fresh"]')!;
@@ -2903,11 +2908,32 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
         mock.calls.some(
           (c) =>
             c.method === "startMLTraining" &&
-            (c.args[0] as { continueModelId?: string })?.continueModelId === untrainedModel.modelId
+            (c.args[0] as { targetModelId?: string; baseModelId?: string })?.targetModelId ===
+              untrainedModel.modelId &&
+            (c.args[0] as { baseModelId?: string })?.baseModelId === ""
         )
       ).toBe(true);
 
-      // Select trained `ai-base-v1` -> Training Box switches to Trained (`Fine-Tune` + DSP/AI metrics table)
+      // Picking a trained model in Base model switches the untrained model's action to `Fine-Tune`!
+      const baseSelectAfter = host.querySelector<HTMLSelectElement>("[data-ai-base-model]")!;
+      baseSelectAfter.value = "ai-base-v0";
+      baseSelectAfter.dispatchEvent(new Event("change", { bubbles: true }));
+      expect(host.querySelector('[data-ai-act="train-fresh"]')).toBeNull();
+      const untrainedFineTuneBtn = host.querySelector<HTMLButtonElement>('[data-ai-act="train-more"]')!;
+      expect(untrainedFineTuneBtn.textContent?.trim()).toBe("Fine-Tune");
+      untrainedFineTuneBtn.click();
+      await flushMicrotasks();
+      expect(
+        mock.calls.some(
+          (c) =>
+            c.method === "startMLTraining" &&
+            (c.args[0] as { targetModelId?: string; baseModelId?: string })?.targetModelId ===
+              untrainedModel.modelId &&
+            (c.args[0] as { baseModelId?: string })?.baseModelId === "ai-base-v0"
+        )
+      ).toBe(true);
+
+      // Select trained `ai-base-v1` -> Training Box switches to Trained (`Fine-Tune` + DSP/AI metrics table, no Base model dropdown)
       host
         .querySelector<HTMLButtonElement>('[data-ai-act="focus-model"][data-model-id="ai-base-v1"]')!
         .click();
@@ -2915,9 +2941,10 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       expect(
         host.querySelector<HTMLElement>("[data-ai-training-box]")?.dataset.modelState
       ).toBe("trained");
+      expect(host.querySelector("[data-ai-base-model]")).toBeNull();
       expect(host.querySelector('[data-ai-act="train-fresh"]')).toBeNull();
 
-      // 5. Shipped 1P model (`ai-base-v0` / "SlapRF Base") cannot be deleted or renamed, but CAN be fine-tuned!
+      // 5. Shipped 1P model (`ai-base-v0` / "SlapRF Base") cannot be deleted or renamed, and fine-tuning it creates & auto-selects "SlapRF Base FT"!
       expect(
         host.querySelector('[data-ai-act="delete-model"][data-model-id="ai-base-v0"]')
       ).toBeNull();
@@ -2948,9 +2975,44 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
         mock.calls.some(
           (c) =>
             c.method === "startMLTraining" &&
-            (c.args[0] as { continueModelId?: string })?.continueModelId === "ai-base-v0"
+            (c.args[0] as { baseModelId?: string; targetModelId?: string })?.baseModelId ===
+              "ai-base-v0" &&
+            !(c.args[0] as { targetModelId?: string })?.targetModelId
         )
       ).toBe(true);
+
+      // Simulate backend finishing fine-tune -> creates new `mdl-ft-1` ("SlapRF Base FT") and auto-selects it while keeping `ai-base-v0` untouched!
+      store.ingestMLStatus({
+        ...store.mlStatus,
+        training: {
+          running: false,
+          epoch: 40,
+          totalEpochs: 40,
+          loss: 0.0112,
+          message: "Trained SlapRF Base FT",
+          completedModelId: "mdl-ft-1",
+        },
+        models: [
+          {
+            ...store.mlStatus.models.find((m) => m.modelId === "ai-base-v0")!,
+            modelId: "mdl-ft-1",
+            name: "SlapRF Base FT",
+            version: 9,
+            builtIn: false,
+            ready: true,
+            epochsTrained: 58,
+          },
+          ...store.mlStatus.models,
+        ],
+      });
+      await flushMicrotasks();
+      expect(host.querySelector("[data-ai-readonly-field]")?.textContent ?? "").toContain(
+        "SlapRF Base FT"
+      );
+      expect(host.querySelector('[data-ai-act="edit-model-name"]')).not.toBeNull();
+      expect(
+        host.querySelector('[data-ai-act="focus-model"][data-model-id="ai-base-v0"]')
+      ).not.toBeNull();
 
       // 6. Switch to AI detector from the Track Crossing Detector card!
       const rulesAiBtnAfter = detectorSlot.querySelector<HTMLButtonElement>(

@@ -151,7 +151,7 @@ func (s *Server) handleStartMLTraining(w http.ResponseWriter, r *http.Request) {
 		writeErrorJSON(w, http.StatusConflict, err.Error())
 		return
 	}
-	s.logUserAction("ML", "Started on-device model training (epochs=%d, continue=%s)", st.Training.TotalEpochs, body.ContinueModelID)
+	s.logUserAction("ML", "Started on-device model training (epochs=%d, target=%s, base=%s, continue=%s)", st.Training.TotalEpochs, body.TargetModelID, body.BaseModelID, body.ContinueModelID)
 	writeJSON(w, http.StatusAccepted, st)
 }
 

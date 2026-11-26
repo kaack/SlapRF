@@ -6923,6 +6923,12 @@ paths:
                   type: array
                   items:
                     type: string
+                targetModelId:
+                  type: string
+                  description: Optional untrained model ID to populate in-place. When omitted during fine-tuning, a new `<Name> FT` / `<Name> FT (N)` copy is created.
+                baseModelId:
+                  type: string
+                  description: Optional trained model ID (`ai-base-v0` or custom `mdl-*`) to fine-tune from. Empty string trains from scratch.
                 continueModelId:
                   type: string
                 modelName:

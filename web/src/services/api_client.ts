@@ -1242,11 +1242,14 @@ export class ApiClient {
     includeUnverified?: boolean;
     autoLabel?: boolean;
     sessionIds?: string[];
+    targetModelId?: string;
+    baseModelId?: string;
     continueModelId?: string;
     modelName?: string;
   }): Promise<MLStatus> {
     const st = await this.transport.request<MLStatus>("POST", "/v1/ml:train", payload ?? {});
     this.store.ingestMLStatus(st);
+    await this.persistBrowserEnginesIfDemo();
     return st;
   }
 

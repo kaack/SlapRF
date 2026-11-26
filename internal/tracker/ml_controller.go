@@ -285,6 +285,64 @@ func compactIdleBenchSamples(sess domain.PracticeSession, samples []tracestore.S
 	return out
 }
 
+func stripFineTuneSuffix(name string) string {
+	s := strings.TrimSpace(name)
+	if strings.HasSuffix(s, ")") {
+		if idx := strings.LastIndex(s, " FT ("); idx > 0 {
+			numPart := s[idx+len(" FT (") : len(s)-1]
+			if len(numPart) > 0 {
+				allDigits := true
+				for i := 0; i < len(numPart); i++ {
+					if numPart[i] < '0' || numPart[i] > '9' {
+						allDigits = false
+						break
+					}
+				}
+				if allDigits {
+					return strings.TrimSpace(s[:idx])
+				}
+			}
+		}
+	}
+	if strings.HasSuffix(s, " FT") && len(s) > len(" FT") {
+		return strings.TrimSpace(s[:len(s)-len(" FT")])
+	}
+	return s
+}
+
+func nextFineTuneModelNameFromSlice(sourceName string, existing []domain.MLModelSnapshot) string {
+	root := stripFineTuneSuffix(sourceName)
+	if root == "" {
+		root = ml.PretrainedBaseSummary().Name
+	}
+	builtinName := ml.PretrainedBaseSummary().Name
+	exists := func(cand string) bool {
+		if strings.EqualFold(cand, builtinName) {
+			return true
+		}
+		for i := range existing {
+			if strings.EqualFold(strings.TrimSpace(existing[i].Name), cand) {
+				return true
+			}
+		}
+		return false
+	}
+	first := root + " FT"
+	if !exists(first) {
+		return first
+	}
+	for n := 1; ; n++ {
+		cand := fmt.Sprintf("%s FT (%d)", root, n)
+		if !exists(cand) {
+			return cand
+		}
+	}
+}
+
+func (e *Engine) nextFineTuneModelNameLocked(sourceName string) string {
+	return nextFineTuneModelNameFromSlice(sourceName, e.mlState.Models)
+}
+
 func (e *Engine) ensureMLInitializedLocked() {
 	if e.mlDetectors == nil {
 		e.mlDetectors = make(map[detKey]*ml.StreamDetector)
@@ -301,13 +359,35 @@ func (e *Engine) ensureMLInitializedLocked() {
 	if e.mlState.Config.TeacherPackID == "" {
 		e.mlState.Config.TeacherPackID = ml.DefaultTeacherPackID
 	}
-	builtinCreatedAt := ml.PretrainedBaseSummary().CreatedAt
+	builtinSum := ml.PretrainedBaseSummary()
+	builtinCreatedAt := builtinSum.CreatedAt
 	if len(e.mlState.Models) > 0 {
-		kept := e.mlState.Models[:0]
+		maxVer := 0
 		for _, m := range e.mlState.Models {
-			if m.ModelID == "ai-base-v0" && m.CreatedAt < builtinCreatedAt {
+			if m.Version > maxVer {
+				maxVer = m.Version
+			}
+		}
+		kept := make([]domain.MLModelSnapshot, 0, len(e.mlState.Models))
+		for _, m := range e.mlState.Models {
+			if m.ModelID == "ai-base-v0" {
 				if e.mlActiveModelID == "ai-base-v0" {
 					e.mlActiveTCN = nil
+				}
+				if m.CreatedAt >= builtinCreatedAt && len(m.Weights) == ml.TotalParams {
+					// Migrate any previously in-place fine-tuned `ai-base-v0` snapshot into its own
+					// `SlapRF Base FT` custom model so the built-in 1P `SlapRF Base` stays untouched.
+					maxVer++
+					newID := newModelID()
+					m.ModelID = newID
+					m.BuiltIn = false
+					m.Ready = true
+					m.Version = maxVer
+					m.Name = nextFineTuneModelNameFromSlice(builtinSum.Name, kept)
+					if e.mlState.Config.ActiveModelID == "ai-base-v0" {
+						e.mlState.Config.ActiveModelID = newID
+					}
+					kept = append(kept, m)
 				}
 				continue
 			}
@@ -1680,12 +1760,14 @@ func (e *Engine) applyTeacherDecisionsLocked(
 // Background Pure-Go Base Model Trainer (`POST /v1/ml:train`)
 // ---------------------------------------------------------------------------
 
-// MLTrainRequest customizes epochs, source Practice sessions, model name, continued fine-tuning, or pre-training AI labeling.
+// MLTrainRequest customizes epochs, source Practice sessions, target untrained model, base model for fine-tuning, or pre-training AI labeling.
 type MLTrainRequest struct {
 	Epochs            int      `json:"epochs,omitempty"`
 	IncludeUnverified bool     `json:"includeUnverified,omitempty"`
 	AutoLabel         *bool    `json:"autoLabel,omitempty"`
 	SessionIDs        []string `json:"sessionIds,omitempty"`
+	TargetModelID     string   `json:"targetModelId,omitempty"`
+	BaseModelID       string   `json:"baseModelId,omitempty"`
 	ContinueModelID   string   `json:"continueModelId,omitempty"`
 	ModelName         string   `json:"modelName,omitempty"`
 }
@@ -1719,56 +1801,102 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 		epochs = 120
 	}
 
-	initTCN := basePretrained
-	lr := float32(0.0055)
-	updateInPlaceID := ""
-	preserveBuiltIn := false
-	prevEpochs := 0
-	prevDurMs := int64(0)
-	baseName := strings.TrimSpace(req.ModelName)
-
-	if cid := strings.TrimSpace(req.ContinueModelID); cid != "" {
-		foundExisting := false
+	targetID := strings.TrimSpace(req.TargetModelID)
+	baseID := strings.TrimSpace(req.BaseModelID)
+	if strings.EqualFold(baseID, "none") || strings.EqualFold(baseID, "empty") {
+		baseID = ""
+	}
+	legacyContinue := strings.TrimSpace(req.ContinueModelID)
+	if targetID == "" && baseID == "" && legacyContinue != "" {
+		isUntrainedTarget := false
 		for _, m := range e.mlState.Models {
-			if m.ModelID == cid {
-				if len(m.Weights) == ml.TotalParams {
-					cloned := &ml.TCN{}
-					if cloned.ImportWeights(m.Weights) {
-						initTCN = cloned
-						lr = 0.0028
-						updateInPlaceID = m.ModelID
-						preserveBuiltIn = m.BuiltIn
-						prevEpochs = m.EpochsTrained
-						prevDurMs = m.TrainDurationMs
-						if m.BuiltIn || baseName == "" {
-							baseName = m.Name
-						}
-						foundExisting = true
-					}
-				} else {
-					// Untrained model created via `+ Add`: train from scratch into this immutable ModelID!
-					initTCN = basePretrained
-					lr = 0.0055
-					updateInPlaceID = m.ModelID
-					preserveBuiltIn = false
-					prevEpochs = 0
-					prevDurMs = 0
-					if baseName == "" {
-						baseName = m.Name
-					}
-					foundExisting = true
-				}
+			if m.ModelID == legacyContinue && !m.BuiltIn && len(m.Weights) == 0 && m.EpochsTrained == 0 {
+				isUntrainedTarget = true
 				break
 			}
 		}
-		if !foundExisting && cid == "ai-base-v0" {
+		if isUntrainedTarget {
+			targetID = legacyContinue
+		} else {
+			baseID = legacyContinue
+		}
+	}
+
+	var initTCN *ml.TCN // nil => train from scratch (Kaiming initialization)
+	lr := float32(0.0055)
+	updateInPlaceID := ""
+	prevEpochs := 0
+	prevDurMs := int64(0)
+	var inheritedSessionIDs []string
+	baseName := strings.TrimSpace(req.ModelName)
+	fineTuneRootName := ""
+
+	if targetID != "" {
+		if targetID == "ai-base-v0" {
+			st := e.buildMLStatusLocked()
+			e.mu.Unlock()
+			return st, fmt.Errorf("1P built-in model %q cannot be overwritten", targetID)
+		}
+		foundTarget := false
+		for _, m := range e.mlState.Models {
+			if m.ModelID == targetID {
+				if m.BuiltIn {
+					st := e.buildMLStatusLocked()
+					e.mu.Unlock()
+					return st, fmt.Errorf("1P built-in model %q cannot be overwritten", targetID)
+				}
+				updateInPlaceID = m.ModelID
+				if baseName == "" {
+					baseName = m.Name
+				}
+				foundTarget = true
+				break
+			}
+		}
+		if !foundTarget {
+			st := e.buildMLStatusLocked()
+			e.mu.Unlock()
+			return st, fmt.Errorf("unknown target modelId %q", targetID)
+		}
+	}
+
+	if baseID != "" {
+		if baseID == "ai-base-v0" {
 			baseSum := ml.PretrainedBaseSummary()
 			initTCN = basePretrained
 			lr = 0.0018
-			updateInPlaceID = "ai-base-v0"
-			preserveBuiltIn = true
 			prevEpochs = baseSum.EpochsTrained
-			baseName = baseSum.Name
+			fineTuneRootName = baseSum.Name
+		} else {
+			foundBase := false
+			for _, m := range e.mlState.Models {
+				if m.ModelID == baseID {
+					if len(m.Weights) != ml.TotalParams {
+						st := e.buildMLStatusLocked()
+						e.mu.Unlock()
+						return st, fmt.Errorf("base model %q is untrained; train it first or choose another model", m.Name)
+					}
+					cloned := &ml.TCN{}
+					if !cloned.ImportWeights(m.Weights) {
+						st := e.buildMLStatusLocked()
+						e.mu.Unlock()
+						return st, fmt.Errorf("failed to load weights from base model %q", m.Name)
+					}
+					initTCN = cloned
+					lr = 0.0028
+					prevEpochs = m.EpochsTrained
+					prevDurMs = m.TrainDurationMs
+					inheritedSessionIDs = append([]string(nil), m.SourceSessionIDs...)
+					fineTuneRootName = m.Name
+					foundBase = true
+					break
+				}
+			}
+			if !foundBase {
+				st := e.buildMLStatusLocked()
+				e.mu.Unlock()
+				return st, fmt.Errorf("unknown base modelId %q", baseID)
+			}
 		}
 	}
 
@@ -1823,11 +1951,12 @@ func (e *Engine) StartMLTraining(req MLTrainRequest) (domain.MLStatus, error) {
 		lr,
 		req.IncludeUnverified,
 		append([]string(nil), req.SessionIDs...),
+		inheritedSessionIDs,
 		updateInPlaceID,
-		preserveBuiltIn,
 		prevEpochs,
 		prevDurMs,
 		baseName,
+		fineTuneRootName,
 	)
 	return st, nil
 }
@@ -1871,11 +2000,12 @@ func (e *Engine) runMLTrainingWorker(
 	lr float32,
 	includeUnverified bool,
 	requestedSessionIDs []string,
+	inheritedSessionIDs []string,
 	updateInPlaceID string,
-	preserveBuiltIn bool,
 	prevEpochs int,
 	prevDurMs int64,
 	customName string,
+	fineTuneRootName string,
 ) {
 	t0 := time.Now()
 	type packGroup struct {
@@ -2155,32 +2285,36 @@ func (e *Engine) runMLTrainingWorker(
 	if modelID == "" {
 		modelID = newModelID()
 	}
-	modelName := strings.TrimSpace(customName)
-	if modelName == "" {
-		modelName = fmt.Sprintf("AI Model v%d", nextVer)
-	}
 	totalEpochsTrained := prevEpochs + epochs
 	totalDurMs := prevDurMs + durMs
 
+	mergeSessions := func(base []string, extra []string) []string {
+		merged := append([]string(nil), base...)
+		for _, sid := range extra {
+			found := false
+			for _, ex := range merged {
+				if ex == sid {
+					found = true
+					break
+				}
+			}
+			if !found {
+				merged = append(merged, sid)
+			}
+		}
+		return merged
+	}
+
 	e.mu.Lock()
+	var modelName string
 	updatedExisting := false
 	if updateInPlaceID != "" {
 		for i := range e.mlState.Models {
 			if e.mlState.Models[i].ModelID == updateInPlaceID {
-				mergedIDs := append([]string(nil), e.mlState.Models[i].SourceSessionIDs...)
-				for _, sid := range usedSessionIDs {
-					found := false
-					for _, ex := range mergedIDs {
-						if ex == sid {
-							found = true
-							break
-						}
-					}
-					if !found {
-						mergedIDs = append(mergedIDs, sid)
-					}
+				mergedIDs := mergeSessions(mergeSessions(e.mlState.Models[i].SourceSessionIDs, inheritedSessionIDs), usedSessionIDs)
+				if trimmed := strings.TrimSpace(customName); trimmed != "" {
+					e.mlState.Models[i].Name = trimmed
 				}
-				e.mlState.Models[i].Name = modelName
 				e.mlState.Models[i].Ready = true
 				e.mlState.Models[i].EpochsTrained = totalEpochsTrained
 				e.mlState.Models[i].SourceSessionIDs = mergedIDs
@@ -2211,8 +2345,23 @@ func (e *Engine) runMLTrainingWorker(
 	}
 	if !updatedExisting {
 		ver := nextVer
-		if preserveBuiltIn && modelID == "ai-base-v0" {
-			ver = 0
+		for _, m := range e.mlState.Models {
+			if m.Version >= ver {
+				ver = m.Version + 1
+			}
+		}
+		modelName = strings.TrimSpace(customName)
+		if modelName == "" {
+			if fineTuneRootName != "" {
+				modelName = e.nextFineTuneModelNameLocked(fineTuneRootName)
+			} else {
+				modelName = fmt.Sprintf("AI Model v%d", ver)
+			}
+		}
+		mergedIDs := mergeSessions(inheritedSessionIDs, usedSessionIDs)
+		packsCount := len(mergedIDs)
+		if packsCount < trainPackCount {
+			packsCount = trainPackCount
 		}
 		snap := domain.MLModelSnapshot{
 			MLModelSummary: domain.MLModelSummary{
@@ -2220,11 +2369,11 @@ func (e *Engine) runMLTrainingWorker(
 				Name:             modelName,
 				Version:          ver,
 				CreatedAt:        nowISO(),
-				BuiltIn:          preserveBuiltIn,
+				BuiltIn:          false,
 				Ready:            true,
 				EpochsTrained:    totalEpochsTrained,
-				SourceSessionIDs: usedSessionIDs,
-				TrainPacks:       trainPackCount,
+				SourceSessionIDs: mergedIDs,
+				TrainPacks:       packsCount,
 				ValPacks:         valPackCount,
 				TrainPasses:      realPassCount,
 				TrainDurationMs:  totalDurMs,
@@ -2240,10 +2389,10 @@ func (e *Engine) runMLTrainingWorker(
 			e.mlActiveModelID = modelID
 			e.resetMLSessionDetectorsLocked()
 		}
-		for len(e.mlState.Models) > 9 {
+		for len(e.mlState.Models) > 64 {
 			evictIdx := -1
 			for i := range e.mlState.Models {
-				if !e.mlState.Models[i].BuiltIn {
+				if !e.mlState.Models[i].BuiltIn && e.mlState.Models[i].ModelID != e.mlState.Config.ActiveModelID {
 					evictIdx = i
 					break
 				}

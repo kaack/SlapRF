@@ -168,52 +168,61 @@ func TestHandsFreePackLoopTraceReplayAndOnDeviceMLTraining(t *testing.T) {
 		t.Fatalf("expected untrained model %q to train in-place, got completed=%q (training=%+v)", untrainedID, trainedID, eng.MLStatus().Training)
 	}
 
-	// Continue fine-tuning the draft model (+4 epochs) and mark it Ready!
+	// Fine-tuning the trained model creates a new `FT` copy (`ftID != trainedID`) instead of overwriting `trainedID`!
 	if _, err := eng.StartMLTraining(MLTrainRequest{
-		Epochs:          4,
+		Epochs:          16,
 		SessionIDs:      []string{pack1ID},
-		ContinueModelID: trainedID,
-		ModelName:       "Backyard 2-Gate Ready",
+		BaseModelID:     trainedID,
 	}); err != nil {
-		t.Fatalf("StartMLTraining continue: %v", err)
+		t.Fatalf("StartMLTraining fine-tune copy: %v", err)
 	}
+	var ftID string
 	for time.Now().Before(deadline) {
 		st := eng.MLStatus()
-		if !st.Training.Running && st.Training.CompletedModelID == trainedID {
+		if !st.Training.Running && st.Training.CompletedModelID != "" && st.Training.CompletedModelID != trainedID {
+			ftID = st.Training.CompletedModelID
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	readyTrue := true
-	stReady, err := eng.UpdateMLModel(trainedID, MLModelUpdatePayload{Ready: &readyTrue})
-	if err != nil {
-		t.Fatalf("UpdateMLModel ready: %v", err)
+	if ftID == "" || ftID == trainedID {
+		t.Fatalf("expected fine-tuning %q to create a new FT copy, got ftID=%q (status=%+v)", trainedID, ftID, eng.MLStatus())
 	}
-	if !stReady.Models[0].Ready || stReady.Models[0].Name != "Backyard 2-Gate Ready" {
-		t.Fatalf("expected model marked Ready with updated name, got %+v", stReady.Models[0])
+	stAfterFT := eng.MLStatus()
+	if stAfterFT.Models[0].ModelID != ftID || stAfterFT.Models[0].Name != "Backyard 2-Gate FT" || !stAfterFT.Models[0].Ready {
+		t.Fatalf("expected newest model to be Ready copy %q named \"Backyard 2-Gate FT\", got %+v", ftID, stAfterFT.Models[0])
+	}
+	foundOriginal := false
+	for _, m := range stAfterFT.Models {
+		if m.ModelID == trainedID && m.Name == "Backyard 2-Gate" && m.EpochsTrained == 8 {
+			foundOriginal = true
+		}
+	}
+	if !foundOriginal {
+		t.Fatalf("expected original trained model %q (\"Backyard 2-Gate\", 8ep) preserved untouched, got %+v", trainedID, stAfterFT.Models)
 	}
 
-	if !strings.HasPrefix(trainedID, "mdl-") {
-		t.Fatalf("expected immutable internal mdl-* ModelID, got %q", trainedID)
+	if !strings.HasPrefix(ftID, "mdl-") {
+		t.Fatalf("expected immutable internal mdl-* ModelID, got %q", ftID)
 	}
 
-	// Activate trained model + Live 2-Lap Tune, then rename it and verify ActiveModelID stays linked!
+	// Activate fine-tuned model + Live 2-Lap Tune, then rename it and verify ActiveModelID stays linked!
 	aiMode := "ai"
 	liveTune := true
 	if _, err := eng.UpdateMLConfig(MLConfigPayload{
 		DetectorMode:    &aiMode,
-		ActiveModelID:   &trainedID,
+		ActiveModelID:   &ftID,
 		LiveTuneEnabled: &liveTune,
 	}); err != nil {
 		t.Fatalf("UpdateMLConfig: %v", err)
 	}
 	renamedTitle := "Indoor Championship Model"
-	stRenamed, err := eng.UpdateMLModel(trainedID, MLModelUpdatePayload{Name: &renamedTitle})
+	stRenamed, err := eng.UpdateMLModel(ftID, MLModelUpdatePayload{Name: &renamedTitle})
 	if err != nil {
 		t.Fatalf("UpdateMLModel rename: %v", err)
 	}
-	if stRenamed.Config.ActiveModelID != trainedID || stRenamed.Models[0].ModelID != trainedID || stRenamed.Models[0].Name != renamedTitle {
-		t.Fatalf("expected immutable ModelID=%q to remain active after rename, got cfg=%+v mod=%+v", trainedID, stRenamed.Config, stRenamed.Models[0])
+	if stRenamed.Config.ActiveModelID != ftID || stRenamed.Models[0].ModelID != ftID || stRenamed.Models[0].Name != renamedTitle {
+		t.Fatalf("expected immutable ModelID=%q to remain active after rename, got cfg=%+v mod=%+v", ftID, stRenamed.Config, stRenamed.Models[0])
 	}
 	if _, err := eng.PracticeAction(PracticeActionPayload{Action: "resume_session", SessionID: pack2ID}); err != nil {
 		t.Fatalf("resume_session: %v", err)
@@ -430,5 +439,115 @@ func TestSystem1TeacherDistillationAndDryRunLabeling(t *testing.T) {
 	}
 	if labeledSess == nil || labeledSess.TeacherLabeledAt == "" || len(labeledSess.Crossings) != 3 || len(labeledSess.Laps) != 1 || len(labeledSess.TeacherHardNegs) != 3 {
 		t.Fatalf("expected session auto-labeled with 3 crossings, 1 lap, and 3 hardNegs; got %+v", labeledSess)
+	}
+}
+
+func TestFineTuneBaseModelCopiesAndUntrainedBaseSelection(t *testing.T) {
+	eng := NewRealEngine()
+	waitDone := func() string {
+		t.Helper()
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) {
+			st := eng.MLStatus()
+			if !st.Training.Running && st.Training.CompletedModelID != "" {
+				return st.Training.CompletedModelID
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for training completion: %+v", eng.MLStatus().Training)
+		return ""
+	}
+
+	// 1. Repeatedly fine-tuning `ai-base-v0` ("SlapRF Base") creates "SlapRF Base FT", "SlapRF Base FT (1)", "SlapRF Base FT (2)"
+	//    and fine-tuning "SlapRF Base FT" creates "SlapRF Base FT (3)" while leaving "SlapRF Base" untouched!
+	wantNames := []string{
+		"SlapRF Base FT",
+		"SlapRF Base FT (1)",
+		"SlapRF Base FT (2)",
+	}
+	var firstFTID string
+	for i, wantName := range wantNames {
+		if _, err := eng.StartMLTraining(MLTrainRequest{
+			Epochs:      3,
+			BaseModelID: "ai-base-v0",
+		}); err != nil {
+			t.Fatalf("StartMLTraining fine-tune #%d: %v", i+1, err)
+		}
+		newID := waitDone()
+		if i == 0 {
+			firstFTID = newID
+		}
+		if newID == "ai-base-v0" {
+			t.Fatalf("fine-tune #%d must never overwrite ai-base-v0", i+1)
+		}
+		st := eng.MLStatus()
+		var got *domain.MLModelSummary
+		var baseStillBuiltIn bool
+		for j := range st.Models {
+			m := &st.Models[j]
+			if m.ModelID == newID {
+				got = m
+			}
+			if m.ModelID == "ai-base-v0" && m.BuiltIn && m.Name == "SlapRF Base" {
+				baseStillBuiltIn = true
+			}
+		}
+		if got == nil || got.Name != wantName || got.BuiltIn {
+			t.Fatalf("fine-tune #%d: expected non-builtin %q, got %+v", i+1, wantName, got)
+		}
+		if !baseStillBuiltIn {
+			t.Fatalf("fine-tune #%d: built-in SlapRF Base missing or mutated: %+v", i+1, st.Models)
+		}
+	}
+
+	// Fine-tuning an existing FT copy ("SlapRF Base FT") continues numbering ("SlapRF Base FT (3)") rather than "FT FT"!
+	if _, err := eng.StartMLTraining(MLTrainRequest{
+		Epochs:      3,
+		BaseModelID: firstFTID,
+	}); err != nil {
+		t.Fatalf("StartMLTraining chained fine-tune: %v", err)
+	}
+	chainedID := waitDone()
+	var chainedName string
+	for _, m := range eng.MLStatus().Models {
+		if m.ModelID == chainedID {
+			chainedName = m.Name
+		}
+	}
+	if chainedName != "SlapRF Base FT (3)" {
+		t.Fatalf("expected chained fine-tune name %q, got %q", "SlapRF Base FT (3)", chainedName)
+	}
+
+	// 2. Untrained model with chosen BaseModelID ("ai-base-v0") fine-tunes into that untrained model keeping its user-chosen name!
+	created, err := eng.CreateMLModel("Indoor Whoop")
+	if err != nil {
+		t.Fatalf("CreateMLModel: %v", err)
+	}
+	var whoopID string
+	for _, m := range created.Models {
+		if m.Name == "Indoor Whoop" {
+			whoopID = m.ModelID
+		}
+	}
+	if _, err := eng.StartMLTraining(MLTrainRequest{
+		Epochs:        3,
+		TargetModelID: whoopID,
+		BaseModelID:   "ai-base-v0",
+	}); err != nil {
+		t.Fatalf("StartMLTraining untrained+base: %v", err)
+	}
+	doneWhoopID := waitDone()
+	if doneWhoopID != whoopID {
+		t.Fatalf("expected untrained target %q populated in-place, got %q", whoopID, doneWhoopID)
+	}
+	var whoopMod *domain.MLModelSummary
+	for _, m := range eng.MLStatus().Models {
+		if m.ModelID == whoopID {
+			cp := m
+			whoopMod = &cp
+		}
+	}
+	if whoopMod == nil || !whoopMod.Ready || whoopMod.Name != "Indoor Whoop" {
+		t.Fatalf("expected trained \"Indoor Whoop\" model, got %+v", whoopMod)
 	}
 }

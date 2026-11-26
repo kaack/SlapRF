@@ -37,7 +37,9 @@ export class PracticeAITrainingTab extends Component {
   private pendingFocusRename = false;
   private includeOthersForNew = true;
   private includeOthersForFineTune = false;
+  private readonly untrainedBaseModelByTarget = new Map<string, string>();
   private lastCompletedId = "";
+  private pendingScrollSelected = false;
   private startingTraining = false;
   private startingEpochs = 28;
   private lastRenderSig = "";
@@ -54,6 +56,7 @@ export class PracticeAITrainingTab extends Component {
     this.store = store;
     this.api = api;
     this.onOpenTab = onOpenTab;
+    this.lastCompletedId = store.mlStatus.training.completedModelId || "";
 
     this.listen(el, "click", this.handleClick);
     this.listen(el, "change", this.handleChange);
@@ -97,6 +100,16 @@ export class PracticeAITrainingTab extends Component {
 
   private allModels(): MLModelSummary[] {
     return this.store.mlStatus.models ?? [];
+  }
+
+  private trainedModels(): MLModelSummary[] {
+    return this.allModels().filter(isTrainedModel);
+  }
+
+  private resolveUntrainedBaseModelId(targetModelId: string): string {
+    const raw = (this.untrainedBaseModelByTarget.get(targetModelId) ?? "").trim();
+    if (!raw) return "";
+    return this.trainedModels().some((m) => m.modelId === raw) ? raw : "";
   }
 
   private filteredModels(): MLModelSummary[] {
@@ -155,6 +168,9 @@ export class PracticeAITrainingTab extends Component {
     const packsSig = (ml.teacher?.packs ?? [])
       .map((p) => `${p.packId}:${p.installed ? 1 : 0}:${p.partialBytes ?? 0}`)
       .join("|");
+    const curSel = this.resolveSelectedModel(sess);
+    const untrainedBaseSig =
+      curSel && !isTrainedModel(curSel) ? this.resolveUntrainedBaseModelId(curSel.modelId) : "";
     return [
       sess?.sessionId ?? "",
       sess?.name ?? "",
@@ -167,6 +183,7 @@ export class PracticeAITrainingTab extends Component {
       this.includeOthersForNew ? 1 : 0,
       this.includeOthersForFineTune ? 1 : 0,
       this.selectedModelId,
+      untrainedBaseSig,
       this.editingModelName ? 1 : 0,
       this.startingTraining ? 1 : 0,
       this.startingEpochs,
@@ -260,10 +277,14 @@ export class PracticeAITrainingTab extends Component {
       this.startingTraining = false;
     }
     const completedId = this.store.mlStatus.training.completedModelId || "";
-    if (completedId && completedId !== this.lastCompletedId) {
+    if (this.store.mlStatus.training.running && !completedId) {
+      this.lastCompletedId = "";
+    } else if (completedId && completedId !== this.lastCompletedId) {
       this.lastCompletedId = completedId;
       if (this.allModels().some((m) => m.modelId === completedId)) {
         this.selectedModelId = completedId;
+        this.editingModelName = false;
+        this.pendingScrollSelected = true;
       }
     }
 
@@ -297,7 +318,14 @@ export class PracticeAITrainingTab extends Component {
       this.selectedModelId = selectedModel.modelId;
     }
     const selectedTrained = selectedModel ? isTrainedModel(selectedModel) : false;
-    const includeOthers = selectedTrained ? this.includeOthersForFineTune : this.includeOthersForNew;
+    const trainedModels = this.trainedModels();
+    const chosenBaseId =
+      selectedModel && !selectedTrained ? this.resolveUntrainedBaseModelId(selectedModel.modelId) : "";
+    const chosenBaseModel = chosenBaseId
+      ? trainedModels.find((m) => m.modelId === chosenBaseId) ?? null
+      : null;
+    const isFineTuningChoice = selectedTrained || Boolean(chosenBaseModel);
+    const includeOthers = isFineTuningChoice ? this.includeOthersForFineTune : this.includeOthersForNew;
     const totalPasses = curPasses + (includeOthers ? otherPasses : 0);
 
     const isBusy = this.startingTraining || ml.training.running;
@@ -440,6 +468,30 @@ export class PracticeAITrainingTab extends Component {
         }
         ${teacherRowHtml}
 
+        ${
+          !selectedTrained
+            ? `<div class="ai-teacher-row ai-base-select-row" data-ai-base-row>
+                 <label class="ai-teacher-label" for="ai-untrained-base-select">Base model</label>
+                 <select
+                   id="ai-untrained-base-select"
+                   class="input input-sm ai-base-model-select"
+                   data-ai-base-model
+                   data-target-model-id="${esc(selectedModel.modelId)}"
+                   aria-label="Base model"
+                   ${isBusy ? "disabled" : ""}
+                 >
+                   <option value="" ${!chosenBaseModel ? "selected" : ""}>Empty (train from scratch)</option>
+                   ${trainedModels
+                     .map(
+                       (tm) =>
+                         `<option value="${esc(tm.modelId)}" ${tm.modelId === chosenBaseModel?.modelId ? "selected" : ""}>${esc(tm.name)}${tm.builtIn ? " (1P)" : ""}</option>`
+                     )
+                     .join("")}
+                 </select>
+               </div>`
+            : ""
+        }
+
         <div class="ai-train-controls-row">
           ${
             this.editingModelName && !selectedModel.builtIn
@@ -483,12 +535,20 @@ export class PracticeAITrainingTab extends Component {
                      data-ai-act="train-more"
                      data-model-id="${esc(selectedModel.modelId)}"
                    >Fine-Tune</button>`
-                : `<button
-                     type="button"
-                     class="btn btn-sm"
-                     data-ai-act="train-fresh"
-                     data-model-id="${esc(selectedModel.modelId)}"
-                   >Train</button>`
+                : chosenBaseModel
+                  ? `<button
+                       type="button"
+                       class="btn btn-sm"
+                       data-ai-act="train-more"
+                       data-target-model-id="${esc(selectedModel.modelId)}"
+                       data-base-model-id="${esc(chosenBaseModel.modelId)}"
+                     >Fine-Tune</button>`
+                  : `<button
+                       type="button"
+                       class="btn btn-sm"
+                       data-ai-act="train-fresh"
+                       data-model-id="${esc(selectedModel.modelId)}"
+                     >Train</button>`
           }
         </div>
 
@@ -538,7 +598,9 @@ export class PracticeAITrainingTab extends Component {
                    </table>
                  </div>
                </div>`
-            : `<div class="ai-untrained-note note">Untrained model — tap <strong>Train</strong> to build it from this practice.</div>`
+            : chosenBaseModel
+              ? `<div class="ai-untrained-note note">Untrained model · tap <strong>Fine-Tune</strong> to adapt <strong>${esc(chosenBaseModel.name)}</strong> into <strong>${esc(selectedModel.name)}</strong>.</div>`
+              : `<div class="ai-untrained-note note">Empty base model · tap <strong>Train</strong> to train from scratch on this practice.</div>`
         }
       </div>`
       : "";
@@ -556,6 +618,12 @@ export class PracticeAITrainingTab extends Component {
           </label>
         </div>
       </div>`;
+
+    if (this.pendingScrollSelected) {
+      this.pendingScrollSelected = false;
+      const selRow = this.el.querySelector<HTMLElement>(".ai-model-row.is-selected");
+      selRow?.scrollIntoView?.({ block: "nearest" });
+    }
 
     if (this.pendingFocusRename) {
       this.pendingFocusRename = false;
@@ -674,9 +742,24 @@ export class PracticeAITrainingTab extends Component {
     const target = e.target;
     if (!(target instanceof Element)) return;
 
+    if (target instanceof HTMLSelectElement && target.hasAttribute("data-ai-base-model")) {
+      const targetId =
+        target.dataset.targetModelId ||
+        this.resolveSelectedModel(this.store.selectedPracticeSession)?.modelId ||
+        "";
+      if (targetId) {
+        this.untrainedBaseModelByTarget.set(targetId, target.value);
+      }
+      this.render(true);
+      return;
+    }
+
     if (target instanceof HTMLInputElement && target.hasAttribute("data-ai-include-others")) {
       const sel = this.resolveSelectedModel(this.store.selectedPracticeSession);
-      if (sel && isTrainedModel(sel)) {
+      const isFineTune =
+        sel !== null &&
+        (isTrainedModel(sel) || Boolean(this.resolveUntrainedBaseModelId(sel.modelId)));
+      if (isFineTune) {
         this.includeOthersForFineTune = target.checked;
       } else {
         this.includeOthersForNew = target.checked;
@@ -833,7 +916,8 @@ export class PracticeAITrainingTab extends Component {
               this.store.mlStatus.config.autoLabelOnTrain !== false
             ),
             sessionIds: this.selectedSessionIds(false),
-            continueModelId: modelId,
+            targetModelId: modelId,
+            baseModelId: "",
           })
           .then((st) => {
             if (!st?.training?.running) {
@@ -851,6 +935,37 @@ export class PracticeAITrainingTab extends Component {
       case "train-more": {
         if (this.startingTraining || this.store.mlStatus.training.running) return;
         this.statusMsg = "";
+        const explicitTargetId = btn.dataset.targetModelId || "";
+        const explicitBaseId = btn.dataset.baseModelId || "";
+        if (explicitTargetId && explicitBaseId) {
+          this.selectedModelId = explicitTargetId;
+          this.startingTraining = true;
+          this.startingEpochs = 40;
+          this.render(true);
+          void this.api
+            .startMLTraining({
+              epochs: 40,
+              includeUnverified: true,
+              autoLabel: Boolean(
+                this.store.mlStatus.teacher?.ready &&
+                this.store.mlStatus.config.autoLabelOnTrain !== false
+              ),
+              sessionIds: this.selectedSessionIds(true),
+              targetModelId: explicitTargetId,
+              baseModelId: explicitBaseId,
+            })
+            .then((st) => {
+              if (!st?.training?.running) {
+                this.startingTraining = false;
+                this.render(true);
+              }
+            })
+            .catch((err: unknown) => {
+              this.startingTraining = false;
+              this.setErr(err);
+            });
+          break;
+        }
         const modelId =
           btn.dataset.modelId ||
           this.resolveSelectedModel(this.store.selectedPracticeSession)?.modelId ||
@@ -869,7 +984,7 @@ export class PracticeAITrainingTab extends Component {
               this.store.mlStatus.config.autoLabelOnTrain !== false
             ),
             sessionIds: this.selectedSessionIds(true),
-            continueModelId: modelId,
+            baseModelId: modelId,
           })
           .then((st) => {
             if (!st?.training?.running) {

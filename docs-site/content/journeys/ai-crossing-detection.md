@@ -60,8 +60,8 @@ Open the **Review** tab inside your **Practice** session and click **RSSI** on L
 ### Fine-Tune or Train in AI Training
 
 Open the **AI Training** tab inside your **Practice** session:
-- **Fine-Tune `SlapRF Base` (Recommended)**: Select **`SlapRF Base`** (or an existing custom model) in the models list. Check **Include other practices** if you want to combine multiple verified sessions, then click **Fine-Tune** to create an updated custom model without overwriting the built-in `1P` model.
-- **Train a New Model from Scratch**: Type a model name in **Search or add model...**, click **`+ Add`**, and click **Train**.
+- **Fine-Tune an Existing Model (Recommended)**: Select **`SlapRF Base`** (or any trained model) in the models list. Check **Include other practices** if you want to combine multiple sessions, then click **Fine-Tune**. SlapRF leaves the original model untouched, saves a new copy named **`SlapRF Base FT`** (followed by **`SlapRF Base FT (1)`**, **`SlapRF Base FT (2)`**, and so on for additional runs), and selects the new copy automatically.
+- **Add a Named Model (Train from Scratch or Fine-Tune)**: Type a model name in **Search or add model...** and click **`+ Add`**. Set **Base model** to **`Empty (train from scratch)`** and click **Train**, or choose any trained model in **Base model** and click **Fine-Tune** to adapt it into your new named model.
 
 ### Compare Accuracy and Activate
 
