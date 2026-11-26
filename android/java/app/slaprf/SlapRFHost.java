@@ -530,6 +530,7 @@ public final class SlapRFHost extends Activity {
                 @Override
                 public void onPageFinished(WebView view, String url) {
                     super.onPageFinished(view, url);
+                    SlapRFApp.markBootCompleted(SlapRFHost.this);
                     SlapRFApp.step(SlapRFHost.this, "WebView.onPageFinished: " + url);
                     SlapRFApp.appendGoLogSnapshot(SlapRFHost.this);
                 }

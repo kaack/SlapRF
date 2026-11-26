@@ -46,6 +46,7 @@ import java.util.TimeZone;
 public final class SlapRFApp extends Application {
     public static final String TAG = "SlapRFBoot";
     public static final String BOOT_LOG_FILENAME = "slaprf-startup-log.txt";
+    private static final String BOOT_MARKER_FILENAME = ".slaprf_boot_in_progress";
 
     private static final Object LOCK = new Object();
     private static final StringBuilder BOOT_BUF = new StringBuilder(8192);
@@ -54,6 +55,7 @@ public final class SlapRFApp extends Application {
     private static volatile Context appCtx;
     private static volatile boolean handlerInstalled = false;
     private static volatile boolean headerWritten = false;
+    private static volatile boolean markerChecked = false;
     private static volatile boolean forceDownloadsExport = false;
     private static volatile Uri cachedDownloadUri;
     private static volatile String lastDownloadsStatus = "not_exported";
@@ -64,6 +66,7 @@ public final class SlapRFApp extends Application {
         appCtx = base;
         installGlobalCrashHandler();
         ensureHeader(base);
+        checkPreviousIncompleteBootAndArmMarker(base);
         step(base, "SlapRFApp.attachBaseContext completed");
     }
 
@@ -73,8 +76,68 @@ public final class SlapRFApp extends Application {
         appCtx = getApplicationContext() != null ? getApplicationContext() : this;
         installGlobalCrashHandler();
         ensureHeader(appCtx);
+        checkPreviousIncompleteBootAndArmMarker(appCtx);
         recordHistoricalExitReasons(appCtx);
         step(appCtx, "SlapRFApp.onCreate completed");
+    }
+
+    private static void checkPreviousIncompleteBootAndArmMarker(Context ctx) {
+        if (ctx == null || markerChecked) {
+            return;
+        }
+        synchronized (LOCK) {
+            if (markerChecked) {
+                return;
+            }
+            markerChecked = true;
+            try {
+                File filesDir = ctx.getFilesDir();
+                if (filesDir == null) {
+                    return;
+                }
+                File marker = new File(filesDir, BOOT_MARKER_FILENAME);
+                File prevBootLog = new File(filesDir, BOOT_LOG_FILENAME);
+                if (marker.exists()) {
+                    forceDownloadsExport = true;
+                    BOOT_BUF.append("previousLaunchIncomplete: true (prior launch did not reach WebView.onPageFinished)\n");
+                    if (prevBootLog.isFile() && prevBootLog.length() > 0) {
+                        int nRead = (int) Math.min(6144L, prevBootLog.length());
+                        byte[] prevBytes = new byte[nRead];
+                        try (FileInputStream fis = new FileInputStream(prevBootLog)) {
+                            int off = 0;
+                            while (off < nRead) {
+                                int n = fis.read(prevBytes, off, nRead - off);
+                                if (n <= 0) break;
+                                off += n;
+                            }
+                            String prevText = new String(prevBytes, 0, off, StandardCharsets.UTF_8).trim();
+                            if (!prevText.isEmpty()) {
+                                BOOT_BUF.append("--- previous incomplete launch log ---\n")
+                                        .append(prevText)
+                                        .append("\n--- end previous launch log ---\n");
+                            }
+                        }
+                    }
+                }
+                writeFileQuietly(marker, new byte[]{'1'});
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    public static void markBootCompleted(Context ctx) {
+        Context effective = resolveCtx(ctx);
+        if (effective == null) {
+            return;
+        }
+        try {
+            File marker = new File(effective.getFilesDir(), BOOT_MARKER_FILENAME);
+            if (marker.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                marker.delete();
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     static void installGlobalCrashHandler() {
@@ -190,7 +253,8 @@ public final class SlapRFApp extends Application {
         return reason == ApplicationExitInfo.REASON_CRASH
                 || reason == ApplicationExitInfo.REASON_CRASH_NATIVE
                 || reason == ApplicationExitInfo.REASON_ANR
-                || reason == ApplicationExitInfo.REASON_INITIALIZATION_FAILURE;
+                || reason == ApplicationExitInfo.REASON_INITIALIZATION_FAILURE
+                || reason == ApplicationExitInfo.REASON_SIGNALED;
     }
 
     private static String exitReasonName(int reason) {
