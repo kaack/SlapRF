@@ -23,7 +23,8 @@ SlapRF consists of two parts that you can use together or separately:
 {{< cards >}}
   {{< card link="getting-started/installation" title="Install the App" icon="download" subtitle="Download and run SlapRF on Android, Windows, macOS, or Linux." >}}
   {{< card link="hardware/parts-and-assembly" title="Build SlapRF Hardware" icon="chip" subtitle="Assemble battery-powered XIAO ESP32-C5 gate timers with zero soldering." >}}
-  {{< card link="hardware/flashing" title="Flash Firmware" icon="lightning-bolt" subtitle="Flash Bluetooth Hub, USB Hub, and Spoke boards directly from your browser." >}}
+  {{< card link="hardware/flashing" title="Flash Firmware" icon="lightning-bolt" subtitle="Flash Bluetooth Hub, USB Hub, Spoke, and PoE Bridge boards from your browser." >}}
+  {{< card link="hardware/poe-bridge" title="PoE Ethernet Bridge" icon="server" subtitle="Run power and 100 Hz gate data up to 100 m over one Cat5e/Cat6 PoE cable." >}}
   {{< card link="hardware/status-leds" title="Status LED Patterns" icon="sparkles" subtitle="View live blinking animations and timing strips for every XIAO LED pattern." >}}
   {{< card link="journeys/practice" title="Solo & Club Practice" icon="play" subtitle="Connect your timer and fly immediately with SlapRF Base AI or calibrated DSP thresholds." >}}
   {{< card link="journeys/multi-gate-splits" title="Multi-Gate Splits" icon="chart-bar" subtitle="Place Spoke timers around the course to measure S1, S2, and S3 section splits." >}}
@@ -37,6 +38,6 @@ SlapRF consists of two parts that you can use together or separately:
 
 | Timing System | Bluetooth | USB | LAN | Notes |
 | :--- | :---: | :---: | :---: | :--- |
-| SlapRF Hardware | {{< yes >}} | {{< yes >}} | {{< no >}} | Recommended. Seeed Studio XIAO ESP32-C5 Bluetooth or USB-C Hub with up to 6 wireless gates, section splits, and browser flasher. |
+| SlapRF Hardware | {{< yes >}} | {{< yes >}} | {{< yes >}} | Recommended. Seeed Studio XIAO ESP32-C5 Hub over Bluetooth LE, USB-C, or `802.3af` [PoE Ethernet](hardware/poe-bridge) (`:5480`), with up to 6 wireless Spokes and browser flasher. |
 | RotorHazard | {{< no >}} | {{< yes >}} | {{< yes >}} | Connects to RotorHazard servers over Wi-Fi / Ethernet (`HTTP` / `Socket.IO` `:5000`) or standalone RotorHazard USB serial nodes (`115200` / `921600` baud). |
 | LapRF 8-Way | {{< no >}} | {{< yes >}} | {{< yes >}} | Connects to ImmersionRC LapRF 8-Way pucks over Ethernet LAN (`TCP :5403`) or USB CDC serial (`115200` baud). |

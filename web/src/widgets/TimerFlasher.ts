@@ -367,6 +367,20 @@ export class TimerFlasher extends Component {
     this.render();
   }
 
+  /** Pre-selects a board role ("hub" | "spoke" | "poe_bridge") on Step 1 when launched from contextual docs buttons. */
+  public selectRole(nextRole: "hub" | "spoke" | "poe_bridge"): void {
+    if (this.busy) return;
+    this.step = "network";
+    this.role = nextRole;
+    this.timerLabel =
+      nextRole === "hub" ? "H1" : nextRole === "poe_bridge" ? "PoE Bridge" : this.suggestSpokeLabel();
+    this.errorMsg = null;
+    this.lastSuccessMsg = null;
+    this.progress = null;
+    this.slideDir = "none";
+    this.render();
+  }
+
   private async flashUsb(): Promise<void> {
     if (!this.validateIdentityStep()) {
       return;

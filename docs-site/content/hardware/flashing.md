@@ -3,7 +3,7 @@ title: Flashing Firmware
 weight: 2
 ---
 
-Configure and flash Hub (`H1`) and Spoke (`T1` through `T6`) firmware onto Seeed Studio XIAO ESP32-C5 boards directly from your desktop browser below, or from the built-in **Flasher** screen inside the SlapRF Android and desktop apps over USB-C. No ESP-IDF toolchain, Python install, or serial driver is needed.
+Configure and flash Hub (`H1`) and Spoke (`T1` through `T6`) firmware onto Seeed Studio XIAO ESP32-C5 boards, or flash the optional [PoE Ethernet Bridge](poe-bridge) (`slaprf-p4-poe-bridge.bin`) onto a Waveshare `ESP32-P4-POE-ETH`, directly from your desktop browser below or from the built-in **Flasher** screen inside the SlapRF Android and desktop apps over USB-C. No ESP-IDF toolchain, Python install, or serial driver is needed.
 
 ## Browser Flasher
 
@@ -32,7 +32,7 @@ Click **Open Firmware Flasher** above to launch the 3-step firmware wizard.
 
 ### Choose Role
 
-In Step 1, pick **Hub** (`H1`, one per course) or **Spoke** (wireless split gates). In Step 2, choose **Bluetooth** (`slaprf-xiao-c5-ble.bin`) or **USB cable** (`slaprf-xiao-c5.bin`) for a Hub, or pick timer slot `T1` through `T6` for a Spoke.
+In Step 1, pick **Hub** (`H1`, one per course), **Spoke** (wireless split gates), or **PoE Bridge** (Waveshare `ESP32-P4-POE-ETH` USB-to-Ethernet adapter; see [PoE Ethernet Bridge](poe-bridge)). In Step 2, choose **Bluetooth** (`slaprf-xiao-c5-ble.bin`) or **USB cable** (`slaprf-xiao-c5.bin`) for a Hub, or pick timer slot `T1` through `T6` for a Spoke.
 
 ### Flash via USB
 

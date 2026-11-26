@@ -21,14 +21,14 @@ flowchart LR
         T2["<b>Spokes (T2-T6)</b><br/>Split Gates 2-6"]
     end
 
-    App <-->|"BLE or USB-C"| H1
+    App <-->|"BLE, USB-C, or PoE"| H1
     H1 <-->|"2.4 GHz<br/>ESP-NOW"| T1
     H1 <-->|"2.4 GHz<br/>ESP-NOW"| T2
 ```
 
-## Bluetooth vs. USB Mode
+## Bluetooth, USB, and PoE Network Modes
 
-A SlapRF track uses one Hub timer (`H1`) and up to 6 optional Spoke timers (`T1` through `T6`). Both Hub modes support single-gate lap timing and multi-gate section split timing.
+A SlapRF track uses one Hub timer (`H1`) and up to 6 optional Spoke timers (`T1` through `T6`). All three Hub transport modes support single-gate lap timing and multi-gate section split timing.
 
 {{< tabs >}}
   {{< tab name="Bluetooth Mode" >}}
@@ -45,18 +45,23 @@ A SlapRF track uses one Hub timer (`H1`) and up to 6 optional Spoke timers (`T1`
 
   {{< themed-image light="/images/slaprf-setup.jpg" dark="/images/slaprf-setup-dark.jpg" alt="SlapRF USB Mode" >}}
   {{< /tab >}}
+  {{< tab name="PoE Network Mode" >}}
+  PoE Network Mode (`slaprf-p4-poe-bridge.bin` + `slaprf-xiao-c5.bin`) runs both power and `100 Mbps` full-duplex Ethernet up to `100 m` over a single Cat5e or Cat6 cable to the Start / Finish gate.
+
+  Plug a USB Hub (`H1`) into the USB-A Host port of a Waveshare `ESP32-P4-POE-ETH` board at the Start / Finish gate and feed it from an `802.3af` PoE switch or injector at the pilot bench. Neither board at the Start / Finish gate needs a battery, and optional Spoke timers (`T1` to `T6`) link to `H1` over `2.4 GHz` ESP-NOW. See [PoE Ethernet Bridge](../hardware/poe-bridge) for full wiring and flashing steps.
+  {{< /tab >}}
 {{< /tabs >}}
 
 ### Mode Comparison
 
-| Aspect | Bluetooth Hub | USB Hub |
-| :--- | :--- | :--- |
-| Firmware Image | `slaprf-xiao-c5-ble.bin` | `slaprf-xiao-c5.bin` |
-| Host Connection | Wireless Bluetooth LE | USB-C data cable |
-| Hub Power Source | LiPo + `5 V` BEC (or power bank) | Host phone or laptop USB port |
-| Typical Placement | At the Start / Finish gate | At the pilot bench (or Start / Finish via cable) |
-| Wireless Spokes | Up to 5 Spokes + Hub (6 gates) | Up to 6 Spokes |
-| Transport Latency | Low (ideal for solo & club practice) | Lowest (ideal for formal race heats) |
+| Aspect | Bluetooth Hub | USB Hub | PoE Bridge + USB Hub |
+| :--- | :--- | :--- | :--- |
+| Firmware Image | `slaprf-xiao-c5-ble.bin` | `slaprf-xiao-c5.bin` | `slaprf-p4-poe-bridge.bin` + `slaprf-xiao-c5.bin` |
+| Host Connection | Wireless Bluetooth LE | USB-C data cable | `100 Mbps` PoE Ethernet (`TCP/UDP :5480`) |
+| Hub Power Source | LiPo + `5 V` BEC (or power bank) | Host phone or laptop USB port | `802.3af` PoE switch or injector |
+| Typical Placement | At the Start / Finish gate | At the pilot bench (or Start / Finish via cable) | Up to `100 m` away at the Start / Finish gate |
+| Wireless Spokes | Up to 5 Spokes + Hub (6 gates) | Up to 6 Spokes | Up to 6 Spokes |
+| Transport Latency | Low (ideal for solo & club practice) | Lowest (`< 0.2 ms` USB) | Sub-millisecond (`< 0.5 ms` wired LAN) |
 
 > [!TIP]
 > For everyday practice, Bluetooth Mode is the fastest field setup: place one battery-powered Hub at the Start / Finish gate, connect from your phone at the bench, and fly. For formal race heats where lowest wired latency matters most, use a USB Hub.

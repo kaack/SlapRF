@@ -62,6 +62,14 @@ If a Spoke (`T1`-`T6`) blinks slowly at `1 Hz` and stays offline in **Network**:
 
 Because a XIAO ESP32-C5 draws under `100 mA`, some phone power banks assume nothing is connected and shut off after 30 to 60 seconds. Power gate timers from a 3S-6S LiPo pack with an XT60-to-USB-C `5 V` BEC (which never auto-sleeps), or enable trickle-charge mode on your power bank.
 
+### PoE Bridge Not Discovered
+
+If **Discover** in **Network -> `SlapRF (Network)`** does not list your `ESP32-P4-POE-ETH` bridge:
+
+1. Confirm your laptop or phone is on the same Layer-2 subnet as the PoE switch or router (`UDP :5480` broadcast does not cross routed VLANs; across VLANs, type the bridge IP address directly and click **Connect**).
+2. Verify the RJ45 link LEDs on the `ESP32-P4-POE-ETH` are lit and that Hub `H1` is plugged into the **USB-A Host** port with a USB data cable (flashed with `slaprf-xiao-c5.bin`, not the Bluetooth image).
+3. Plug USB-C (`CH343`, `115200` baud) into a computer and send `STATUS?` to read the bridge's live `ip`, `linkUp`, and `usbConnected` fields. See [PoE Ethernet Bridge](../hardware/poe-bridge) for all `UART0` management commands.
+
 ## Gate Detection
 
 ### False Adjacent Laps

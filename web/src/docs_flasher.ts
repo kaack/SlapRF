@@ -19,7 +19,7 @@ class DocsFlasherModal {
   private readonly flasherSlot: HTMLElement;
   private readonly cssReady: Promise<void>;
   private isOpen = false;
-  private flasherMounted = false;
+  private flasher: TimerFlasher | null = null;
 
   constructor(fwBase: string, cssUrl: string) {
     setFirmwareBaseDir(fwBase);
@@ -124,8 +124,7 @@ class DocsFlasherModal {
   }
 
   private ensureMounted(): void {
-    if (this.flasherMounted) return;
-    this.flasherMounted = true;
+    if (this.flasher) return;
 
     const stubStore = {
       detectedTimers: [],
@@ -139,12 +138,15 @@ class DocsFlasherModal {
       refresh: async () => undefined,
     } as unknown as ApiClient;
 
-    new TimerFlasher(this.flasherSlot, stubStore, stubApi, undefined, { hideTips: true });
+    this.flasher = new TimerFlasher(this.flasherSlot, stubStore, stubApi, undefined, { hideTips: true });
   }
 
-  public async open(): Promise<void> {
+  public async open(initialRole?: "hub" | "spoke" | "poe_bridge"): Promise<void> {
     await this.cssReady;
     this.ensureMounted();
+    if (initialRole && this.flasher) {
+      this.flasher.selectRole(initialRole);
+    }
     this.isOpen = true;
     this.backdrop.dataset.open = "true";
   }
@@ -152,10 +154,15 @@ class DocsFlasherModal {
   public close(): void {
     this.isOpen = false;
     this.backdrop.dataset.open = "false";
-    if (window.location.hash === "#open-flasher") {
+    if (window.location.hash === "#open-flasher" || window.location.hash === "#open-flasher-poe") {
       history.replaceState(null, "", window.location.pathname + window.location.search);
     }
   }
+}
+
+function parseRoleAttr(raw: string | undefined | null): "hub" | "spoke" | "poe_bridge" | undefined {
+  if (raw === "hub" || raw === "spoke" || raw === "poe_bridge") return raw;
+  return undefined;
 }
 
 function initDocsFlasher(): void {
@@ -169,21 +176,29 @@ function initDocsFlasher(): void {
     return modal;
   };
 
-  if (document.querySelector('[data-open-docs-flasher], a[href$="#open-flasher"]')) {
+  if (document.querySelector('[data-open-docs-flasher], a[href$="#open-flasher"], a[href$="#open-flasher-poe"]')) {
     getModal();
   }
 
   document.addEventListener("click", (e) => {
     const target = e.target as HTMLElement | null;
     if (!target) return;
-    const trigger = target.closest<HTMLElement>('[data-open-docs-flasher], a[href$="#open-flasher"]');
+    const trigger = target.closest<HTMLElement>(
+      '[data-open-docs-flasher], a[href$="#open-flasher"], a[href$="#open-flasher-poe"]'
+    );
     if (trigger) {
       e.preventDefault();
-      void getModal().open();
+      const href = trigger.getAttribute("href") || "";
+      const role =
+        parseRoleAttr(trigger.dataset.flasherRole) ||
+        (href.endsWith("#open-flasher-poe") ? "poe_bridge" : undefined);
+      void getModal().open(role);
     }
   });
 
-  if (window.location.hash === "#open-flasher") {
+  if (window.location.hash === "#open-flasher-poe") {
+    void getModal().open("poe_bridge");
+  } else if (window.location.hash === "#open-flasher") {
     void getModal().open();
   }
 }

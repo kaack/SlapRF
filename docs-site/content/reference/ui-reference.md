@@ -12,8 +12,8 @@ Reference guide to the screens, live signal scope controls, and crossing detecti
 | Practice | Practice session directory and workspace (`Pilots`, **Track**, `Overview`, `Laps`, `Trends`, `Signals`, `Review`, `Analytics`, and `AI Training`). Each session stores its own track layout, `.rfbin` waveform trace, and timing rules. |
 | Races | Event creation, MultiGP import, per-race **Track** & timing rules editor, visual Format Canvas brackets, live Marshal / Race Control horns, and Review waveforms. |
 | Pilots | Pilot directory with callsigns, phonetic TTS spellings, and default 5.8 GHz channels (`Raceband`, `Fatshark`, `Boscam`, `IMD6`). |
-| Network | Timing system selector (`SlapRF (USB)`, `SlapRF (Bluetooth)`, `LapRF 8-Way (Network)`, `LapRF 8-Way (USB)`, `RotorHazard (Network)`, `RotorHazard (USB)`), connection manager, topology graph, and live RSSI monitor. |
-| Flasher | Built-in wizard (on Android and desktop) for flashing Hub and Spoke firmware, inspecting board configuration, or factory-erasing boards over USB-C. |
+| Network | Timing system selector (`SlapRF (USB)`, `SlapRF (Bluetooth)`, `SlapRF (Network)`, `LapRF 8-Way (Network)`, `LapRF 8-Way (USB)`, `RotorHazard (Network)`, `RotorHazard (USB)`), connection manager, topology graph, and live RSSI monitor. |
+| Flasher | Built-in wizard (on Android and desktop) for flashing Hub, Spoke, and ESP32-P4 PoE Bridge firmware, inspecting board configuration, or factory-erasing boards over USB-C. |
 | Debug | Live 5.8 GHz spectrum and waterfall analyzer, raw USB/Bluetooth timer console, and RF health checks. |
 | Simulator | Multi-pilot 5.8 GHz physics track simulator for testing track layouts, threshold behavior, and race brackets without hardware. |
 | Settings | Datasource (Demo vs. SlapRF Server and Simulator toggle), MultiGP API key, Announcer voice & horn levels, LapRF 8-Way emulator, Authentication, `.json` database backup/restore, and `slaprf.log` diagnostic log level (`ERROR` to `TRACE`), download, and clear controls. |
