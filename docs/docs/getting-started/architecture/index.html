@@ -30,7 +30,7 @@ System Overview
 	<meta itemprop="name" content="Architecture &amp; Modes">
 	<meta itemprop="description" content="SlapRF separates race logic on your phone or laptop from raw 5.8 GHz signal measurement at the gates, giving you low-cost hardware on the course and full race analytics at the pilot bench.
 System Overview Gate timers (H1 and T1 through T6) sweep up to 8 active 5.8 GHz VTX frequencies and stream timestamped RSSI samples to the host device. The SlapRF app filters the live signal stream, detects gate crossings, computes lap and section split times (S1, S2, S3), announces spoken callouts, and stores all session history in slaprf.db.">
-	<meta itemprop="wordCount" content="462">
+	<meta itemprop="wordCount" content="610">
 	<meta name="twitter:card" content="summary">
 	<meta name="twitter:title" content="Architecture &amp; Modes">
 	<meta name="twitter:description" content="SlapRF separates race logic on your phone or laptop from raw 5.8 GHz signal measurement at the gates, giving you low-cost hardware on the course and full race analytics at the pilot bench.
@@ -186,9 +186,9 @@ System Overview Gate timers (H1 and T1 through T6) sweep up to 8 active 5.8 GHz 
             </li>
           <li>
               <a
-                href="#bluetooth-vs-usb-mode"
+                href="#bluetooth-usb-and-poe-network-modes"
                 class="hx:flex hx:rounded-sm hx:px-2 hx:py-1.5 hx:text-sm hx:transition-colors [word-break:break-word] hx:cursor-pointer [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] hx:contrast-more:border hx:gap-2 hx:before:opacity-25 hx:before:content-['#'] hx:text-gray-500 hx:hover:bg-gray-100 hx:hover:text-gray-900 hx:dark:text-neutral-400 hx:dark:hover:bg-primary-100/5 hx:dark:hover:text-gray-50 hx:contrast-more:text-gray-900 hx:contrast-more:dark:text-gray-50 hx:contrast-more:border-transparent hx:contrast-more:hover:border-gray-900 hx:contrast-more:dark:hover:border-gray-50"
-              >Bluetooth vs. USB Mode</a>
+              >Bluetooth, USB, and PoE Network Modes</a>
             </li>
           </ul>
   
@@ -242,6 +242,16 @@ System Overview Gate timers (H1 and T1 through T6) sweep up to 8 active 5.8 GHz 
       
     >
       <span class="hx:min-w-0 [word-break:break-word]">Status LED Patterns</span>
+    </a>
+  </div>
+              
+            </li><li class="hx:flex hx:flex-col "><div class="hextra-sidebar-item hx:group hx:relative hx:flex hx:items-center" data-active="false">
+    <a
+      class="hx:flex hx:items-center hx:justify-between hx:gap-2 hx:grow hx:cursor-pointer hx:rounded-sm hx:px-2 hx:py-1.5 hx:text-sm hx:transition-colors [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] hx:hextra-focus-visible-inset hx:text-gray-500 hx:hover:bg-gray-100 hx:hover:text-gray-900 hx:contrast-more:border hx:contrast-more:border-transparent hx:contrast-more:text-gray-900 hx:contrast-more:hover:border-gray-900 hx:dark:text-neutral-400 hx:dark:hover:bg-primary-100/5 hx:dark:hover:text-gray-50 hx:contrast-more:dark:text-gray-50 hx:contrast-more:dark:hover:border-gray-50"
+      href="/docs/hardware/poe-bridge/"
+      
+    >
+      <span class="hx:min-w-0 [word-break:break-word]">PoE Ethernet Bridge</span>
     </a>
   </div>
               
@@ -481,6 +491,16 @@ System Overview Gate timers (H1 and T1 through T6) sweep up to 8 active 5.8 GHz 
     </a>
   </div>
               
+            </li><li class="hx:flex hx:flex-col "><div class="hextra-sidebar-item hx:group hx:relative hx:flex hx:items-center" data-active="false">
+    <a
+      class="hx:flex hx:items-center hx:justify-between hx:gap-2 hx:grow hx:cursor-pointer hx:rounded-sm hx:px-2 hx:py-1.5 hx:text-sm hx:transition-colors [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] hx:hextra-focus-visible-inset hx:text-gray-500 hx:hover:bg-gray-100 hx:hover:text-gray-900 hx:contrast-more:border hx:contrast-more:border-transparent hx:contrast-more:text-gray-900 hx:contrast-more:hover:border-gray-900 hx:dark:text-neutral-400 hx:dark:hover:bg-primary-100/5 hx:dark:hover:text-gray-50 hx:contrast-more:dark:text-gray-50 hx:contrast-more:dark:hover:border-gray-50"
+      href="/docs/hardware/poe-bridge/"
+      
+    >
+      <span class="hx:min-w-0 [word-break:break-word]">PoE Ethernet Bridge</span>
+    </a>
+  </div>
+              
             </li></ul>
       </div></li>
             <li class="open"><div class="hextra-sidebar-item hx:group hx:relative hx:flex hx:items-center" data-active="false">
@@ -654,7 +674,7 @@ System Overview Gate timers (H1 and T1 through T6) sweep up to 8 active 5.8 GHz 
         </a>
       </li>
       <li class="hx:my-2 hx:scroll-my-6 hx:scroll-py-6">
-        <a class="hx:font-medium hx:inline-block hx:rounded-sm hx:text-gray-500 hx:hover:text-gray-900 hx:dark:text-gray-400 hx:dark:hover:text-gray-300 hx:contrast-more:text-gray-900 hx:contrast-more:underline hx:contrast-more:dark:text-gray-50 hx:w-full hx:wrap-break-word hx:hextra-focus-visible-inset" href="#bluetooth-vs-usb-mode">Bluetooth vs. USB Mode
+        <a class="hx:font-medium hx:inline-block hx:rounded-sm hx:text-gray-500 hx:hover:text-gray-900 hx:dark:text-gray-400 hx:dark:hover:text-gray-300 hx:contrast-more:text-gray-900 hx:contrast-more:underline hx:contrast-more:dark:text-gray-50 hx:w-full hx:wrap-break-word hx:hextra-focus-visible-inset" href="#bluetooth-usb-and-poe-network-modes">Bluetooth, USB, and PoE Network Modes
         </a>
       </li>
       <li class="hx:my-2 hx:scroll-my-6 hx:scroll-py-6">
@@ -695,17 +715,18 @@ System Overview Gate timers (H1 and T1 through T6) sweep up to 8 active 5.8 GHz 
         T2[&#34;&lt;b&gt;Spokes (T2-T6)&lt;/b&gt;&lt;br/&gt;Split Gates 2-6&#34;]
     end
 
-    App &lt;--&gt;|&#34;BLE or USB-C&#34;| H1
+    App &lt;--&gt;|&#34;BLE, USB-C, or PoE&#34;| H1
     H1 &lt;--&gt;|&#34;2.4 GHz&lt;br/&gt;ESP-NOW&#34;| T1
     H1 &lt;--&gt;|&#34;2.4 GHz&lt;br/&gt;ESP-NOW&#34;| T2
   </pre>
-</div><h2 data-hextra-search-id="bluetooth-vs-usb-mode">Bluetooth vs. USB Mode<span class="hx:absolute hx:-mt-20" id="bluetooth-vs-usb-mode"></span>
-    <a href="#bluetooth-vs-usb-mode" class="subheading-anchor" aria-label="Permalink for this section"></a></h2><p>A SlapRF track uses one Hub timer (<code>H1</code>) and up to 6 optional Spoke timers (<code>T1</code> through <code>T6</code>). Both Hub modes support single-gate lap timing and multi-gate section split timing.</p>
+</div><h2 data-hextra-search-id="bluetooth-usb-and-poe-network-modes">Bluetooth, USB, and PoE Network Modes<span class="hx:absolute hx:-mt-20" id="bluetooth-usb-and-poe-network-modes"></span>
+    <a href="#bluetooth-usb-and-poe-network-modes" class="subheading-anchor" aria-label="Permalink for this section"></a></h2><p>A SlapRF track uses one Hub timer (<code>H1</code>) and up to 6 optional Spoke timers (<code>T1</code> through <code>T6</code>). All three Hub transport modes support single-gate lap timing and multi-gate section split timing.</p>
 
   
   
+  
 <div class="hextra-scrollbar hx:overflow-x-auto hx:overflow-y-hidden hx:overscroll-x-contain">
-  <div class="hx:mt-4 hx:flex hx:w-max hx:min-w-full hx:border-b hx:border-gray-200 hx:pb-px hx:dark:border-neutral-800" role="tablist"><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-00-0" role="tab" type="button" aria-controls="tabs-panel-tabs-00-0" aria-selected="true" tabindex="0" data-state="selected"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>Bluetooth Mode</span></span></button><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-00-1" role="tab" type="button" aria-controls="tabs-panel-tabs-00-1" aria-selected="false" tabindex="-1"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>USB Mode</span></span></button></div>
+  <div class="hx:mt-4 hx:flex hx:w-max hx:min-w-full hx:border-b hx:border-gray-200 hx:pb-px hx:dark:border-neutral-800" role="tablist"><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-00-0" role="tab" type="button" aria-controls="tabs-panel-tabs-00-0" aria-selected="true" tabindex="0" data-state="selected"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>Bluetooth Mode</span></span></button><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-00-1" role="tab" type="button" aria-controls="tabs-panel-tabs-00-1" aria-selected="false" tabindex="-1"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>USB Mode</span></span></button><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-00-2" role="tab" type="button" aria-controls="tabs-panel-tabs-00-2" aria-selected="false" tabindex="-1"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>PoE Network Mode</span></span></button></div>
 </div>
 <div><div class="hextra-tabs-panel hx:rounded-sm hx:pt-6 hx:hidden hx:data-[state=selected]:block" id="tabs-panel-tabs-00-0" role="tabpanel" aria-labelledby="tabs-tab-tabs-00-0" aria-hidden="false" tabindex="0" data-state="selected"><p>Bluetooth Mode (<code>slaprf-xiao-c5-ble.bin</code>) removes all cables between the track and the pilot bench.</p>
 <p>Power the Bluetooth Hub (<code>H1</code>) from a LiPo battery (via a <code>5 V</code> USB-C BEC) or USB power bank and place it directly at the Start / Finish gate. Your phone or laptop stays with you at the bench and connects over Bluetooth Low Energy. Optional Spoke timers (<code>T1</code> to <code>T5</code>) at split gates link to the Hub over 2.4 GHz ESP-NOW, and the Hub forwards every gate reading over Bluetooth.</p>
@@ -719,6 +740,12 @@ System Overview Gate timers (H1 and T1 through T6) sweep up to 8 active 5.8 GHz 
   <img class="doc-theme-img-light" src="/docs/images/slaprf-setup.jpg" alt="SlapRF USB Mode" decoding="async" />
   <img class="doc-theme-img-dark" src="/docs/images/slaprf-setup-dark.jpg" alt="SlapRF USB Mode" decoding="async" />
 </p>
+</div><div class="hextra-tabs-panel hx:rounded-sm hx:pt-6 hx:hidden hx:data-[state=selected]:block" id="tabs-panel-tabs-00-2" role="tabpanel" aria-labelledby="tabs-tab-tabs-00-2" aria-hidden="true"><p>PoE Network Mode (<code>slaprf-p4-poe-bridge.bin</code> + <code>slaprf-xiao-c5.bin</code>) runs both power and <code>100 Mbps</code> Ethernet up to <code>100 m</code> over a single Cat5e or Cat6 cable to the Start / Finish gate.</p>
+<p>Plug a USB Hub (<code>H1</code>) into the USB-A port of a Waveshare <code>ESP32-P4-WIFI6-POE-ETH</code> board at the Start / Finish gate and feed it from an <code>802.3af</code> PoE switch or injector at the pilot bench. Neither board at the gate needs a battery, and optional Spoke timers (<code>T1</code> to <code>T6</code>) link to <code>H1</code> over <code>2.4 GHz</code> ESP-NOW. See <a href="../hardware/poe-bridge">PoE Ethernet Bridge</a> for the bill of materials and setup steps.</p>
+<p class="doc-theme-img-wrap">
+  <img class="doc-theme-img-light" src="/docs/images/slaprf-setup-poe.jpg" alt="SlapRF PoE Mode" decoding="async" />
+  <img class="doc-theme-img-dark" src="/docs/images/slaprf-setup-poe-dark.jpg" alt="SlapRF PoE Mode" decoding="async" />
+</p>
 </div></div>
 
 <h3 data-hextra-search-id="mode-comparison">Mode Comparison<span class="hx:absolute hx:-mt-20" id="mode-comparison"></span>
@@ -728,6 +755,7 @@ System Overview Gate timers (H1 and T1 through T6) sweep up to 8 active 5.8 GHz 
 					<th style="text-align: left">Aspect</th>
 					<th style="text-align: left">Bluetooth Hub</th>
 					<th style="text-align: left">USB Hub</th>
+					<th style="text-align: left">PoE Bridge + USB Hub</th>
 			</tr>
 	</thead>
 	<tbody>
@@ -735,31 +763,37 @@ System Overview Gate timers (H1 and T1 through T6) sweep up to 8 active 5.8 GHz 
 					<td style="text-align: left">Firmware Image</td>
 					<td style="text-align: left"><code>slaprf-xiao-c5-ble.bin</code></td>
 					<td style="text-align: left"><code>slaprf-xiao-c5.bin</code></td>
+					<td style="text-align: left"><code>slaprf-p4-poe-bridge.bin</code> + <code>slaprf-xiao-c5.bin</code></td>
 			</tr>
 			<tr>
 					<td style="text-align: left">Host Connection</td>
 					<td style="text-align: left">Wireless Bluetooth LE</td>
 					<td style="text-align: left">USB-C data cable</td>
+					<td style="text-align: left"><code>100 Mbps</code> PoE Ethernet (<code>TCP/UDP :5480</code>)</td>
 			</tr>
 			<tr>
 					<td style="text-align: left">Hub Power Source</td>
 					<td style="text-align: left">LiPo + <code>5 V</code> BEC (or power bank)</td>
 					<td style="text-align: left">Host phone or laptop USB port</td>
+					<td style="text-align: left"><code>802.3af</code> PoE switch or injector</td>
 			</tr>
 			<tr>
 					<td style="text-align: left">Typical Placement</td>
 					<td style="text-align: left">At the Start / Finish gate</td>
 					<td style="text-align: left">At the pilot bench (or Start / Finish via cable)</td>
+					<td style="text-align: left">Up to <code>100 m</code> away at the Start / Finish gate</td>
 			</tr>
 			<tr>
 					<td style="text-align: left">Wireless Spokes</td>
 					<td style="text-align: left">Up to 5 Spokes + Hub (6 gates)</td>
 					<td style="text-align: left">Up to 6 Spokes</td>
+					<td style="text-align: left">Up to 6 Spokes</td>
 			</tr>
 			<tr>
 					<td style="text-align: left">Transport Latency</td>
 					<td style="text-align: left">Low (ideal for solo &amp; club practice)</td>
-					<td style="text-align: left">Lowest (ideal for formal race heats)</td>
+					<td style="text-align: left">Lowest (<code>&lt; 0.2 ms</code> USB)</td>
+					<td style="text-align: left">Sub-millisecond (<code>&lt; 0.5 ms</code> wired LAN)</td>
 			</tr>
 	</tbody>
 </table>
@@ -769,7 +803,7 @@ System Overview Gate timers (H1 and T1 through T6) sweep up to 8 active 5.8 GHz 
   <p class="hextra-alert-title"><svg height=16px class="hextra-alert-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg><span class="hextra-alert-title-text">Tip</span>
   </p>
 
-  <div class="hextra-alert-content"><p>For everyday practice, Bluetooth Mode is the fastest field setup: place one battery-powered Hub at the Start / Finish gate, connect from your phone at the bench, and fly. For formal race heats where lowest wired latency matters most, use a USB Hub.</p></div>
+  <div class="hextra-alert-content"><p>For everyday practice, Bluetooth Mode is the fastest field setup: place one battery-powered Hub at the Start / Finish gate, connect from your phone at the bench, and fly. For formal race heats where lowest wired latency matters most, use a USB Hub or a PoE Bridge.</p></div>
 </div>
 
           
@@ -828,7 +862,7 @@ System Overview Gate timers (H1 and T1 through T6) sweep up to 8 active 5.8 GHz 
     </div>
   </dialog>
     <script defer src="/docs/js/main.min.302eb8f391260394614f8841a9a007a2bfe3535e53755065fa3fb3c43fa94027.js" integrity="sha256-MC6485EmA5RhT4hBqaAHor/jU15TdVBl&#43;j&#43;zxD&#43;pQCc="></script>
-<script defer src="/docs/js/flexsearch.433e941a8a573ebb9931fc16fc75266ab6b93f569ac2fb4f3dc66882e0416f4c.js" integrity="sha256-Qz6UGopXPruZMfwW/HUmara5P1aawvtPPcZoguBBb0w=" crossorigin="anonymous"></script><script defer src="/docs/en.search.min.7469170b817d4669fecab5883b5a842f3aad7e2848fa80e998d1ce9736d949e6.js" integrity="sha256-dGkXC4F9Rmn&#43;yrWIO1qELzqtfihI&#43;oDpmNHOlzbZSeY="></script>
+<script defer src="/docs/js/flexsearch.433e941a8a573ebb9931fc16fc75266ab6b93f569ac2fb4f3dc66882e0416f4c.js" integrity="sha256-Qz6UGopXPruZMfwW/HUmara5P1aawvtPPcZoguBBb0w=" crossorigin="anonymous"></script><script defer src="/docs/en.search.min.3f7c4f3c40b4cb63f1f7beccfc88cc599c1251998648eee94ac5f9022eef5002.js" integrity="sha256-P3xPPEC0y2Px977M/IjMWZwSUZmGSO7pSsX5Ai7vUAI="></script>
     <script defer src="/docs/en.search-dialog.min.fda123910557b5b3a328696105af51f85abc3cfc6784387c49b11b5b857b256f.js" integrity="sha256-/aEjkQVXtbOjKGlhBa9R&#43;Fq8PPxnhDh8SbEbW4V7JW8="></script><script defer src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js" crossorigin="anonymous"></script>
 
 <template id="doc-mermaid-expand-btn-template">
