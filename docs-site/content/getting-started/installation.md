@@ -6,19 +6,19 @@ weight: 2
 Download the latest native SlapRF release from [GitHub Releases](https://github.com/kaack/SlapRF/releases/latest). Each build is self-contained and requires no external runtime or database server.
 
 > [!NOTE]
-> The online preview at `https://slaprf.app` runs a simulated track for exploring the interface. Because web browsers throttle background tabs and audio, install the native Android app or desktop binary below to time real flights.
+> The online preview at `https://slaprf.app` runs a simulated track for exploring the interface. Because web browsers throttle background tabs and audio, install the native Android app, sideloaded iOS/iPadOS app, or desktop binary below to time real flights.
 
 ## Verified Platforms
 
 | Platform / Device | Bluetooth Hub | USB-C Hub | USB Flasher | LAN Timers | Verified Environment & Notes |
 | :--- | :---: | :---: | :---: | :---: | :--- |
 | Android (`ARM64` Phone / Tablet) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Android (`arm64-v8a` APK); use a USB-C OTG data cable for USB Hub and in-app Flasher. |
+| iOS / iPadOS (`ARM64` iPhone / iPad) | {{< yes >}} | {{< no >}} | {{< no >}} | {{< yes >}} | Free sideload (`slaprf-ios-arm64.ipa` on iOS/iPadOS 16.0+ via Sideloadly or SideStore); supports Bluetooth Hub, PoE Bridge (`:5480`), LapRF (`:5403`), and RotorHazard over Wi-Fi or Ethernet. |
 | Windows 11 (`x86_64`) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Windows 11 (`slaprf-windows-amd64.exe`, `WinRT` Bluetooth LE and `COM` serial). |
 | macOS (`Apple Silicon`) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Apple Silicon (`slaprf-macos-arm64`, `CoreBluetooth` and `/dev/cu.usbmodem*`); Intel (`amd64`) binary also built in CI. |
 | Linux Desktop (`x86_64`) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Ubuntu `x86_64` (`slaprf-linux-amd64`, `BlueZ` and `/dev/ttyACM*`). |
 | Raspberry Pi 4 (`ARM64`) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Raspberry Pi 4 Model B (`Raspberry Pi OS 64-bit`); requires `5 GHz` Wi-Fi or Ethernet for Bluetooth Hub. |
 | Raspberry Pi (`32-bit OS` / Zero W) | {{< no >}} | {{< no >}} | {{< no >}} | {{< no >}} | `32-bit` (`armhf` / `armv6`) OS installs are not supported as a timing server. |
-| iOS / iPadOS | {{< no >}} | {{< no >}} | {{< no >}} | {{< no >}} | No native iOS host app; connect iPhones and iPads over Wi-Fi Safari to a laptop or Raspberry Pi (`-lan`). |
 
 ## Platform Setup
 
@@ -32,6 +32,28 @@ Download the latest native SlapRF release from [GitHub Releases](https://github.
 
   > [!TIP]
   > You can flash XIAO ESP32-C5 boards directly from your Android phone or tablet using the built-in **Flasher** screen in the SlapRF app over a USB-C data cable.
+  {{< /tab >}}
+  {{< tab name="iOS / iPadOS" >}}
+  ### iOS and iPadOS (Free Sideload)
+
+  SlapRF ships `slaprf-ios-arm64.ipa` for iPhones and iPads running iOS or iPadOS `16.0` and newer. You can install it with a free Apple ID (no paid developer account required).
+
+  #### Option A: Sideloadly (Recommended for Windows and macOS)
+  1. Install [Sideloadly](https://sideloadly.io/) on your Windows PC or Mac, then connect your iPhone or iPad over USB once and tap **Trust This Computer**.
+  2. Download `slaprf-ios-arm64.ipa` from [GitHub Releases](https://github.com/kaack/SlapRF/releases/latest) (or click **Install via Sideloadly** in **Settings -> Datasource** on `https://slaprf.app`), enter your Apple ID in Sideloadly, and click **Start**.
+  3. On your iPhone or iPad, enable **Settings -> Privacy & Security -> Developer Mode**, then open **Settings -> General -> VPN & Device Management**, select your Apple ID profile, and tap **Trust**.
+  4. Keep Sideloadly running in the background on your computer with **Wi-Fi auto-refresh** enabled so the 7-day free signature renews automatically over your home Wi-Fi without plugging in a cable.
+
+  #### Option B: SideStore or AltStore (On-Device Updates)
+  Add the SlapRF source URL in SideStore or AltStore for 1-tap installations and updates:
+  ```text
+  https://slaprf.app/altstore-source.json
+  ```
+
+  #### Supported Hardware on iPhone and iPad
+  - **SlapRF Bluetooth Hub (`slaprf-xiao-c5-ble.bin`)**: Open **Network**, select **SlapRF (Bluetooth)**, tap **Connect**, and allow Bluetooth access when prompted.
+  - **SlapRF PoE Ethernet Bridge (`:5480`)**: Connect your iPhone or iPad to the same Wi-Fi LAN (or plug in a USB-C Ethernet adapter), select **SlapRF (Network)**, and tap **Connect**.
+  - **Direct USB-C Serial**: iOS omits generic `CDC-ACM` serial drivers, so direct USB Hub links and USB firmware flashing are hidden in the iOS app. Flash boards once from Chrome, Edge, Opera, or Android before pairing on iOS.
   {{< /tab >}}
   {{< tab name="Windows" >}}
   ### Windows

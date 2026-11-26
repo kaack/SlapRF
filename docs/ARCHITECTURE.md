@@ -14,7 +14,7 @@ For local setup, build commands, and test instructions, see **[`docs/DEVELOPER.m
 - **[6. Binary Wire Formats (`0xC5` Frames & `SLAPRF02`)](#6-binary-wire-formats-0xc5-frames--slaprf02)**
 - **[7. DSP Pipeline & Parabolic Peak Interpolation](#7-dsp-pipeline--parabolic-peak-interpolation)**
 - **[8. Multi-Gate Timing Rules & Section Analytics](#8-multi-gate-timing-rules--section-analytics)**
-- **[9. Host Drivers, Native Android App & Firmware Flasher](#9-host-drivers-native-android-app--firmware-flasher)**
+- **[9. Host Drivers, Native Mobile Apps & Firmware Flasher](#9-host-drivers-native-mobile-apps--firmware-flasher)**
 - **[10. External Timing Hardware & MultiGP Integration](#10-external-timing-hardware--multigp-integration)**
 - **[11. Local Native App vs. Browser Demo (`slaprf.app`)](#11-local-native-app-vs-browser-demo-slaprfapp)**
 
@@ -320,16 +320,20 @@ For each pilot and each track section $s \in \{S_1, \dots, S_k\}$:
 
 ---
 
-## 9. Host Drivers, Native Android App & Firmware Flasher
+## 9. Host Drivers, Native Mobile Apps & Firmware Flasher
 
 1. **Desktop Native Transports (`cmd/slaprf`)**:
    - **OS Serial Primitive (`internal/serialport`)**: Cross-platform native serial I/O (`go.bug.st/serial`) shared by `internal/slaprf/usb`, `internal/rotorhazard/usb`, and `internal/laprf/usb`.
    - **SlapRF USB & Bluetooth LE (`internal/slaprf`, `internal/slaprf/usb`, `internal/slaprf/bluetooth`)**: Unified SlapRF connection/session manager (`slaprf.Manager`) with separate USB-C serial (`/v1/slaprf/usb/*`) and native BLE central (`/v1/slaprf/bluetooth/*`, `tinygo.org/x/bluetooth` over WinRT, CoreBluetooth, and BlueZ D-Bus) transports. Exposes discovered Bluetooth Hubs as `ble:<FINGERPRINT>` ports.
 2. **Native Android App (`cmd/slaprf-android` + `android/java/app/slaprf/`)**:
    - Built without Gradle by [`cmd/build-android`](../cmd/build-android/main.go).
-   - Compiles the full Go timing engine and HTTP/WebSocket server into `libslaprf.so` (`arm64-v8a`, 16 KB page-aligned) listening on loopback `127.0.0.1`.
+   - Compiles the full Go timing engine and HTTP/WebSocket server into `libslaprf.so` (`arm64-v8a`, 16 KB page-aligned) listening on loopback `127.0.0.1:18090`.
    - Thin Java shims bridge Android `BluetoothGatt` (`SlapRFBleShim.java`) and Android `UsbManager` (`SlapRFUsbShim.java`) into Go, while an Android `WebView` (`SlapRFHost.java`) renders the embedded UI offline.
-3. **Browser WebSerial Firmware Flasher (`web/src/services/esptool_flasher.ts`)**:
+3. **Native iOS & iPadOS App (`cmd/slaprf-ios` + `ios/`)**:
+   - Built into a sideloadable `slaprf-ios-arm64.ipa` (or Simulator/Device `.app`) by [`cmd/build-ios`](../cmd/build-ios/main.go).
+   - Compiles the Go timing engine into a static C archive (`libslaprf.a`, `arm64-apple-ios16.0`) bound to `127.0.0.1:18090` with `DisableUSB: true` (`nativeUsb: false` on `/v1/capabilities`).
+   - Swift shims bridge `CoreBluetooth` GATT (`SlapRFBleShim.swift`), `AVAudioEngine` crossing beeps, `AVSpeechSynthesizer` callouts, and `WKWebView` (`SlapRFViewController.swift`), while PoE Bridge (`:5480`), LapRF (`:5403`), RotorHazard, and Pocket LAN (`:8090`) run directly over Go sockets.
+4. **Browser WebSerial Firmware Flasher (`web/src/services/esptool_flasher.ts`)**:
    - Runs in Chrome, Edge, or Opera on desktop over WebSerial using `esptool-js`.
    - Embeds both `slaprf-xiao-c5.bin` (USB Hub & Spokes) and `slaprf-xiao-c5-ble.bin` (Bluetooth Hub).
    - Reads `SLAPRF?` before flashing so **Keep** preserves the board's 32-bit fingerprint across updates, disables the ESP32-C5 RTC watchdog during ROM flashing, writes the patched image, and verifies identity on reboot.

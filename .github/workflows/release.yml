@@ -171,8 +171,52 @@ jobs:
           path: dist/slaprf-android-arm64.apk
           if-no-files-found: error
 
+  ios:
+    needs: [verify, web_bundle]
+    name: Build SlapRF iOS / iPadOS IPA (arm64)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download built web bundle into cmd/slaprf-ios/site
+        uses: actions/download-artifact@v4
+        with:
+          name: web-site
+          path: cmd/slaprf-ios/site
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+
+      - name: Build sideloadable SlapRF iOS / iPadOS IPA
+        run: |
+          rm -rf cmd/slaprf-ios/site/wasm cmd/slaprf-ios/site/docs cmd/slaprf-ios/site/firmware
+          mkdir -p dist
+          go run ./cmd/build-ios -skip-web -version "${GITHUB_REF_NAME}" -out dist/slaprf-ios-arm64.ipa
+
+      - name: Verify CoreBluetooth, WebKit & Info.plist inside IPA
+        run: |
+          VERIFY_DIR="$(mktemp -d)"
+          unzip -q dist/slaprf-ios-arm64.ipa -d "$VERIFY_DIR"
+          otool -L "$VERIFY_DIR/Payload/SlapRF.app/SlapRF" | grep -q "CoreBluetooth.framework"
+          otool -L "$VERIFY_DIR/Payload/SlapRF.app/SlapRF" | grep -q "WebKit.framework"
+          plutil -lint "$VERIFY_DIR/Payload/SlapRF.app/Info.plist"
+          plutil -p "$VERIFY_DIR/Payload/SlapRF.app/Info.plist" | grep -q "NSBluetoothAlwaysUsageDescription"
+          plutil -p "$VERIFY_DIR/Payload/SlapRF.app/Info.plist" | grep -q "NSLocalNetworkUsageDescription"
+          plutil -p "$VERIFY_DIR/Payload/SlapRF.app/Info.plist" | grep -q "bluetooth-central"
+          rm -rf "$VERIFY_DIR"
+
+      - name: Upload iOS IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-slaprf-ios-arm64.ipa
+          path: dist/slaprf-ios-arm64.ipa
+          if-no-files-found: error
+
   release:
-    needs: [verify, firmware, portable, android]
+    needs: [verify, firmware, portable, android, ios]
     name: Publish Release
     runs-on: ubuntu-latest
     steps:

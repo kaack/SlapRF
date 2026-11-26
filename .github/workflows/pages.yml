@@ -66,6 +66,23 @@ jobs:
           name: firmware-poe-bridge
           path: web/firmware
 
+      - name: Resolve latest iOS IPA release metadata for altstore-source.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if REL_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" 2>/dev/null)"; then
+            IPA_URL="$(echo "$REL_JSON" | jq -r '.assets[] | select(.name == "slaprf-ios-arm64.ipa") | .browser_download_url' | head -n 1)"
+            IPA_SIZE="$(echo "$REL_JSON" | jq -r '.assets[] | select(.name == "slaprf-ios-arm64.ipa") | .size' | head -n 1)"
+            REL_TAG="$(echo "$REL_JSON" | jq -r '.tag_name // empty')"
+            REL_DATE="$(echo "$REL_JSON" | jq -r '.published_at // empty')"
+            if [ -n "$IPA_URL" ] && [ -n "$REL_TAG" ]; then
+              echo "SLAPRF_ALTSTORE_VERSION=${REL_TAG}" >> "$GITHUB_ENV"
+              echo "SLAPRF_ALTSTORE_DOWNLOAD_URL=${IPA_URL}" >> "$GITHUB_ENV"
+              [ -n "$IPA_SIZE" ] && echo "SLAPRF_ALTSTORE_SIZE=${IPA_SIZE}" >> "$GITHUB_ENV" || true
+              [ -n "$REL_DATE" ] && echo "SLAPRF_ALTSTORE_DATE=${REL_DATE}" >> "$GITHUB_ENV" || true
+            fi
+          fi
+
       - name: Build static SPA and Go WASM simulation engine
         run: go run ./cmd/build-web -web ./web -out ./_site
 

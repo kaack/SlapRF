@@ -177,6 +177,12 @@ func main() {
 			mustCopyFile(filepath.Join(*webDir, "icons", e.Name()), filepath.Join(*outDir, "icons", e.Name()))
 		}
 	}
+	if !*skipWasm {
+		if err := writeAltStoreAssets(*outDir); err != nil {
+			log.Fatalf("altstore-source.json generation failed: %v", err)
+		}
+		log.Printf("[build-web] Generated altstore-source.json")
+	}
 	if soundEntries, err := os.ReadDir(filepath.Join(*webDir, "sounds")); err == nil {
 		if err := os.MkdirAll(filepath.Join(*outDir, "sounds"), 0o755); err != nil {
 			log.Fatalf("failed to create %s/sounds: %v", *outDir, err)

@@ -51,11 +51,14 @@ go mod download
 ```text
 SlapRF/
 ├── android/             # Thin Android Java host, USB OTG & Bluetooth LE GATT shims, manifest, resources
+├── ios/                 # Native iOS/iPadOS Swift host (WKWebView, CoreBluetooth GATT shim, AVAudioEngine, Xcode project)
 ├── cmd/
 │   ├── slaprf/          # Standalone desktop/Pi server binary (embeds UI, firmware, bbolt DB, USB/BLE/LAN I/O)
 │   ├── slaprf-android/  # Android JNI shared library entry point (libslaprf.so loopback server)
+│   ├── slaprf-ios/      # iOS/iPadOS C-archive entry point (libslaprf.a loopback server, DisableUSB=true)
 │   ├── build-portable/  # Builds cmd/slaprf/site and compiles the standalone slaprf executable
 │   ├── build-android/   # Builds cmd/slaprf-android/site, libslaprf.so, Java shims, and signed APK
+│   ├── build-ios/       # Builds cmd/slaprf-ios/site, libslaprf.a, Swift host, and sideloadable .ipa / Simulator .app
 │   ├── build-web/       # Static site & WASM demo builder (outputs ./_site)
 │   ├── build-docs/      # Hugo documentation & standalone WebSerial flasher builder
 │   ├── slaprf-wasm/     # Go -> WebAssembly entry point for the slaprf.app browser demo
@@ -147,6 +150,17 @@ go run -ldflags="-s -w" ./cmd/devserver
 - **Signed Android APK (`dist/slaprf-android.apk`)**:
   ```bash
   go run ./cmd/build-android -arch arm64
+  ```
+- **iOS & iPadOS Sideload IPA / Simulator / Free Personal Team Deploy (`macOS` + Xcode)**:
+  ```bash
+  # Unsigned / ad-hoc signed IPA for Sideloadly, SideStore, and AltStore
+  go run ./cmd/build-ios -out dist/slaprf-ios-arm64.ipa
+
+  # Boot iPad/iPhone Simulator and launch with live console logs
+  go run ./cmd/build-ios -simulator -run
+
+  # Sign with a free Apple ID Personal Team and deploy to a paired iPad/iPhone
+  go run ./cmd/build-ios -device auto -team <10_CHAR_TEAM_ID> -bundle-id app.slaprf.<yourname> -run
   ```
 
 ---

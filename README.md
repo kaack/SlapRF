@@ -128,6 +128,7 @@ Download prebuilt releases from **[GitHub Releases](https://github.com/kaack/Sla
 | Platform | Release File | Notes |
 | :--- | :--- | :--- |
 | **Android** (`ARM64`) | `slaprf-android-arm64.apk` | USB-C serial, Bluetooth LE Hub, PoE Bridge over LAN, voice callouts, and `-lan` Wi-Fi server |
+| **iOS and iPadOS** (`ARM64`) | `slaprf-ios-arm64.ipa` | Free sideload via Sideloadly or SideStore; Bluetooth LE Hub, PoE Bridge over LAN, voice callouts, and Wi-Fi server |
 | **Windows** (`x86_64`) | `slaprf-windows-amd64.exe` | Portable executable with USB serial, Bluetooth LE, and PoE Bridge support |
 | **macOS** (`Apple Silicon` / `Intel`) | `slaprf-macos-arm64` / `slaprf-macos-amd64` | Single binary for Apple Silicon and Intel Macs |
 | **Linux and Raspberry Pi** (`x86_64` / `ARM64`) | `slaprf-linux-amd64` / `slaprf-linux-arm64` | Desktop app or headless LAN server (`./slaprf -lan -addr 0.0.0.0:8090`) |

@@ -31,10 +31,12 @@ type precacheEntry struct {
 // GitHub Pages SPA fallback (identical to index.html, which navigations fall back to), and Pages
 // metadata.
 var precacheExcluded = map[string]bool{
-	"sw.js":     true,
-	"404.html":  true,
-	"CNAME":     true,
-	".nojekyll": true,
+	"sw.js":                   true,
+	"404.html":                true,
+	"CNAME":                   true,
+	".nojekyll":               true,
+	"altstore-source.json":    true,
+	"icons/app-icon-1024.png": true,
 }
 
 // buildPrecache hashes every deployable file under outDir (sorted, slash-separated paths) and
