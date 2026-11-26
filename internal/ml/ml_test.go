@@ -105,9 +105,14 @@ func TestEvalWindow29MatchesInferSequenceBitAccurate(t *testing.T) {
 
 func TestPretrainedBaseModelAndLive2LapAdapter(t *testing.T) {
 	model, snap := PretrainedBaseModel()
-	if snap.AIMetrics.F1 < 0.88 {
-		t.Fatalf("expected built-in AI Base v0 F1 >= 0.88 on unseen synthetic flights, got F1=%.3f (TP=%d FN=%d FP=%d)",
-			snap.AIMetrics.F1, snap.AIMetrics.DetectedPasses, snap.AIMetrics.MissedPasses, snap.AIMetrics.FalseTriggers)
+	if snap.TrainPacks < 6 || snap.TrainPasses < 744 {
+		t.Fatalf("expected built-in SlapRF Base trained on >= 6 sessions / 744 passes, got packs=%d passes=%d",
+			snap.TrainPacks, snap.TrainPasses)
+	}
+	if snap.AIMetrics.F1 < 0.945 || snap.AIMetrics.Recall < 0.945 || snap.AIMetrics.Precision < 0.945 {
+		t.Fatalf("expected built-in SlapRF Base F1/Recall/Precision >= 0.945 on hardware dataset, got F1=%.4f Rec=%.4f Prec=%.4f (TP=%d FN=%d FP=%d)",
+			snap.AIMetrics.F1, snap.AIMetrics.Recall, snap.AIMetrics.Precision,
+			snap.AIMetrics.DetectedPasses, snap.AIMetrics.MissedPasses, snap.AIMetrics.FalseTriggers)
 	}
 
 	// Verify real-time confirmation latency <= 420 ms on a compact-track pass with a 2.2s -68 dBm shelf

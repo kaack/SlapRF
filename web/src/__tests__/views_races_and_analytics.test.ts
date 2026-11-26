@@ -3137,4 +3137,78 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       view.destroy();
     }
   });
+
+  it("force-refreshes Practice session RSSI trace when an empty trace was cached before flying and pausing", async () => {
+    const store = makeStore();
+    const p1 = makePilot(1, { callsign: "OneEye", band: 1, channel: 7, frequencyMhz: 5880 });
+    const g1 = makeGate(1, { name: "H1", timerLabel: "H1", role: "START_FINISH", trackOrder: 0 });
+    const emptySess = makePracticeSession("v3-fresh", {
+      name: "25mW V3",
+      active: false,
+      pilots: [{ slotIndex: 1, callsign: "OneEye", color: "#ef4444", band: 1, channel: 7, frequencyMhz: 5880 }],
+      trackInitialized: true,
+      trackSnapshot: [g1],
+      laps: [],
+      crossings: [],
+    });
+    store.hydrate({
+      ...storeSnapshotFrom(store),
+      pilots: [p1],
+      gates: [g1],
+      practiceState: {
+        initialized: true,
+        activeSessionId: "",
+        selectedSessionId: "v3-fresh",
+        sessions: [emptySess],
+      },
+    });
+    // Simulate empty trace cached before `action=start`
+    store.setSessionTrace("v3-fresh", []);
+    expect(store.hasSessionTrace("v3-fresh")).toBe(true);
+    expect(store.sessionTraceNeedsRefresh(store.selectedPracticeSession)).toBe(false);
+
+    // Pilot flies L1 and pauses (`active: false`)
+    store.ingestPractice({
+      initialized: true,
+      activeSessionId: "",
+      selectedSessionId: "v3-fresh",
+      sessions: [
+        {
+          ...emptySess,
+          active: false,
+          paused: true,
+          traceSampleCount: 145285,
+          laps: [{ ...makeLap(201, 1, 1, 11.42), completedAtUs: 327_209_000_000 }],
+          crossings: [
+            { eventId: 1, gateId: 1, slotIndex: 1, callsign: "OneEye", peakRssi: -52, timestampUs: 327_197_580_000 },
+            { eventId: 2, gateId: 1, slotIndex: 1, callsign: "OneEye", peakRssi: -51, timestampUs: 327_209_000_000 },
+          ],
+        },
+      ],
+    });
+    expect(store.sessionTraceNeedsRefresh(store.selectedPracticeSession)).toBe(true);
+
+    replaceAppHash("#/practice/v3-fresh");
+    const root = mountHtml(`<div id="prac-stale-trace-host"></div>`);
+    const host = root.querySelector<HTMLElement>("#prac-stale-trace-host")!;
+    const mock = makeMockApiClient(store);
+    const view = new PracticeView(host, store, mock.api);
+    try {
+      await flushMicrotasks();
+      mock.calls.length = 0;
+
+      host.querySelector<HTMLButtonElement>('[data-practice-mobile-tab="review"]')!.click();
+      await flushMicrotasks();
+      host.querySelector<HTMLButtonElement>("[data-review-open-lap-rssi]")!.click();
+      await flushMicrotasks();
+
+      const refreshCalls = mock.calls.filter(
+        (c) => c.method === "ensurePracticeSessionTrace" && c.args[0] === "v3-fresh" && c.args[1] === true
+      );
+      expect(refreshCalls.length).toBeGreaterThanOrEqual(1);
+      document.body.querySelector<HTMLButtonElement>("[data-lap-ed-close]")?.click();
+    } finally {
+      view.destroy();
+    }
+  });
 });

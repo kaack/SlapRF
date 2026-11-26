@@ -143,20 +143,84 @@ public final class SlapRFHost extends Activity {
         t.setDaemon(true);
         return t;
     });
+    private static AudioTrack sharedBeepTrack;
+    private static long lastBeepWriteUptimeMs = 0L;
+
+    private static AudioTrack ensureSharedBeepTrackLocked(int sampleRate) {
+        if (sharedBeepTrack != null && sharedBeepTrack.getState() == AudioTrack.STATE_INITIALIZED) {
+            if (sharedBeepTrack.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
+                sharedBeepTrack.play();
+            }
+            return sharedBeepTrack;
+        }
+        releaseSharedBeepTrackLocked();
+        AudioAttributes.Builder attrBuilder = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC);
+        if (Build.VERSION.SDK_INT >= 29) {
+            attrBuilder.setAllowedCapturePolicy(AudioAttributes.ALLOW_CAPTURE_BY_ALL);
+        }
+        AudioFormat fmt = new AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(sampleRate)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                .build();
+        int minBuf = AudioTrack.getMinBufferSize(
+                sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
+        int targetBufBytes = Math.max(minBuf > 0 ? minBuf : 9600, ((sampleRate * 240) / 1000) * 2);
+        AudioTrack.Builder tb = new AudioTrack.Builder()
+                .setAudioAttributes(attrBuilder.build())
+                .setAudioFormat(fmt)
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .setBufferSizeInBytes(targetBufBytes);
+        if (Build.VERSION.SDK_INT >= 26) {
+            // Standard mixer path guarantees Android AudioPlaybackCapture (screen/phone audio recorders) can tap the stream.
+            tb.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_NONE);
+        }
+        AudioTrack built = tb.build();
+        built.play();
+        sharedBeepTrack = built;
+        return built;
+    }
+
+    private static void releaseSharedBeepTrackLocked() {
+        if (sharedBeepTrack != null) {
+            try {
+                sharedBeepTrack.stop();
+            } catch (Exception ignored) {
+            }
+            try {
+                sharedBeepTrack.release();
+            } catch (Exception ignored) {
+            }
+            sharedBeepTrack = null;
+        }
+    }
+
+    private static void shutdownSharedBeepTrack() {
+        beepExecutor.execute(SlapRFHost::releaseSharedBeepTrackLocked);
+    }
 
     private static void playCapturableGateBeep(final double freqHz, final int durationMs, final float volume) {
         final double safeFreq = Math.max(220.0, Math.min(8000.0, freqHz));
-        final int safeDurMs = Math.max(20, Math.min(500, durationMs));
-        final float safeVol = Math.max(0.05f, Math.min(1.0f, volume));
+        final int safeDurMs = Math.max(80, Math.min(500, durationMs));
+        final float safeVol = Math.max(0.08f, Math.min(1.0f, volume));
         beepExecutor.execute(() -> {
             final int sampleRate = 48000;
-            final int totalSamples = Math.max(240, (sampleRate * safeDurMs) / 1000);
-            final int attackSamples = Math.max(1, (sampleRate * 5) / 1000);
-            final int releaseSamples = Math.max(1, (sampleRate * 18) / 1000);
-            final int sustainEnd = Math.max(attackSamples, totalSamples - releaseSamples);
-            final short[] pcm = new short[totalSamples];
-            final double peakAmp = 32767.0 * 0.42 * safeVol;
-            for (int i = 0; i < totalSamples; i++) {
+            final long nowUptime = SystemClock.uptimeMillis();
+            final boolean wasIdle = (nowUptime - lastBeepWriteUptimeMs) > 350L;
+            // Prepend 24 ms silent lead-in after idle lulls so AudioFlinger + AudioPlaybackCapture
+            // wake up before the tone attack, and append 60 ms silent flush so the persistent
+            // MODE_STREAM track pushes every sample through the screen-recorder AAC encoder.
+            final int leadInSamples = wasIdle ? (sampleRate * 24) / 1000 : 0;
+            final int toneSamples = Math.max(960, (sampleRate * safeDurMs) / 1000);
+            final int tailSamples = (sampleRate * 60) / 1000;
+            final int attackSamples = Math.max(1, (sampleRate * 6) / 1000);
+            final int releaseSamples = Math.max(1, (sampleRate * 30) / 1000);
+            final int sustainEnd = Math.max(attackSamples, toneSamples - releaseSamples);
+            final short[] pcm = new short[leadInSamples + toneSamples + tailSamples];
+            final double peakAmp = 32767.0 * 0.52 * safeVol;
+            for (int i = 0; i < toneSamples; i++) {
                 double phase = (i * safeFreq / sampleRate) % 1.0;
                 double tri = phase < 0.5 ? (4.0 * phase - 1.0) : (3.0 - 4.0 * phase);
                 double env;
@@ -165,53 +229,26 @@ public final class SlapRFHost extends Activity {
                 } else if (i < sustainEnd) {
                     env = 1.0;
                 } else {
-                    double relFrac = (double) (i - sustainEnd) / (double) releaseSamples;
-                    env = Math.exp(-5.0 * relFrac);
+                    double relFrac = Math.min(1.0, (double) (i - sustainEnd) / (double) releaseSamples);
+                    env = 0.5 * (1.0 + Math.cos(Math.PI * relFrac));
                 }
                 int val = (int) Math.round(tri * env * peakAmp);
                 if (val > 32767) val = 32767;
                 else if (val < -32768) val = -32768;
-                pcm[i] = (short) val;
+                pcm[leadInSamples + i] = (short) val;
             }
 
-            AudioAttributes.Builder attrBuilder = new AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC);
-            if (Build.VERSION.SDK_INT >= 29) {
-                attrBuilder.setAllowedCapturePolicy(AudioAttributes.ALLOW_CAPTURE_BY_ALL);
-            }
-            AudioFormat fmt = new AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(sampleRate)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                    .build();
-            AudioTrack track = null;
             try {
-                AudioTrack.Builder tb = new AudioTrack.Builder()
-                        .setAudioAttributes(attrBuilder.build())
-                        .setAudioFormat(fmt)
-                        .setTransferMode(AudioTrack.MODE_STATIC)
-                        .setBufferSizeInBytes(totalSamples * 2);
-                if (Build.VERSION.SDK_INT >= 26) {
-                    // Standard mixer path guarantees Android AudioPlaybackCapture (screen/phone audio recorders) can tap the stream.
-                    tb.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_NONE);
+                AudioTrack track = ensureSharedBeepTrackLocked(sampleRate);
+                int written = track.write(pcm, 0, pcm.length, AudioTrack.WRITE_BLOCKING);
+                if (written < 0) {
+                    releaseSharedBeepTrackLocked();
+                    track = ensureSharedBeepTrackLocked(sampleRate);
+                    track.write(pcm, 0, pcm.length, AudioTrack.WRITE_BLOCKING);
                 }
-                track = tb.build();
-                track.write(pcm, 0, totalSamples);
-                track.play();
-                SystemClock.sleep(safeDurMs + 40L);
-            } catch (Exception ignored) {
-            } finally {
-                if (track != null) {
-                    try {
-                        track.stop();
-                    } catch (Exception ignored) {
-                    }
-                    try {
-                        track.release();
-                    } catch (Exception ignored) {
-                    }
-                }
+                lastBeepWriteUptimeMs = SystemClock.uptimeMillis();
+            } catch (Exception e) {
+                releaseSharedBeepTrackLocked();
             }
         });
     }
@@ -872,6 +909,7 @@ public final class SlapRFHost extends Activity {
                     act.runOnUiThread(act::finishAndRemoveTask);
                 }
                 nativeStopServer();
+                shutdownSharedBeepTrack();
                 shutdownSharedTts();
                 releaseLocks();
                 stopForeground(STOP_FOREGROUND_REMOVE);

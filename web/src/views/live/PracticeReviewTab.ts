@@ -34,8 +34,10 @@ export class PracticeReviewTab extends Component {
 
   public onActivate(): void {
     const sess = this.store.selectedPracticeSession;
-    if (sess) {
-      void this.api.ensurePracticeSessionTrace(sess.sessionId).catch(() => undefined);
+    if (sess && (!this.store.hasSessionTrace(sess.sessionId) || this.store.sessionTraceNeedsRefresh(sess))) {
+      void this.api
+        .ensurePracticeSessionTrace(sess.sessionId, this.store.hasSessionTrace(sess.sessionId))
+        .catch(() => undefined);
     }
     this.render(true);
   }

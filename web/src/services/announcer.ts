@@ -1260,21 +1260,33 @@ export class Announcer {
     }
   }
 
-  /** Crisp ~68 ms Start/Finish gate-pass confirmation pip during live race heats. */
+  /** Crisp ~140 ms Start/Finish gate-pass confirmation pip during live race heats. */
   private playGatePassBeep(slotIndex = 1): void {
+    const slotIdx = Math.max(0, Math.min(7, (slotIndex || 1) - 1));
+    const freqHz = 1046.5 * Math.pow(2, (slotIdx * 35) / 1200);
+    const clampedVol = Math.max(0.08, Math.min(1, this.prefs.volume > 0 ? this.prefs.volume : 0.9));
+    const androidBridge = getAndroidBridge();
+    if (androidBridge && typeof androidBridge.playBeep === "function") {
+      try {
+        androidBridge.playBeep(freqHz, 140, clampedVol);
+        return;
+      } catch {
+        // Fall back to WebAudio if bridge call fails
+      }
+    }
     this.wakeAudio();
     const ctx = this.keepAwake;
     if (!ctx) return;
     try {
       const now = ctx.currentTime;
-      const slotIdx = Math.max(0, Math.min(7, (slotIndex || 1) - 1));
-      const freqHz = 1046.5 * Math.pow(2, (slotIdx * 35) / 1200);
-      const dur = 0.068;
-      const vol = Math.max(0.03, Math.min(1, this.prefs.volume)) * 0.24;
+      const dur = 0.14;
+      const sustainEnd = now + dur - 0.025;
+      const vol = clampedVol * 0.3;
 
       const g = ctx.createGain();
       g.gain.setValueAtTime(0.0001, now);
       g.gain.linearRampToValueAtTime(vol, now + 0.006);
+      g.gain.setValueAtTime(vol, sustainEnd);
       g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
       g.connect(ctx.destination);
 
@@ -1283,7 +1295,7 @@ export class Announcer {
       osc.frequency.setValueAtTime(freqHz, now);
       osc.connect(g);
       osc.start(now);
-      osc.stop(now + dur + 0.015);
+      osc.stop(now + dur + 0.02);
     } catch {
       // Ignore AudioContext scheduling errors
     }

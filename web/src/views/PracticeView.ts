@@ -616,8 +616,10 @@ export class PracticeView extends Component {
       dirEl.style.display = "none";
       wsEl.style.display = "";
       const selSess = this.store.selectedPracticeSession;
-      if (selSess && !selSess.active && !this.store.hasSessionTrace(selSess.sessionId)) {
-        void this.api.ensurePracticeSessionTrace(selSess.sessionId).catch(() => undefined);
+      if (selSess && !selSess.active && this.store.sessionTraceNeedsRefresh(selSess)) {
+        void this.api
+          .ensurePracticeSessionTrace(selSess.sessionId, this.store.hasSessionTrace(selSess.sessionId))
+          .catch(() => undefined);
       }
       wsEl.dataset.mobilePracticeView = this.mobilePracticeTab;
       this.ensureSinglePilotFocusForMobileTab(this.mobilePracticeTab);

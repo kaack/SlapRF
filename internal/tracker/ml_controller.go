@@ -117,6 +117,7 @@ func (e *Engine) SessionTraceFrames(sessionID string) ([]domain.TimerTelemetryFr
 	if ts == nil {
 		return nil, nil
 	}
+	ts.FlushSession(trimmedID)
 	samples, err := ts.ReadSession(trimmedID)
 	if err != nil || len(samples) == 0 {
 		return nil, err

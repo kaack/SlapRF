@@ -4,7 +4,7 @@ import { CrossingBeepMode } from "../types/models";
 
 const KEEP_WAKE_GAIN = 0.0001;
 const GATE_TONE_FREQS_HZ = [1318.51, 1479.98, 1661.22, 1760.0, 1975.53, 2217.46];
-const BEEP_DURATION_SEC = 0.065;
+const BEEP_DURATION_SEC = 0.15;
 
 let sharedCtx: AudioContext | null = null;
 let unlockBound = false;
@@ -78,15 +78,15 @@ export function playShortCrossingBeep(store: AppStore, gateId: number, volume = 
   if (!ctx) return;
   try {
     const now = ctx.currentTime;
-    const peakGain = clampedVol * 0.34;
-    const attackEnd = now + 0.005;
-    const sustainEnd = now + BEEP_DURATION_SEC - 0.018;
+    const peakGain = clampedVol * 0.4;
+    const attackEnd = now + 0.006;
+    const sustainEnd = now + BEEP_DURATION_SEC - 0.025;
 
     const g = ctx.createGain();
     g.gain.setValueAtTime(KEEP_WAKE_GAIN, now);
     g.gain.linearRampToValueAtTime(peakGain, attackEnd);
     g.gain.setValueAtTime(peakGain, sustainEnd);
-    g.gain.exponentialRampToValueAtTime(KEEP_WAKE_GAIN, sustainEnd + 0.018);
+    g.gain.exponentialRampToValueAtTime(KEEP_WAKE_GAIN, sustainEnd + 0.025);
     g.connect(ctx.destination);
 
     const osc = ctx.createOscillator();
@@ -94,7 +94,7 @@ export function playShortCrossingBeep(store: AppStore, gateId: number, volume = 
     osc.frequency.setValueAtTime(freqHz, now);
     osc.connect(g);
     osc.start(now);
-    osc.stop(sustainEnd + 0.02);
+    osc.stop(sustainEnd + 0.03);
   } catch {
     // Ignore AudioContext scheduling errors in headless test environments
   }

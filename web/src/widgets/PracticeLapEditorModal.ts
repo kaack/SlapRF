@@ -279,9 +279,7 @@ export function openPracticeLapEditorModal(
   };
 
   let isAutoLabeling = false;
-  const needsFreshActiveTrace =
-    Boolean(initSess.active) &&
-    (initSess.laps ?? []).some((l) => l.completedAtUs > rootStore.sessionTraceMaxTsUs(sessionId));
+  const needsFreshTrace = rootStore.sessionTraceNeedsRefresh(initSess);
 
   const backdrop = document.createElement("div");
   backdrop.className = "slaprf-modal-backdrop lap-editor-backdrop is-practice-signals-backdrop";
@@ -612,7 +610,7 @@ export function openPracticeLapEditorModal(
   window.addEventListener("click", onTopBarBackCapture, true);
   window.addEventListener("hashchange", onHashChange);
 
-  if (!rootStore.hasSessionTrace(sessionId) || needsFreshActiveTrace) {
-    void rootApi.ensurePracticeSessionTrace(sessionId, needsFreshActiveTrace).catch(() => undefined);
+  if (!rootStore.hasSessionTrace(sessionId) || needsFreshTrace) {
+    void rootApi.ensurePracticeSessionTrace(sessionId, needsFreshTrace).catch(() => undefined);
   }
 }

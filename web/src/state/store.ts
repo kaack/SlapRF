@@ -458,7 +458,10 @@ export class AppStore {
   private _eventState: EventManagerState = DEFAULT_EVENT_STATE;
   private _practiceState: PracticeManagerState = DEFAULT_PRACTICE_STATE;
   private _mlStatus: MLStatus = DEFAULT_ML_STATUS;
-  private readonly sessionTraces = new Map<string, { byGate: Map<number, TimerTelemetryFrame[]>; maxTsUs: number }>();
+  private readonly sessionTraces = new Map<
+    string,
+    { byGate: Map<number, TimerTelemetryFrame[]>; maxTsUs: number; fetchedEventMaxUs: number }
+  >();
   private readonly packSealedListeners = new Set<(lapCount: number, nextPackName: string) => void>();
   private _laprfEmulator: LapRFEmulatorStatus = {
     connectedClients: 0,
@@ -610,6 +613,48 @@ export class AppStore {
     return this.sessionTraces.get(sessionId)?.maxTsUs ?? 0;
   }
 
+  private sessionRecordedMaxEventTsUs(sess: PracticeSession | undefined | null): number {
+    if (!sess) return 0;
+    let mx = 0;
+    for (const l of sess.laps ?? []) {
+      if (l.completedAtUs > mx) mx = l.completedAtUs;
+    }
+    for (const c of sess.crossings ?? []) {
+      if (c.timestampUs > mx) mx = c.timestampUs;
+    }
+    for (const f of sess.filtered ?? []) {
+      if (f.timestampUs > mx) mx = f.timestampUs;
+    }
+    return mx;
+  }
+
+  /**
+   * Returns true when `sess` has recorded telemetry/laps/crossings that are not yet present in
+   * `this.sessionTraces` (including when an empty trace was cached before `action=start` and the
+   * session was later flown and paused).
+   */
+  public sessionTraceNeedsRefresh(sess: PracticeSession | undefined | null): boolean {
+    if (!sess || !sess.sessionId) return false;
+    const eventMaxUs = this.sessionRecordedMaxEventTsUs(sess);
+    const hasRecordedData =
+      eventMaxUs > 0 || Boolean(sess.traceSampleCount && sess.traceSampleCount > 0);
+    const cached = this.sessionTraces.get(sess.sessionId);
+    if (!cached) {
+      return hasRecordedData;
+    }
+    if (eventMaxUs > cached.maxTsUs && eventMaxUs > cached.fetchedEventMaxUs) {
+      return true;
+    }
+    if (
+      cached.maxTsUs <= 0 &&
+      cached.fetchedEventMaxUs <= 0 &&
+      Boolean(sess.traceSampleCount && sess.traceSampleCount > 0)
+    ) {
+      return true;
+    }
+    return false;
+  }
+
   /**
    * Returns full recorded `.rfbin` frames for `sessionId` and `gateId` (sorted ascending by `timestampUs`),
    * merging any newer live WebSocket ring-buffer frames when `isSessionActive` is true so historical laps
@@ -669,7 +714,9 @@ export class AppStore {
         }
       }
     }
-    this.sessionTraces.set(sessionId, { byGate, maxTsUs });
+    const matchingSess = (this._practiceState.sessions ?? []).find((s) => s.sessionId === sessionId);
+    const fetchedEventMaxUs = this.sessionRecordedMaxEventTsUs(matchingSess);
+    this.sessionTraces.set(sessionId, { byGate, maxTsUs, fetchedEventMaxUs });
     // Evict oldest cached traces beyond 16 sessions in browser RAM
     if (this.sessionTraces.size > 16) {
       const firstKey = this.sessionTraces.keys().next().value;
