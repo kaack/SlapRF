@@ -1,15 +1,15 @@
 # SlapRF Architecture & Protocol Reference
 
-This document describes the client-server architecture, hardware transports (USB and Bluetooth LE), 5.8 GHz and 2.4 GHz radio schedule, binary wire protocols, digital signal processing (DSP), timing rules, firmware image patching, native Android packaging, and WebAssembly browser demo of **SlapRF**.
+This document describes the client-server architecture, hardware transports (USB-C, Bluetooth LE, and PoE Ethernet), 5.8 GHz and 2.4 GHz radio schedule, binary wire protocols, digital signal processing (DSP), on-device AI crossing detection, timing rules, firmware image patching, native Android packaging, and WebAssembly browser demo of **SlapRF**.
 
-For local setup, build commands, and test instructions, see **[`docs/DEVELOPER.md`](DEVELOPER.md)**. For the low-level GATT characteristic layout of the Bluetooth Hub, see **[`docs/ble-hub-protocol.md`](ble-hub-protocol.md)**.
+For local setup, build commands, and test instructions, see **[`docs/DEVELOPER.md`](DEVELOPER.md)**. For low-level transport specifications, see **[`docs/ble-hub-protocol.md`](ble-hub-protocol.md)** (Bluetooth Hub GATT link) and **[`docs/poe-bridge-protocol.md`](poe-bridge-protocol.md)** (ESP32-P4 PoE Ethernet <-> USB Serial Bridge).
 
 ## Contents
 
 - **[1. System Overview](#1-system-overview)**
 - **[2. End-to-End Data Flow](#2-end-to-end-data-flow)**
 - **[3. XIAO ESP32-C5 5.8 GHz SDR & Time-Division Schedule](#3-xiao-esp32-c5-58-ghz-sdr--time-division-schedule)**
-- **[4. USB Hub vs. Bluetooth Hub Architecture](#4-usb-hub-vs-bluetooth-hub-architecture)**
+- **[4. USB Hub, Bluetooth Hub & PoE Bridge Architecture](#4-usb-hub-bluetooth-hub--poe-bridge-architecture)**
 - **[5. Ground-Interference Mitigation & 2.4 GHz Link](#5-ground-interference-mitigation--24-ghz-link)**
 - **[6. Binary Wire Formats (`0xC5` Frames & `SLAPRF02`)](#6-binary-wire-formats-0xc5-frames--slaprf02)**
 - **[7. DSP Pipeline & Parabolic Peak Interpolation](#7-dsp-pipeline--parabolic-peak-interpolation)**
@@ -28,10 +28,11 @@ SlapRF is built on four main design choices:
    Spoke timers (`T1` to `T6`) placed at gates on the track do not run peak detection, threshold checks, or lap math. Each Spoke sweeps up to 8 active 5.8 GHz VTX channels at 100 Hz (`0.5 dB` steps) and sends raw RSSI sweeps to the Hub over 2.4 GHz ESP-NOW. The host computer or phone runs all DSP and timing rules (`internal/dsp`, `internal/tracker`). This lets you recalibrate thresholds and adjust timing rules live without reflashing gate hardware.
 2. **Single-Radio Dual-Band Multiplexing on XIAO ESP32-C5**:
    Each timer uses one Seeed Studio XIAO ESP32-C5 dual-band (`2.4 GHz` / `5 GHz`) module. Because one RF synthesizer is shared between 5.8 GHz VTX measurement and 2.4 GHz wireless transport, the Hub and all Spokes follow a synchronized 20 ms superframe schedule. No timer transmits on 2.4 GHz while another timer is tuned to 5.8 GHz.
-3. **Two Hub Host Transports (Bluetooth LE and USB-C)**:
+3. **Three Hub Host Transports (Bluetooth LE, USB-C, and PoE Ethernet)**:
    The Hub timer (`H1`) collects wireless ESP-NOW frames from all Spokes and forwards a unified byte stream to the SlapRF host:
    - **Bluetooth Hub (`slaprf-xiao-c5-ble.bin`)**: Runs on a battery at the Start / Finish gate, sweeps 5.8 GHz for that gate, collects Spoke frames over ESP-NOW, and streams telemetry over Bluetooth LE to a phone or laptop at the pilot bench.
    - **USB Hub (`slaprf-xiao-c5.bin`)**: Connects directly to a laptop, Raspberry Pi, or Android phone over a USB-C cable for minimum transport latency. By default, a USB Hub stays off-track as a receiver, or you can assign it to a gate in the **Track** editor (`HUBGATE 1`) if your USB cable reaches the gate.
+   - **PoE Ethernet Bridge (`slaprf-p4-poe-bridge.bin` + `slaprf-xiao-c5.bin`)**: Connects a standard USB Hub (`H1`) to the USB-A Host port of a Waveshare `ESP32-P4-WIFI6-POE-ETH` board powered over up to `100 m` of `802.3af` PoE Ethernet (`TCP/UDP :5480`), eliminating gate batteries while delivering `< 0.5 ms` wired LAN latency.
 4. **Native Local Engine + Optional Browser Demo**:
    For real timing, hardware I/O, DSP peak detection, race brackets, and `bbolt` database storage (`slaprf.db`) run natively in Go on Desktop (`cmd/slaprf`) or Android (`cmd/slaprf-android`, compiled to `libslaprf.so`). Browser tabs connect locally (`http://127.0.0.1:8090`, LAN, or Android WebView) as UI clients. Separately, `https://slaprf.app` compiles the simulator into WebAssembly (`cmd/slaprf-wasm`) for zero-install preview in a browser.
 
@@ -45,7 +46,7 @@ flowchart TB
         direction LR
         VTX["Up to 8x 5.8 GHz Drone VTXs\n(Raceband, Fatshark, Boscam, IMD6)"]
         Spokes["SlapRF Spoke Timers T1 to T6\n- 100 Hz 8-ch 5.8 GHz sweep (0.5 dB)\n- 4-sample sliding window\n- No on-board lap math"]
-        Hub["SlapRF Hub Timer H1\n- Bluetooth Hub (at Start/Finish gate)\n  or USB Hub (at bench or gate)\n- 50 Hz ESP-NOW Sync Beacon (Ch 1)"]
+        Hub["SlapRF Hub Timer H1\n- Bluetooth Hub, USB Hub, or\n  PoE Bridge + USB Hub (at gate)\n- 50 Hz ESP-NOW Sync Beacon (Ch 1)"]
         OtherHW["External Timing Hardware\n- RotorHazard (USB serial or LAN :5000)\n- ImmersionRC LapRF 8-Way (USB serial or LAN TCP :5403)"]
 
         VTX -. "5.8 GHz RF" .-> Spokes
@@ -56,14 +57,14 @@ flowchart TB
     end
 
     subgraph Host["Pilot Bench Host (Desktop Binary or Android APK)"]
-        Drivers["Hardware Transports\n- Bluetooth LE (tinygo bluetooth / Android BluetoothGatt)\n- USB Serial (go.bug.st/serial / Android UsbManager)\n- RotorHazard & LapRF Clients"]
+        Drivers["Hardware Transports\n- Bluetooth LE (tinygo bluetooth / Android BluetoothGatt)\n- USB Serial (go.bug.st/serial / Android UsbManager)\n- PoE Ethernet Bridge (TCP + UDP :5480)\n- RotorHazard & LapRF Clients"]
         Decoder["Hub Stream Decoder\ninternal/ingest/hub_frames.go"]
         DSP["8-Channel DSP Peak Detector\ninternal/dsp/peak_detector.go\n- EMA filter + hysteresis\n- 3-point parabolic fit (< 2 ms)"]
         Engine["Timing, Practice & Race Engine\ninternal/tracker + internal/race\n- 3-tier crossing rules & section splits\n- Brackets, heats, marshal review"]
         DB["Embedded Store\ninternal/storage (bbolt slaprf.db)"]
         HTTP["Local HTTP + WebSocket Server\ninternal/portable + internal/api"]
 
-        Hub -- "Bluetooth LE (2M PHY)\nor USB-C Serial" --> Drivers
+        Hub -- "Bluetooth LE, USB-C,\nor PoE TCP :5480" --> Drivers
         OtherHW -- "USB Serial or LAN" --> Drivers
         Drivers --> Decoder --> DSP --> Engine
         Engine <--> DB
@@ -125,12 +126,13 @@ sequenceDiagram
 
 ---
 
-## 4. USB Hub vs. Bluetooth Hub Architecture
+## 4. USB Hub, Bluetooth Hub & PoE Bridge Architecture
 
-SlapRF builds two firmware images from shared 5.8 GHz sensing code:
+SlapRF builds two XIAO ESP32-C5 timer images from shared 5.8 GHz sensing code plus a dedicated ESP32-P4 PoE Ethernet bridge image:
 
-- **USB & Spoke image (`slaprf-xiao-c5.bin`, [`firmware/slaprf/`](../firmware/slaprf/))**: Used for all Spoke timers and for wired USB Hubs.
+- **USB & Spoke image (`slaprf-xiao-c5.bin`, [`firmware/slaprf/`](../firmware/slaprf/))**: Used for all Spoke timers and for wired USB or PoE-bridged Hubs.
 - **Bluetooth Hub image (`slaprf-xiao-c5-ble.bin`, [`firmware/slaprf_ble/`](../firmware/slaprf_ble/))**: Dedicated Hub image that replaces the live USB host link with NimBLE Bluetooth LE GATT while keeping the same 2.4 GHz ESP-NOW Spoke collector and 5.8 GHz gate sensor.
+- **PoE Ethernet Bridge image (`slaprf-p4-poe-bridge.bin`, [`firmware/slaprf_p4_poe_bridge/`](../firmware/slaprf_p4_poe_bridge/))**: Runs on a Waveshare `ESP32-P4-WIFI6-POE-ETH` board, holding its onboard `ESP32-C6` radio in reset (`GPIO54 = 0`), powering Hub `H1` over USB-A from `802.3af` PoE, and bridging raw unescaped serial bytes over `TCP :5480` with out-of-band `UDP :5480` discovery and control (see **[`docs/poe-bridge-protocol.md`](poe-bridge-protocol.md)**).
 
 ### How the Bluetooth Hub Coexists with 5.8 GHz Sweeps and ESP-NOW
 
@@ -141,18 +143,18 @@ SlapRF builds two firmware images from shared 5.8 GHz sensing code:
 3. **Claim-on-Pair Host Authentication (`AUTH <host_key>`)**:
    Each SlapRF host (desktop or Android app) generates and saves a random 128-bit hex key. When a Bluetooth Hub is in Pairing Mode (freshly flashed, or after holding `BOOT` for 3 seconds), the first host that connects claims the Hub and stores its key in NVS. Later connections from other phones or laptops without that key are rejected so nobody at the field can accidentally connect to an active Hub.
 
-### Technical Comparison: USB Hub vs. Bluetooth Hub
+### Technical Comparison: USB Hub vs. Bluetooth Hub vs. PoE Bridge
 
-| Feature | USB Hub (`slaprf-xiao-c5.bin`) | Bluetooth Hub (`slaprf-xiao-c5-ble.bin`) |
-| :--- | :--- | :--- |
-| **Host Connection** | Wired USB-C serial (`CDC` / `USB-JTAG`) | Wireless Bluetooth LE 5.0 (`2M PHY`, `MTU 247`) |
-| **Hub Placement** | Next to the laptop/phone (or on a gate within USB cable reach) | Directly at the Start / Finish gate on a battery; phone or laptop stays at the bench |
-| **Hub Power** | Powered from the host USB port | Powered from a gate LiPo (`5 V` USB-C adapter) or USB power bank |
-| **Spoke Timers** | Up to 6 wireless ESP-NOW Spokes (`slaprf-xiao-c5.bin`) | Up to 6 wireless ESP-NOW Spokes (`slaprf-xiao-c5.bin`) |
-| **Host Transport Latency** | **Lowest (`~1 to 3 ms`)**: frames arrive over wired USB right after each sweep gap | **Low (`~10 to 30 ms`)**: frames wait for the next `10 to 30 ms` BLE connection event |
-| **Lap & Split Time Accuracy** | `100 Hz` (`10 ms`) sweep clock with `< 2 ms` parabolic peak fit | **Identical** (`100 Hz` sweep timestamps are recorded on the timers before BLE transport; BLE only adds a tiny delay before the horn or voice callout plays) |
-| **Supported Hosts** | Windows, macOS, Linux, Raspberry Pi, Android (USB OTG) | Android, Windows, macOS, Linux |
-| **Best Use Case** | Formal races and setups where you want the absolute minimum callout delay | Regular practice, solo sessions, and clean cable-free setups from the pilot bench |
+| Feature | USB Hub (`slaprf-xiao-c5.bin`) | Bluetooth Hub (`slaprf-xiao-c5-ble.bin`) | PoE Bridge + USB Hub (`slaprf-p4-poe-bridge.bin`) |
+| :--- | :--- | :--- | :--- |
+| **Host Connection** | Wired USB-C serial (`CDC` / `USB-JTAG`) | Wireless Bluetooth LE 5.0 (`2M PHY`, `MTU 247`) | Wired `100 Mbps` Ethernet (`TCP :5480` stream + `UDP :5480` control) |
+| **Hub Placement** | Next to the laptop/phone (or on a gate within USB cable reach) | Directly at the Start / Finish gate on a battery; phone or laptop stays at the bench | Directly at the Start / Finish gate up to `100 m` away over Cat5e/Cat6 |
+| **Hub Power** | Powered from the host USB port | Powered from a gate LiPo (`5 V` USB-C adapter) or USB power bank | Powered from `802.3af` PoE over the same Ethernet cable (zero gate battery) |
+| **Spoke Timers** | Up to 6 wireless ESP-NOW Spokes (`slaprf-xiao-c5.bin`) | Up to 6 wireless ESP-NOW Spokes (`slaprf-xiao-c5.bin`) | Up to 6 wireless ESP-NOW Spokes (`slaprf-xiao-c5.bin`) |
+| **Host Transport Latency** | **Lowest (`~1 to 3 ms`)**: frames arrive over wired USB right after each sweep gap | **Low (`~10 to 30 ms`)**: frames wait for the next `10 to 30 ms` BLE connection event | **Lowest (`~2 to 4 ms`)**: `TCP_NODELAY=1` wired LAN frames with zero RF contention |
+| **Lap & Split Time Accuracy** | `100 Hz` (`10 ms`) sweep clock with `< 2 ms` parabolic peak fit | **Identical** (`100 Hz` sweep timestamps are recorded on the timers before transport) | **Identical** (`100 Hz` sweep timestamps are recorded on the timers before transport) |
+| **Supported Hosts** | Windows, macOS, Linux, Raspberry Pi, Android (USB OTG) | Android, Windows, macOS, Linux | Windows, macOS, Linux, Raspberry Pi, Android (over Wi-Fi/LAN) |
+| **Best Use Case** | Short wired runs next to the timing desk | Regular practice, solo sessions, and cable-free phone/laptop setups | Permanent tracks, long Start/Finish runs (`100 m`), and crowded RF race venues |
 
 ---
 

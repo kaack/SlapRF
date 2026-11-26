@@ -14,7 +14,7 @@ For architecture, RF link schedules, binary wire protocols, DSP, and timing rule
 4. [Day-to-Day Development Workflows](#4-day-to-day-development-workflows)
 5. [Building Portable Desktop Binaries, Android APK & Static Demo Site](#5-building-portable-desktop-binaries-android-apk--static-demo-site)
 6. [Running the Test Suite](#6-running-the-test-suite)
-7. [Hardware Firmware Development (`XIAO ESP32-C5`)](#7-hardware-firmware-development-xiao-esp32-c5)
+7. [Hardware Firmware Development (`XIAO ESP32-C5` & `ESP32-P4`)](#7-hardware-firmware-development-xiao-esp32-c5--esp32-p4)
 8. [Common Tips](#8-common-tips)
 
 ---
@@ -27,7 +27,7 @@ SlapRF uses a **single-toolchain Go build** with no Node.js install needed:
   - `cmd/build-web`, `cmd/build-docs`, `cmd/build-portable`, `cmd/build-android`, and `cmd/devserver` use the Go [`esbuild`](https://github.com/evanw/esbuild) library (`internal/devbundle`) to bundle `web/src/**/*.ts` into `dist/app.js`.
   - You do not need `node`, `npm`, `pnpm`, `webpack`, or `vite` to edit TypeScript, CSS, or Go code.
 - **Optional (Android APK Only)**: **JDK 17** and **Android SDK Platform 35 / Build-Tools 35.0.0 / NDK r27** (used by `cmd/build-android` without Gradle).
-- **Optional (Firmware C Source Only)**: **Espressif ESP-IDF v5.5.1** (`idf.py` with `esp32c5` target support). Only needed when editing `firmware/` C code locally. CI (`.github/workflows/firmware.yml`) compiles `slaprf-xiao-c5.bin` and `slaprf-xiao-c5-ble.bin`. Per-board settings (role, timer label, fingerprint, 5.8 GHz channels) are patched into the `SLAPRF02` config block at flash time.
+- **Optional (Firmware C Source Only)**: **Espressif ESP-IDF v5.5.1+** (`esp32c5` for XIAO gate timers; `esp32p4` with ESP-IDF `v5.5.6` in CI for ESP32-P4 rev v3.2 PoE Bridges). Only needed when editing `firmware/` C code locally. CI (`.github/workflows/firmware.yml`) compiles `slaprf-xiao-c5.bin`, `slaprf-xiao-c5-ble.bin`, and `slaprf-p4-poe-bridge.bin`. Per-timer settings (role, timer label, fingerprint, 5.8 GHz channels) are patched into the `SLAPRF02` config block at flash time.
 
 ### Verify Your Environment
 
@@ -73,22 +73,23 @@ SlapRF/
 │   ├── race/            # Tournament bracket generator and stage/heat resolver
 │   ├── rotorhazard/     # RotorHazard LAN HTTP/Socket.IO & USB serial (rotorhazard/usb) clients
 │   ├── serialport/      # Shared cross-platform USB serial discovery and port transport
-│   ├── slaprf/          # SlapRF USB (slaprf/usb) and Bluetooth LE Hub (slaprf/bluetooth) drivers
+│   ├── slaprf/          # SlapRF USB (slaprf/usb), BLE Hub (slaprf/bluetooth), & PoE Bridge (slaprf/network) drivers
 │   ├── storage/         # Persistent transactional bbolt store (slaprf.db)
 │   └── tracker/         # Multi-gate timing engine, 3-tier crossing rules, section split math, demo showcase
 ├── web/
 │   ├── embed.go         # Embeds index.html, styles/, src/, and firmware/
 │   ├── index.html       # SPA entry HTML & boot loader
 │   ├── styles/          # Modular CSS (tokens.css, base.css, layout.css, components.css, views.css)
-│   ├── firmware/        # slaprf-xiao-c5.bin (USB/Spoke) & slaprf-xiao-c5-ble.bin (Bluetooth Hub)
+│   ├── firmware/        # slaprf-xiao-c5.bin, slaprf-xiao-c5-ble.bin, & slaprf-p4-poe-bridge.bin
 │   └── src/             # TypeScript SPA source
 ├── e2e/                 # Playwright end-to-end verification suite (API, UI components, workflows)
-├── firmware/            # XIAO ESP32-C5 ESP-IDF firmware (slaprf/, slaprf_ble/, components/, components_ble/)
+├── firmware/            # ESP-IDF firmware (slaprf/, slaprf_ble/, slaprf_p4_poe_bridge/, components/, tools/)
 ├── scripts/             # Helper scripts (.ps1 for Windows PowerShell, .sh for macOS/Linux)
 └── docs/
-    ├── ARCHITECTURE.md      # Architecture, USB vs. Bluetooth comparison, RF link, DSP, and timing rules
-    ├── ble-hub-protocol.md  # Low-level GATT protocol for the Bluetooth Hub image
-    └── DEVELOPER.md         # This setup and workflow guide
+    ├── ARCHITECTURE.md         # Architecture, transport comparison, RF link, DSP, and timing rules
+    ├── ble-hub-protocol.md     # Low-level GATT protocol for the Bluetooth Hub image
+    ├── poe-bridge-protocol.md  # TCP/UDP :5480 protocol & hardware reference for the ESP32-P4 PoE Bridge
+    └── DEVELOPER.md            # This setup and workflow guide
 ```
 
 ---
@@ -166,16 +167,18 @@ go test -v -count=1 -tags=e2e -timeout=35m ./e2e/...
 
 ---
 
-## 7. Hardware Firmware Development (`XIAO ESP32-C5`)
+## 7. Hardware Firmware Development (`XIAO ESP32-C5` & `ESP32-P4`)
 
-SlapRF builds two ESP-IDF v5.5.1 firmware images for the Seeed Studio XIAO ESP32-C5:
+SlapRF builds three ESP-IDF firmware images:
 
 1. **USB Hub & Spoke firmware (`firmware/slaprf/` -> `web/firmware/slaprf-xiao-c5.bin`)**:
-   Used by all Spoke timers (`T1` to `T6`) and wired USB Hubs (`H1`).
+   Used by all Spoke timers (`T1` to `T6`) and wired USB or PoE-bridged Hubs (`H1`).
 2. **Bluetooth Hub firmware (`firmware/slaprf_ble/` -> `web/firmware/slaprf-xiao-c5-ble.bin`)**:
    Used by wireless Bluetooth Hubs (`H1`).
+3. **PoE Ethernet Bridge firmware (`firmware/slaprf_p4_poe_bridge/` -> `web/firmware/slaprf-p4-poe-bridge.bin`)**:
+   Used by Waveshare `ESP32-P4-WIFI6-POE-ETH` boards (`TCP/UDP :5480`; see [`docs/poe-bridge-protocol.md`](poe-bridge-protocol.md)).
 
-### Local Firmware Build on Windows (ESP-IDF v5.5.1 in `C:\esp`)
+### Local Firmware Build on Windows (ESP-IDF v5.5.1+ in `C:\esp`)
 
 ```powershell
 # USB Hub & Spoke image:
@@ -199,6 +202,10 @@ idf.py set-target esp32c5 && idf.py build
 cd ../../slaprf_ble
 idf.py set-target esp32c5 && idf.py build
 (cd build && python -m esptool --chip esp32c5 merge_bin -o ../../../web/firmware/slaprf-xiao-c5-ble.bin @flash_args)
+
+# ESP32-P4 PoE Ethernet Bridge image (from repo root):
+cd ../../..
+bash ./firmware/tools/build_local_p4.sh
 ```
 
 ---
