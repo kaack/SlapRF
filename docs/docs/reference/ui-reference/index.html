@@ -5,7 +5,7 @@
   <link rel="icon" type="image/svg+xml" href="/docs/favicon.svg" id="favicon-svg" />
 <title>App &amp; UI Reference – SlapRF Docs</title>
   <meta name="description" content="Reference guide to the screens, live signal scope controls, and crossing detection parameters in the SlapRF Timing Application.
-App Screens Screen Purpose Practice Practice session directory and workspace (Pilots, Track, Overview, Laps, Trends, Signals, and Analytics). Each session stores its own track layout and timing rules. Races Event creation, MultiGP import, per-race Track &amp; timing rules editor, visual Format Canvas brackets, live Marshal / Race Control horns, and Review waveforms. Pilots Pilot directory with callsigns, phonetic TTS spellings, and default 5.8 GHz channels (Raceband, Fatshark, Boscam, IMD6). Network Timing system selector (SlapRF (USB), SlapRF (Bluetooth), LapRF 8-Way (Network), LapRF 8-Way (USB), RotorHazard (Network), RotorHazard (USB)), connection manager, topology graph, and live RSSI monitor. Flasher Built-in wizard (on Android and desktop) for flashing Hub and Spoke firmware, inspecting board configuration, or factory-erasing boards over USB-C. Debug Live 5.8 GHz spectrum and waterfall analyzer, raw USB/Bluetooth timer console, and RF health checks. Simulator Multi-pilot 5.8 GHz physics track simulator for testing track layouts, threshold behavior, and race brackets without hardware. Settings Datasource (Demo vs. SlapRF Server and Simulator toggle), MultiGP API key, Announcer voice &amp; horn levels, LapRF 8-Way emulator, Authentication, .json database backup/restore, and slaprf.log diagnostic log level (ERROR to TRACE), download, and clear controls. On mobile, swipe left or right across the screen to move between Races, Practice, Pilots, Network, and secondary screens, or tap More on the right side of the bottom bar." /><link rel="canonical" href="/docs/reference/ui-reference/" itemprop="url" />
+App Screens Screen Purpose Practice Practice session directory and workspace (Pilots, Track, Overview, Laps, Trends, Signals, Review, Analytics, and AI Training). Each session stores its own track layout, .rfbin waveform trace, and timing rules. Races Event creation, MultiGP import, per-race Track &amp; timing rules editor, visual Format Canvas brackets, live Marshal / Race Control horns, and Review waveforms. Pilots Pilot directory with callsigns, phonetic TTS spellings, and default 5.8 GHz channels (Raceband, Fatshark, Boscam, IMD6). Network Timing system selector (SlapRF (USB), SlapRF (Bluetooth), LapRF 8-Way (Network), LapRF 8-Way (USB), RotorHazard (Network), RotorHazard (USB)), connection manager, topology graph, and live RSSI monitor. Flasher Built-in wizard (on Android and desktop) for flashing Hub and Spoke firmware, inspecting board configuration, or factory-erasing boards over USB-C. Debug Live 5.8 GHz spectrum and waterfall analyzer, raw USB/Bluetooth timer console, and RF health checks. Simulator Multi-pilot 5.8 GHz physics track simulator for testing track layouts, threshold behavior, and race brackets without hardware. Settings Datasource (Demo vs. SlapRF Server and Simulator toggle), MultiGP API key, Announcer voice &amp; horn levels, LapRF 8-Way emulator, Authentication, .json database backup/restore, and slaprf.log diagnostic log level (ERROR to TRACE), download, and clear controls. On mobile, swipe left or right across the screen to move between Races, Practice, Pilots, Network, and secondary screens, or tap More on the right side of the bottom bar." /><link rel="canonical" href="/docs/reference/ui-reference/" itemprop="url" />
 
 <meta property="og:title" content="App &amp; UI Reference">
 <meta
@@ -24,7 +24,7 @@ App Screens
 	
 			
 					Practice
-					Practice session directory and workspace (Pilots, Track, Overview, Laps, Trends, Signals, and Analytics). Each session stores its own track layout and timing rules.
+					Practice session directory and workspace (Pilots, Track, Overview, Laps, Trends, Signals, Review, Analytics, and AI Training). Each session stores its own track layout, .rfbin waveform trace, and timing rules.
 			
 			
 					Races
@@ -71,12 +71,12 @@ On mobile, swipe left or right across the screen to move between Races, Practice
 
 	<meta itemprop="name" content="App &amp; UI Reference">
 	<meta itemprop="description" content="Reference guide to the screens, live signal scope controls, and crossing detection parameters in the SlapRF Timing Application.
-App Screens Screen Purpose Practice Practice session directory and workspace (Pilots, Track, Overview, Laps, Trends, Signals, and Analytics). Each session stores its own track layout and timing rules. Races Event creation, MultiGP import, per-race Track &amp; timing rules editor, visual Format Canvas brackets, live Marshal / Race Control horns, and Review waveforms. Pilots Pilot directory with callsigns, phonetic TTS spellings, and default 5.8 GHz channels (Raceband, Fatshark, Boscam, IMD6). Network Timing system selector (SlapRF (USB), SlapRF (Bluetooth), LapRF 8-Way (Network), LapRF 8-Way (USB), RotorHazard (Network), RotorHazard (USB)), connection manager, topology graph, and live RSSI monitor. Flasher Built-in wizard (on Android and desktop) for flashing Hub and Spoke firmware, inspecting board configuration, or factory-erasing boards over USB-C. Debug Live 5.8 GHz spectrum and waterfall analyzer, raw USB/Bluetooth timer console, and RF health checks. Simulator Multi-pilot 5.8 GHz physics track simulator for testing track layouts, threshold behavior, and race brackets without hardware. Settings Datasource (Demo vs. SlapRF Server and Simulator toggle), MultiGP API key, Announcer voice &amp; horn levels, LapRF 8-Way emulator, Authentication, .json database backup/restore, and slaprf.log diagnostic log level (ERROR to TRACE), download, and clear controls. On mobile, swipe left or right across the screen to move between Races, Practice, Pilots, Network, and secondary screens, or tap More on the right side of the bottom bar.">
-	<meta itemprop="wordCount" content="522">
+App Screens Screen Purpose Practice Practice session directory and workspace (Pilots, Track, Overview, Laps, Trends, Signals, Review, Analytics, and AI Training). Each session stores its own track layout, .rfbin waveform trace, and timing rules. Races Event creation, MultiGP import, per-race Track &amp; timing rules editor, visual Format Canvas brackets, live Marshal / Race Control horns, and Review waveforms. Pilots Pilot directory with callsigns, phonetic TTS spellings, and default 5.8 GHz channels (Raceband, Fatshark, Boscam, IMD6). Network Timing system selector (SlapRF (USB), SlapRF (Bluetooth), LapRF 8-Way (Network), LapRF 8-Way (USB), RotorHazard (Network), RotorHazard (USB)), connection manager, topology graph, and live RSSI monitor. Flasher Built-in wizard (on Android and desktop) for flashing Hub and Spoke firmware, inspecting board configuration, or factory-erasing boards over USB-C. Debug Live 5.8 GHz spectrum and waterfall analyzer, raw USB/Bluetooth timer console, and RF health checks. Simulator Multi-pilot 5.8 GHz physics track simulator for testing track layouts, threshold behavior, and race brackets without hardware. Settings Datasource (Demo vs. SlapRF Server and Simulator toggle), MultiGP API key, Announcer voice &amp; horn levels, LapRF 8-Way emulator, Authentication, .json database backup/restore, and slaprf.log diagnostic log level (ERROR to TRACE), download, and clear controls. On mobile, swipe left or right across the screen to move between Races, Practice, Pilots, Network, and secondary screens, or tap More on the right side of the bottom bar.">
+	<meta itemprop="wordCount" content="626">
 	<meta name="twitter:card" content="summary">
 	<meta name="twitter:title" content="App &amp; UI Reference">
 	<meta name="twitter:description" content="Reference guide to the screens, live signal scope controls, and crossing detection parameters in the SlapRF Timing Application.
-App Screens Screen Purpose Practice Practice session directory and workspace (Pilots, Track, Overview, Laps, Trends, Signals, and Analytics). Each session stores its own track layout and timing rules. Races Event creation, MultiGP import, per-race Track &amp; timing rules editor, visual Format Canvas brackets, live Marshal / Race Control horns, and Review waveforms. Pilots Pilot directory with callsigns, phonetic TTS spellings, and default 5.8 GHz channels (Raceband, Fatshark, Boscam, IMD6). Network Timing system selector (SlapRF (USB), SlapRF (Bluetooth), LapRF 8-Way (Network), LapRF 8-Way (USB), RotorHazard (Network), RotorHazard (USB)), connection manager, topology graph, and live RSSI monitor. Flasher Built-in wizard (on Android and desktop) for flashing Hub and Spoke firmware, inspecting board configuration, or factory-erasing boards over USB-C. Debug Live 5.8 GHz spectrum and waterfall analyzer, raw USB/Bluetooth timer console, and RF health checks. Simulator Multi-pilot 5.8 GHz physics track simulator for testing track layouts, threshold behavior, and race brackets without hardware. Settings Datasource (Demo vs. SlapRF Server and Simulator toggle), MultiGP API key, Announcer voice &amp; horn levels, LapRF 8-Way emulator, Authentication, .json database backup/restore, and slaprf.log diagnostic log level (ERROR to TRACE), download, and clear controls. On mobile, swipe left or right across the screen to move between Races, Practice, Pilots, Network, and secondary screens, or tap More on the right side of the bottom bar.">
+App Screens Screen Purpose Practice Practice session directory and workspace (Pilots, Track, Overview, Laps, Trends, Signals, Review, Analytics, and AI Training). Each session stores its own track layout, .rfbin waveform trace, and timing rules. Races Event creation, MultiGP import, per-race Track &amp; timing rules editor, visual Format Canvas brackets, live Marshal / Race Control horns, and Review waveforms. Pilots Pilot directory with callsigns, phonetic TTS spellings, and default 5.8 GHz channels (Raceband, Fatshark, Boscam, IMD6). Network Timing system selector (SlapRF (USB), SlapRF (Bluetooth), LapRF 8-Way (Network), LapRF 8-Way (USB), RotorHazard (Network), RotorHazard (USB)), connection manager, topology graph, and live RSSI monitor. Flasher Built-in wizard (on Android and desktop) for flashing Hub and Spoke firmware, inspecting board configuration, or factory-erasing boards over USB-C. Debug Live 5.8 GHz spectrum and waterfall analyzer, raw USB/Bluetooth timer console, and RF health checks. Simulator Multi-pilot 5.8 GHz physics track simulator for testing track layouts, threshold behavior, and race brackets without hardware. Settings Datasource (Demo vs. SlapRF Server and Simulator toggle), MultiGP API key, Announcer voice &amp; horn levels, LapRF 8-Way emulator, Authentication, .json database backup/restore, and slaprf.log diagnostic log level (ERROR to TRACE), download, and clear controls. On mobile, swipe left or right across the screen to move between Races, Practice, Pilots, Network, and secondary screens, or tap More on the right side of the bottom bar.">
 
     <link rel="preload" href="/docs/css/compiled/main.min.16c3012035c5f2ba195559bbf162a0209250d94a66761e5d575d845d882eb111.css" as="style" integrity="sha256-FsMBIDXF8roZVVm78WKgIJJQ2Upmdh5dV12EXYgusRE=" />
     <link href="/docs/css/compiled/main.min.16c3012035c5f2ba195559bbf162a0209250d94a66761e5d575d845d882eb111.css" rel="stylesheet" integrity="sha256-FsMBIDXF8roZVVm78WKgIJJQ2Upmdh5dV12EXYgusRE=" />
@@ -303,6 +303,16 @@ App Screens Screen Purpose Practice Practice session directory and workspace (Pi
             </li><li class="hx:flex hx:flex-col "><div class="hextra-sidebar-item hx:group hx:relative hx:flex hx:items-center" data-active="false">
     <a
       class="hx:flex hx:items-center hx:justify-between hx:gap-2 hx:grow hx:cursor-pointer hx:rounded-sm hx:px-2 hx:py-1.5 hx:text-sm hx:transition-colors [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] hx:hextra-focus-visible-inset hx:text-gray-500 hx:hover:bg-gray-100 hx:hover:text-gray-900 hx:contrast-more:border hx:contrast-more:border-transparent hx:contrast-more:text-gray-900 hx:contrast-more:hover:border-gray-900 hx:dark:text-neutral-400 hx:dark:hover:bg-primary-100/5 hx:dark:hover:text-gray-50 hx:contrast-more:dark:text-gray-50 hx:contrast-more:dark:hover:border-gray-50"
+      href="/docs/journeys/ai-crossing-detection/"
+      
+    >
+      <span class="hx:min-w-0 [word-break:break-word]">AI Detection &amp; Training</span>
+    </a>
+  </div>
+              
+            </li><li class="hx:flex hx:flex-col "><div class="hextra-sidebar-item hx:group hx:relative hx:flex hx:items-center" data-active="false">
+    <a
+      class="hx:flex hx:items-center hx:justify-between hx:gap-2 hx:grow hx:cursor-pointer hx:rounded-sm hx:px-2 hx:py-1.5 hx:text-sm hx:transition-colors [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] hx:hextra-focus-visible-inset hx:text-gray-500 hx:hover:bg-gray-100 hx:hover:text-gray-900 hx:contrast-more:border hx:contrast-more:border-transparent hx:contrast-more:text-gray-900 hx:contrast-more:hover:border-gray-900 hx:dark:text-neutral-400 hx:dark:hover:bg-primary-100/5 hx:dark:hover:text-gray-50 hx:contrast-more:dark:text-gray-50 hx:contrast-more:dark:hover:border-gray-50"
       href="/docs/journeys/race-events/"
       
     >
@@ -360,9 +370,9 @@ App Screens Screen Purpose Practice Practice session directory and workspace (Pi
             </li>
           <li>
               <a
-                href="#crossing-rules"
+                href="#crossing-detection--rules"
                 class="hx:flex hx:rounded-sm hx:px-2 hx:py-1.5 hx:text-sm hx:transition-colors [word-break:break-word] hx:cursor-pointer [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] hx:contrast-more:border hx:gap-2 hx:before:opacity-25 hx:before:content-['#'] hx:text-gray-500 hx:hover:bg-gray-100 hx:hover:text-gray-900 hx:dark:text-neutral-400 hx:dark:hover:bg-primary-100/5 hx:dark:hover:text-gray-50 hx:contrast-more:text-gray-900 hx:contrast-more:dark:text-gray-50 hx:contrast-more:border-transparent hx:contrast-more:hover:border-gray-900 hx:contrast-more:dark:hover:border-gray-50"
-              >Crossing Rules</a>
+              >Crossing Detection &amp; Rules</a>
             </li>
           </ul>
   
@@ -554,6 +564,16 @@ App Screens Screen Purpose Practice Practice session directory and workspace (Pi
             </li><li class="hx:flex hx:flex-col "><div class="hextra-sidebar-item hx:group hx:relative hx:flex hx:items-center" data-active="false">
     <a
       class="hx:flex hx:items-center hx:justify-between hx:gap-2 hx:grow hx:cursor-pointer hx:rounded-sm hx:px-2 hx:py-1.5 hx:text-sm hx:transition-colors [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] hx:hextra-focus-visible-inset hx:text-gray-500 hx:hover:bg-gray-100 hx:hover:text-gray-900 hx:contrast-more:border hx:contrast-more:border-transparent hx:contrast-more:text-gray-900 hx:contrast-more:hover:border-gray-900 hx:dark:text-neutral-400 hx:dark:hover:bg-primary-100/5 hx:dark:hover:text-gray-50 hx:contrast-more:dark:text-gray-50 hx:contrast-more:dark:hover:border-gray-50"
+      href="/docs/journeys/ai-crossing-detection/"
+      
+    >
+      <span class="hx:min-w-0 [word-break:break-word]">AI Detection &amp; Training</span>
+    </a>
+  </div>
+              
+            </li><li class="hx:flex hx:flex-col "><div class="hextra-sidebar-item hx:group hx:relative hx:flex hx:items-center" data-active="false">
+    <a
+      class="hx:flex hx:items-center hx:justify-between hx:gap-2 hx:grow hx:cursor-pointer hx:rounded-sm hx:px-2 hx:py-1.5 hx:text-sm hx:transition-colors [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] hx:hextra-focus-visible-inset hx:text-gray-500 hx:hover:bg-gray-100 hx:hover:text-gray-900 hx:contrast-more:border hx:contrast-more:border-transparent hx:contrast-more:text-gray-900 hx:contrast-more:hover:border-gray-900 hx:dark:text-neutral-400 hx:dark:hover:bg-primary-100/5 hx:dark:hover:text-gray-50 hx:contrast-more:dark:text-gray-50 hx:contrast-more:dark:hover:border-gray-50"
       href="/docs/journeys/race-events/"
       
     >
@@ -686,7 +706,7 @@ App Screens Screen Purpose Practice Practice session directory and workspace (Pi
         </a>
       </li>
       <li class="hx:my-2 hx:scroll-my-6 hx:scroll-py-6">
-        <a class="hx:font-medium hx:inline-block hx:rounded-sm hx:text-gray-500 hx:hover:text-gray-900 hx:dark:text-gray-400 hx:dark:hover:text-gray-300 hx:contrast-more:text-gray-900 hx:contrast-more:underline hx:contrast-more:dark:text-gray-50 hx:w-full hx:wrap-break-word hx:hextra-focus-visible-inset" href="#crossing-rules">Crossing Rules
+        <a class="hx:font-medium hx:inline-block hx:rounded-sm hx:text-gray-500 hx:hover:text-gray-900 hx:dark:text-gray-400 hx:dark:hover:text-gray-300 hx:contrast-more:text-gray-900 hx:contrast-more:underline hx:contrast-more:dark:text-gray-50 hx:w-full hx:wrap-break-word hx:hextra-focus-visible-inset" href="#crossing-detection--rules">Crossing Detection &amp; Rules
         </a>
       </li></ul></div>
 </nav>
@@ -719,7 +739,7 @@ App Screens Screen Purpose Practice Practice session directory and workspace (Pi
 	<tbody>
 			<tr>
 					<td style="text-align: left">Practice</td>
-					<td style="text-align: left">Practice session directory and workspace (<code>Pilots</code>, <strong>Track</strong>, <code>Overview</code>, <code>Laps</code>, <code>Trends</code>, <code>Signals</code>, and <code>Analytics</code>). Each session stores its own track layout and timing rules.</td>
+					<td style="text-align: left">Practice session directory and workspace (<code>Pilots</code>, <strong>Track</strong>, <code>Overview</code>, <code>Laps</code>, <code>Trends</code>, <code>Signals</code>, <code>Review</code>, <code>Analytics</code>, and <code>AI Training</code>). Each session stores its own track layout, <code>.rfbin</code> waveform trace, and timing rules.</td>
 			</tr>
 			<tr>
 					<td style="text-align: left">Races</td>
@@ -784,8 +804,12 @@ App Screens Screen Purpose Practice Practice session directory and workspace (Pi
 			</tr>
 	</tbody>
 </table>
-<h2 data-hextra-search-id="crossing-rules">Crossing Rules<span class="hx:absolute hx:-mt-20" id="crossing-rules"></span>
-    <a href="#crossing-rules" class="subheading-anchor" aria-label="Permalink for this section"></a></h2><p>SlapRF runs a hysteresis detector (<code>Enter dBm</code> -&gt; peak tracking -&gt; <code>Exit dBm</code>) governed by per-track timing rules configured in each Practice session or Race <strong>Track</strong> tab, with optional per-timer and per-pilot-at-timer overrides in <strong>Track</strong> and <strong>Signals -&gt; Fine-tune</strong>:</p>
+<h2 data-hextra-search-id="crossing-detection--rules">Crossing Detection &amp; Rules<span class="hx:absolute hx:-mt-20" id="crossing-detection--rules"></span>
+    <a href="#crossing-detection--rules" class="subheading-anchor" aria-label="Permalink for this section"></a></h2><p>Each Practice session and Race <strong>Track</strong> tab includes a <strong>Crossing detector</strong> card that switches between <strong>AI</strong> mode and traditional <strong>DSP</strong> mode (see <a href="../../journeys/ai-crossing-detection">AI Crossing Detection &amp; Training</a>):</p>
+<ul>
+<li><strong>AI Mode</strong>: Evaluates <code>5.8 GHz</code> RSSI waveforms with the built-in <strong><code>SlapRF Base (1P)</code></strong> neural model or a user-trained custom model from <strong>Practice -&gt; AI Training</strong>, with an optional <strong><code>2L Tune</code></strong> adaptive head toggle and <code>Off | On</code> crossing beeps.</li>
+<li><strong>DSP Mode</strong>: Runs a traditional hysteresis detector (<code>Enter dBm</code> -&gt; peak tracking -&gt; <code>Exit dBm</code>) with per-track, per-timer, and per-pilot-at-timer overrides in <strong>Track</strong> and <strong>Signals -&gt; Fine-tune</strong>.</li>
+</ul>
 <table>
 	<thead>
 			<tr>
@@ -795,28 +819,32 @@ App Screens Screen Purpose Practice Practice session directory and workspace (Pi
 	</thead>
 	<tbody>
 			<tr>
-					<td style="text-align: left">Enter Threshold (<code>dBm</code>)</td>
-					<td style="text-align: left">RSSI level required to open a crossing window.</td>
+					<td style="text-align: left">Detector Mode (<code>AI</code> / <code>DSP</code>)</td>
+					<td style="text-align: left">Selects neural waveform pass detection (<code>SlapRF Base</code> or custom model) or traditional <code>Enter</code> / <code>Exit</code> dBm threshold hysteresis.</td>
 			</tr>
 			<tr>
-					<td style="text-align: left">Exit Threshold (<code>dBm</code>)</td>
-					<td style="text-align: left">RSSI level required to close the crossing window and record the peak timestamp (<code>6</code> to <code>12 dBm</code> below Enter prevents double-counting).</td>
+					<td style="text-align: left">Enter Threshold (<code>dBm</code>, DSP)</td>
+					<td style="text-align: left">RSSI level required to open a crossing window in <strong>DSP</strong> mode.</td>
 			</tr>
 			<tr>
-					<td style="text-align: left">Min Crossing Time (<code>s</code>)</td>
-					<td style="text-align: left">Minimum duration RSSI must remain inside the crossing window, rejecting brief single-sample RF noise spikes (<code>SPIKE</code>).</td>
+					<td style="text-align: left">Exit Threshold (<code>dBm</code>, DSP)</td>
+					<td style="text-align: left">RSSI level required to close the crossing window and record the peak timestamp in <strong>DSP</strong> mode (<code>6</code> to <code>12 dBm</code> below Enter prevents double-counting).</td>
+			</tr>
+			<tr>
+					<td style="text-align: left">Min Crossing Time (<code>s</code>, DSP)</td>
+					<td style="text-align: left">Minimum duration RSSI must remain inside the <strong>DSP</strong> crossing window, rejecting brief single-sample RF spikes (<code>SHORT</code>).</td>
 			</tr>
 			<tr>
 					<td style="text-align: left">Min Lap Time (<code>s</code>)</td>
-					<td style="text-align: left">Minimum valid lap time between consecutive Start / Finish crossings for the same pilot (<code>MIN_LAP</code>).</td>
+					<td style="text-align: left">Minimum valid lap time between consecutive Start / Finish crossings for the same pilot (<code>SHORT</code>).</td>
 			</tr>
 			<tr>
 					<td style="text-align: left">Max Lap Time (<code>s</code>)</td>
-					<td style="text-align: left">Maximum duration before a long pause (such as landing to swap batteries) starts a fresh out-lap instead of recording a slow lap (<code>LAP_TOO_LONG</code>).</td>
+					<td style="text-align: left">Maximum duration before a long pause (such as landing to swap batteries) starts a fresh out-lap instead of recording a slow lap (<code>LONG</code>).</td>
 			</tr>
 			<tr>
-					<td style="text-align: left">Beep on Cross</td>
-					<td style="text-align: left">Plays an immediate low-latency audio tone when a crossing registers, ahead of the spoken lap callout.</td>
+					<td style="text-align: left">Beep on Crossing</td>
+					<td style="text-align: left">Plays an immediate confirmation tone when a gate crossing registers (<code>Off | On</code> in <strong>AI</strong> mode; <code>Off | Enter | Peak | Exit</code> in <strong>DSP</strong> mode).</td>
 			</tr>
 	</tbody>
 </table>
@@ -877,7 +905,7 @@ App Screens Screen Purpose Practice Practice session directory and workspace (Pi
     </div>
   </dialog>
     <script defer src="/docs/js/main.min.302eb8f391260394614f8841a9a007a2bfe3535e53755065fa3fb3c43fa94027.js" integrity="sha256-MC6485EmA5RhT4hBqaAHor/jU15TdVBl&#43;j&#43;zxD&#43;pQCc="></script>
-<script defer src="/docs/js/flexsearch.433e941a8a573ebb9931fc16fc75266ab6b93f569ac2fb4f3dc66882e0416f4c.js" integrity="sha256-Qz6UGopXPruZMfwW/HUmara5P1aawvtPPcZoguBBb0w=" crossorigin="anonymous"></script><script defer src="/docs/en.search.min.fe7f89848047af53ac18bca9b200e976002969b0973821f875c4522d481925d5.js" integrity="sha256-/n&#43;JhIBHr1OsGLypsgDpdgApabCXOCH4dcRSLUgZJdU="></script>
+<script defer src="/docs/js/flexsearch.433e941a8a573ebb9931fc16fc75266ab6b93f569ac2fb4f3dc66882e0416f4c.js" integrity="sha256-Qz6UGopXPruZMfwW/HUmara5P1aawvtPPcZoguBBb0w=" crossorigin="anonymous"></script><script defer src="/docs/en.search.min.7469170b817d4669fecab5883b5a842f3aad7e2848fa80e998d1ce9736d949e6.js" integrity="sha256-dGkXC4F9Rmn&#43;yrWIO1qELzqtfihI&#43;oDpmNHOlzbZSeY="></script>
     <script defer src="/docs/en.search-dialog.min.fda123910557b5b3a328696105af51f85abc3cfc6784387c49b11b5b857b256f.js" integrity="sha256-/aEjkQVXtbOjKGlhBa9R&#43;Fq8PPxnhDh8SbEbW4V7JW8="></script>
   </body>
 </html>

@@ -45,6 +45,8 @@ channels:
         $ref: "#/components/messages/RaceUpdatedEventMessage"
       practiceUpdatedEvent:
         $ref: "#/components/messages/PracticeUpdatedEventMessage"
+      mlStatusUpdatedEvent:
+        $ref: "#/components/messages/MLStatusUpdatedEventMessage"
       telemetryBinaryBatch:
         $ref: "#/components/messages/TelemetryBinaryBatchMessage"
 
@@ -173,7 +175,7 @@ components:
     FilteredEventMessage:
       name: filtered
       title: Filtered / Rejected Gate Pass (JSON Text Frame)
-      summary: Emitted when an RSSI peak is rejected by minimum crossing time (`SPIKE`), minimum lap time (`MIN_LAP`), or maximum lap duration (`LAP_TOO_LONG`) rules.
+      summary: Emitted when an RSSI peak is rejected by minimum crossing time (`SPIKE`), minimum lap time (`MIN_LAP`), sequential track order (`OUT_OF_ORDER`), or maximum lap duration (`LAP_TOO_LONG`) rules.
       contentType: application/json
       payload:
         $ref: "#/components/schemas/FilteredEnvelope"
@@ -246,6 +248,14 @@ components:
       contentType: application/json
       payload:
         $ref: "#/components/schemas/PracticeEnvelope"
+
+    MLStatusUpdatedEventMessage:
+      name: ml_status
+      title: AI Detector, Live 2-Lap Tune, or Base Model Training Progress Updated (JSON Text Frame)
+      summary: Emitted on each training epoch during on-device 1D TCN base-model training, when detector mode changes, and when live 2-lap per-timer heads update.
+      contentType: application/json
+      payload:
+        $ref: "#/components/schemas/MLStatusEnvelope"
 
     TelemetryBinaryBatchMessage:
       name: telemetryBatch
@@ -400,7 +410,7 @@ components:
               type: string
             reason:
               type: string
-              enum: [SPIKE, MIN_LAP, LAP_TOO_LONG]
+              enum: [SPIKE, MIN_LAP, LAP_TOO_LONG, OUT_OF_ORDER]
             detail:
               type: string
             peakRssiDbm:
@@ -484,6 +494,17 @@ components:
         type:
           type: string
           const: practice
+        payload:
+          type: object
+          additionalProperties: true
+
+    MLStatusEnvelope:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          const: ml_status
         payload:
           type: object
           additionalProperties: true

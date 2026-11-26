@@ -138,6 +138,10 @@ tags:
       - **Log Inspection & Download (`/v1/logs`)**: Read recent chronological log lines in JSON or download the rolling `slaprf.log` plain-text file (`?format=text`).
       - **Severity & Maintenance (`/v1/logs/config`, `/v1/logs:clear`)**: Inspect or update the active log threshold (`trace`, `debug`, `info`, `warn`, `error`) at runtime without restarting, or truncate `slaprf.log` and rotated backups before reproducing an issue.
 
+  - name: AI Detector & Traces
+    description: |
+      On-device 1D Temporal ConvNet (TCN) gate-crossing detector, live 2-lap per-timer adapter, Hands-Free Pack Loop recording, `.rfbin` session trace replay, and `.tar.gz` dataset export/import (`/v1/ml*`, `/v1/practice/pack-loop*`, `/v1/practice/sessions/{sessionId}/trace`).
+
 paths:
   /v1/version:
     get:
@@ -1453,6 +1457,57 @@ paths:
               example:
                 error: "practice session or lap not found"
 
+  /v1/practice/sessions/{sessionId}/crossings:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Practice Sessions]
+      summary: Add a manual gate crossing and replay pilot timing and track-order rules
+      operationId: addPracticeSessionCrossing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [gateId, slotIndex, timestampUs]
+              properties:
+                gateId:
+                  type: integer
+                  example: 2
+                slotIndex:
+                  type: integer
+                  example: 1
+                timestampUs:
+                  type: integer
+                  example: 48250000
+                peakRssiDbm:
+                  type: number
+                  example: -58.4
+      responses:
+        "200":
+          description: Updated full state with replayed crossings, laps, and summaries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /v1/practice/sessions/{sessionId}/crossings/{eventId}:
     parameters:
       - name: sessionId
@@ -1504,6 +1559,277 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags: [Practice Sessions]
+      summary: Delete a gate crossing and replay remaining crossings for that pilot
+      operationId: deletePracticeSessionCrossing
+      responses:
+        "200":
+          description: Updated full state with recalculated crossings, laps, and summaries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session or crossing event not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/practice/sessions/{sessionId}/breaks:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Practice Sessions]
+      summary: Insert a manual pilot break so before/after stints do not merge into a phantom lap
+      operationId: addPracticeSessionBreak
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slotIndex, timestampUs]
+              properties:
+                slotIndex:
+                  type: integer
+                  example: 1
+                timestampUs:
+                  type: integer
+                  example: 62500000
+      responses:
+        "200":
+          description: Updated full state with recalculated crossings, laps, and summaries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Missing or invalid slotIndex / timestampUs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/practice/sessions/{sessionId}/breaks/{breakId}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: breakId
+        in: path
+        required: true
+        schema:
+          type: integer
+    patch:
+      tags: [Practice Sessions]
+      summary: Adjust a manual pilot break timestamp and recalculate laps
+      operationId: patchPracticeSessionBreak
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [timestampUs]
+              properties:
+                timestampUs:
+                  type: integer
+                  example: 63100000
+      responses:
+        "200":
+          description: Updated full state with recalculated crossings, laps, and summaries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid timestampUs body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session or break not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags: [Practice Sessions]
+      summary: Delete a manual pilot break and replay crossings for that pilot
+      operationId: deletePracticeSessionBreak
+      responses:
+        "200":
+          description: Updated full state with recalculated crossings, laps, and summaries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session or break not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/practice/sessions/{sessionId}/filtered:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      tags: [Practice Sessions]
+      summary: Delete a rejected DSP detection hint (TOO_SHORT, SPIKE, MIN_LAP, OUT_OF_ORDER) from a Practice session
+      operationId: deletePracticeSessionFiltered
+      parameters:
+        - name: gateId
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: slotIndex
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: timestampUs
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Updated full state with the filtered detection removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Missing or invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session or filtered detection not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/race/sessions/{sessionId}/filtered:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      tags: [Race Sessions]
+      summary: Delete a rejected DSP detection hint from a Race session
+      operationId: deleteRaceSessionFiltered
+      parameters:
+        - name: gateId
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: slotIndex
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: timestampUs
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Updated full state with the filtered detection removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Missing or invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Filtered detection not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/race/sessions/{sessionId}/crossings:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Race Sessions]
+      summary: Add a manual race gate crossing and recalculate splits and heat standings
+      operationId: addRaceSessionCrossing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [gateId, slotIndex, timestampUs]
+              properties:
+                gateId:
+                  type: integer
+                  example: 2
+                slotIndex:
+                  type: integer
+                  example: 1
+                timestampUs:
+                  type: integer
+                  example: 48250000
+                peakRssiDbm:
+                  type: number
+                  example: -58.4
+      responses:
+        "200":
+          description: Updated full state with recalculated splits and heat standings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /v1/race/sessions/{sessionId}/crossings/{eventId}:
     parameters:
@@ -1550,6 +1876,23 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session or crossing event not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags: [Race Sessions]
+      summary: Delete a race gate crossing and recalculate splits and heat standings
+      operationId: deleteRaceSessionCrossing
+      responses:
+        "200":
+          description: Updated full state with recalculated splits and heat standings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
         "404":
           description: Race session or crossing event not found
           content:
@@ -6128,6 +6471,345 @@ paths:
               schema:
                 $ref: "#/components/schemas/DiagnosticLogStatus"
 
+  /v1/practice/pack-loop:
+    put:
+      tags: [AI Detector & Traces]
+      summary: Enable or configure the Hands-Free Pack Loop auto-session splitter
+      operationId: putPracticePackLoop
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                packLoopEnabled:
+                  type: boolean
+                packLoopQuietSec:
+                  type: integer
+                  example: 25
+                preemptOngoing:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated application state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+
+  /v1/practice/pack-loop:split:
+    post:
+      tags: [AI Detector & Traces]
+      summary: Seal the active Practice pack trace immediately and arm the next pack
+      operationId: splitPracticePackLoop
+      responses:
+        "200":
+          description: Updated application state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+
+  /v1/practice/sessions/{sessionId}/trace:
+    get:
+      tags: [AI Detector & Traces]
+      summary: Read saved .rfbin raw RSSI telemetry batches for a Practice session
+      operationId: getPracticeSessionTrace
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Encoded telemetry batches for historical Signals replay
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessionId, sampleCount, rssiCount, batchesB64]
+                properties:
+                  sessionId:
+                    type: string
+                  sampleCount:
+                    type: integer
+                  rssiCount:
+                    type: integer
+                  batchesB64:
+                    type: array
+                    items:
+                      type: string
+
+  /v1/ml:
+    get:
+      tags: [AI Detector & Traces]
+      summary: Read active AI detector configuration, dataset stats, live tunes, and model snapshots
+      operationId: getMLStatus
+      responses:
+        "200":
+          description: Current ML status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    patch:
+      tags: [AI Detector & Traces]
+      summary: Switch between Classic DSP and AI 1D TCN detector or toggle live 2-lap tuning
+      operationId: patchMLConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                detectorMode:
+                  type: string
+                  enum: [classic, ai]
+                activeModelId:
+                  type: string
+                liveTuneEnabled:
+                  type: boolean
+                teacherPackId:
+                  type: string
+                autoLabelOnTrain:
+                  type: boolean
+                resetLiveTunes:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated ML status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/ml:train:
+    post:
+      tags: [AI Detector & Traces]
+      summary: Start or continue background pure-Go 1D TCN model training on Practice traces
+      operationId: startMLTraining
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                epochs:
+                  type: integer
+                  example: 28
+                includeUnverified:
+                  type: boolean
+                autoLabel:
+                  type: boolean
+                sessionIds:
+                  type: array
+                  items:
+                    type: string
+                continueModelId:
+                  type: string
+                modelName:
+                  type: string
+      responses:
+        "202":
+          description: Background training started
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "409":
+          description: Training already running or active race heat in progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/ml:cancel:
+    post:
+      tags: [AI Detector & Traces]
+      summary: Cancel an in-progress on-device model training run
+      operationId: cancelMLTraining
+      responses:
+        "200":
+          description: Updated ML status with training stopped
+
+  /v1/ml/teacher:
+    get:
+      tags: [AI Detector & Traces]
+      summary: Read on-device System 1 Qwen3 GGUF teacher pack catalog, installation status, and download progress
+      operationId: getMLTeacherStatus
+      responses:
+        "200":
+          description: Current on-device teacher model status
+
+  /v1/ml/teacher:download:
+    post:
+      tags: [AI Detector & Traces]
+      summary: Start or resume downloading an on-device System 1 GGUF teacher model pack
+      operationId: downloadMLTeacherPack
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                packId:
+                  type: string
+                startUs:
+                  type: integer
+                endUs:
+                  type: integer
+                  example: qwen3-1.7b-q4_k_m
+      responses:
+        "202":
+          description: Download started or pack already installed
+
+  /v1/ml/teacher:cancel:
+    post:
+      tags: [AI Detector & Traces]
+      summary: Cancel an active teacher GGUF download while keeping partial bytes for resume
+      operationId: cancelMLTeacherDownload
+      responses:
+        "200":
+          description: Download canceled
+
+  /v1/ml/teacher/{packId}:
+    delete:
+      tags: [AI Detector & Traces]
+      summary: Remove a downloaded teacher GGUF pack from device storage
+      operationId: deleteMLTeacherPack
+      parameters:
+        - name: packId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated ML status
+
+  /v1/ml/sessions/{sessionId}:label:
+    post:
+      tags: [AI Detector & Traces]
+      summary: Run the on-device System 1 Qwen3 teacher on a Practice session's .rfbin RSSI trace
+      operationId: labelPracticeSessionWithTeacher
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dryRun:
+                  type: boolean
+                slotIndex:
+                  type: integer
+                packId:
+                  type: string
+                startUs:
+                  type: integer
+                endUs:
+                  type: integer
+      responses:
+        "200":
+          description: Candidate classification decisions and (when dryRun=false) updated Practice & ML state
+
+  /v1/ml/models:
+    post:
+      tags: [AI Detector & Traces]
+      summary: Create a named untrained AI crossing model entry
+      operationId: createMLModel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+      responses:
+        "201":
+          description: Updated ML status including the newly created untrained model
+
+  /v1/ml/models/{modelId}:
+    patch:
+      tags: [AI Detector & Traces]
+      summary: Rename a trained model or mark/unmark it Ready for Race & Practice selection
+      operationId: updateMLModel
+      parameters:
+        - name: modelId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                ready:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated ML status
+    delete:
+      tags: [AI Detector & Traces]
+      summary: Delete a custom trained model snapshot
+      operationId: deleteMLModel
+      parameters:
+        - name: modelId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated ML status
+
+  /v1/ml/dataset.tar.gz:
+    get:
+      tags: [AI Detector & Traces]
+      summary: Export verified .rfbin session traces and trained models as a .tar.gz archive
+      operationId: exportMLDataset
+      parameters:
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [gzip, base64]
+      responses:
+        "200":
+          description: Portable dataset archive
+
+  /v1/ml/dataset:import:
+    post:
+      tags: [AI Detector & Traces]
+      summary: Import a .tar.gz dataset and model archive exported from another SlapRF device
+      operationId: importMLDataset
+      responses:
+        "200":
+          description: Import summary and updated state
+
   /v1/storage/status:
     get:
       tags: [Storage]
@@ -6719,6 +7401,16 @@ components:
         passingNumber:
           type: integer
           example: 12
+        manual:
+          type: boolean
+          description: True when the crossing was added or moved manually on the Signals chart.
+        invalidReason:
+          type: string
+          enum: [SPIKE, MIN_LAP, LAP_TOO_LONG, OUT_OF_ORDER]
+          description: Non-empty when timing or sequential gate-order rules invalidate this crossing.
+        invalidDetail:
+          type: string
+          description: Human-readable explanation when invalidReason is set.
 
     FilteredDetection:
       type: object
@@ -6737,7 +7429,7 @@ components:
           example: "VORTEX"
         reason:
           type: string
-          enum: [SPIKE, MIN_LAP, LAP_TOO_LONG]
+          enum: [SPIKE, MIN_LAP, LAP_TOO_LONG, OUT_OF_ORDER]
           example: MIN_LAP
         detail:
           type: string
