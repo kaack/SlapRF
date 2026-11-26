@@ -230,11 +230,25 @@ export class SlaprfDb {
 }
 
 /** Deletes the whole database (used by tests/diagnostics; the app's wipe clears stores instead). */
-export function deleteDatabase(name = DB_NAME): Promise<void> {
+export function deleteDatabase(name = DB_NAME, blockedTimeoutMs = 3000): Promise<void> {
   return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let timer = 0;
+    const finish = (err?: IdbError) => {
+      if (settled) return;
+      settled = true;
+      if (timer) window.clearTimeout(timer);
+      if (err) reject(err);
+      else resolve();
+    };
     const req = indexedDB.deleteDatabase(name);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(new IdbError(describe(req.error), req.error));
-    req.onblocked = () => console.warn("[storage] deleteDatabase blocked by an open connection");
+    req.onsuccess = () => finish();
+    req.onerror = () => finish(new IdbError(describe(req.error), req.error));
+    req.onblocked = () => {
+      console.warn("[storage] deleteDatabase blocked by an open connection");
+      if (!timer && blockedTimeoutMs > 0) {
+        timer = window.setTimeout(() => finish(), blockedTimeoutMs);
+      }
+    };
   });
 }

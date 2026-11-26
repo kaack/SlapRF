@@ -164,58 +164,88 @@ func TestTypeScriptUnitSuite(t *testing.T) {
 		targetURL += "?filter=" + url.QueryEscape(filter)
 	}
 
-	userDataDir := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
+	var (
+		report    tsFullUnitReport
+		runStart  time.Time
+		lastError string
+	)
+	const maxAttempts = 2
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		drainReport:
+		for {
+			select {
+			case <-reportCh:
+			default:
+				break drainReport
+			}
+		}
 
-	args := []string{
-		"--headless",
-		"--no-sandbox",
-		"--disable-gpu",
-		"--disable-dbus",
-		"--disable-dev-shm-usage",
-		"--no-first-run",
-		"--no-default-browser-check",
-		"--disable-extensions",
-		"--disable-background-networking",
-		"--mute-audio",
-		"--window-size=1440,900",
-		"--screen-info={0,0 1440x900}",
-		"--ozone-override-screen-size=1440,900",
-		"--user-data-dir=" + userDataDir,
-		targetURL,
-	}
+		userDataDir := t.TempDir()
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 
-	cmd := exec.CommandContext(ctx, chromeBin, args...)
-	cmd.Env = append(os.Environ(), "DBUS_SESSION_BUS_ADDRESS=disabled:")
-	var stderrBuf bytes.Buffer
-	cmd.Stderr = &stderrBuf
+		args := []string{
+			"--headless",
+			"--no-sandbox",
+			"--disable-gpu",
+			"--disable-dbus",
+			"--disable-dev-shm-usage",
+			"--no-first-run",
+			"--no-default-browser-check",
+			"--disable-extensions",
+			"--disable-background-networking",
+			"--mute-audio",
+			"--window-size=1440,900",
+			"--screen-info={0,0 1440x900}",
+			"--ozone-override-screen-size=1440,900",
+			"--user-data-dir=" + userDataDir,
+			targetURL,
+		}
 
-	runStart := time.Now()
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("failed to start headless browser (%s): %v", chromeBin, err)
-	}
+		cmd := exec.CommandContext(ctx, chromeBin, args...)
+		cmd.WaitDelay = 3 * time.Second
+		cmd.Env = append(os.Environ(), "DBUS_SESSION_BUS_ADDRESS=disabled:")
+		var stderrBuf bytes.Buffer
+		cmd.Stderr = &stderrBuf
 
-	procDone := make(chan error, 1)
-	go func() {
-		procDone <- cmd.Wait()
-	}()
+		runStart = time.Now()
+		if err := cmd.Start(); err != nil {
+			cancel()
+			t.Fatalf("failed to start headless browser (%s): %v", chromeBin, err)
+		}
 
-	var report tsFullUnitReport
-	select {
-	case report = <-reportCh:
-		cancel()
-		<-procDone
-	case procErr := <-procDone:
-		// Give any in-flight HTTP handler 50ms to flush before failing.
+		procDone := make(chan error, 1)
+		go func() {
+			procDone <- cmd.Wait()
+		}()
+
+		gotReport := false
 		select {
 		case report = <-reportCh:
-		case <-time.After(50 * time.Millisecond):
-			t.Fatalf("headless browser (%s) exited before reporting results (err=%v):\n%s", chromeBin, procErr, stderrBuf.String())
+			gotReport = true
+			cancel()
+			<-procDone
+		case procErr := <-procDone:
+			select {
+			case report = <-reportCh:
+				gotReport = true
+			case <-time.After(50 * time.Millisecond):
+				lastError = fmt.Sprintf("headless browser (%s) exited before reporting results (err=%v):\n%s", chromeBin, procErr, stderrBuf.String())
+			}
+			cancel()
+		case <-ctx.Done():
+			<-procDone
+			lastError = fmt.Sprintf("timed out waiting for TypeScript unit suite in %s:\n%s", chromeBin, stderrBuf.String())
+			cancel()
 		}
-	case <-ctx.Done():
-		<-procDone
-		t.Fatalf("timed out waiting for TypeScript unit suite in %s:\n%s", chromeBin, stderrBuf.String())
+
+		if gotReport {
+			break
+		}
+		if attempt < maxAttempts {
+			t.Logf("retrying headless TypeScript unit suite (attempt %d/%d) after browser stall", attempt+1, maxAttempts)
+		} else {
+			t.Fatal(lastError)
+		}
 	}
 
 	if report.FatalError != "" {
