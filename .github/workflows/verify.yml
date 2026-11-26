@@ -7,9 +7,6 @@ name: Verify
 # GitHub Pages deployment is published.
 
 on:
-  push:
-    branches:
-      - "feat/**"
   pull_request:
   workflow_dispatch:
   workflow_call:

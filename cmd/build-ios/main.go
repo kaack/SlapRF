@@ -52,6 +52,12 @@ func main() {
 	if runtime.GOOS != "darwin" {
 		log.Fatalf("[build-ios] Building SlapRF for iOS/iPadOS requires macOS with Xcode / Command Line Tools installed (current OS: %s)", runtime.GOOS)
 	}
+	if os.Getenv("DEVELOPER_DIR") == "" {
+		const defaultXcodeDev = "/Applications/Xcode.app/Contents/Developer"
+		if st, err := os.Stat(defaultXcodeDev); err == nil && st.IsDir() {
+			_ = os.Setenv("DEVELOPER_DIR", defaultXcodeDev)
+		}
+	}
 
 	goarch := strings.ToLower(strings.TrimSpace(*archFlag))
 	if goarch != "arm64" && goarch != "amd64" {
