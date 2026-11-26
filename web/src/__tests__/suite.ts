@@ -34,6 +34,7 @@ async function postReport(report: FullUnitReport): Promise<void> {
 }
 
 window.addEventListener("error", (ev) => {
+  if (/ResizeObserver loop/i.test(ev.message || "")) return;
   const err = ev.error instanceof Error ? `${ev.error.message}\n${ev.error.stack ?? ""}` : ev.message;
   void postReport({
     totalSuites: 0,
