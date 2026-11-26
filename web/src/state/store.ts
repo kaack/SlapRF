@@ -409,7 +409,7 @@ const DEFAULT_ML_STATUS: MLStatus = {
   config: {
     detectorMode: "classic",
     activeModelId: "ai-base-v0",
-    liveTuneEnabled: true,
+    liveTuneEnabled: false,
     teacherPackId: "qwen3-1.7b-q4_k_m",
     autoLabelOnTrain: true,
   },

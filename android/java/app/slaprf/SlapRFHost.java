@@ -51,6 +51,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
@@ -138,22 +140,32 @@ public final class SlapRFHost extends Activity {
         dispatchKeyboardOffsetPx(kbPhysicalPx, 120L, showing);
     }
 
-    private static final ExecutorService beepExecutor = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "slaprf-beep");
-        t.setDaemon(true);
-        return t;
-    });
-    private static AudioTrack sharedBeepTrack;
-    private static long lastBeepWriteUptimeMs = 0L;
+    private static final class ActiveBeepVoice {
+        final double phaseInc;
+        final int totalSamples;
+        final int attackSamples;
+        final int sustainEnd;
+        final int releaseSamples;
+        final double peakAmp;
+        int cursor = 0;
 
-    private static AudioTrack ensureSharedBeepTrackLocked(int sampleRate) {
-        if (sharedBeepTrack != null && sharedBeepTrack.getState() == AudioTrack.STATE_INITIALIZED) {
-            if (sharedBeepTrack.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
-                sharedBeepTrack.play();
-            }
-            return sharedBeepTrack;
+        ActiveBeepVoice(double freqHz, int durationMs, float volume, int sampleRate) {
+            this.phaseInc = freqHz / (double) sampleRate;
+            this.totalSamples = Math.max(960, (sampleRate * durationMs) / 1000);
+            this.attackSamples = Math.max(1, (sampleRate * 6) / 1000);
+            this.releaseSamples = Math.max(1, (sampleRate * 30) / 1000);
+            this.sustainEnd = Math.max(this.attackSamples, this.totalSamples - this.releaseSamples);
+            this.peakAmp = 32767.0 * 0.55 * volume;
         }
-        releaseSharedBeepTrackLocked();
+    }
+
+    private static final Object beepLock = new Object();
+    private static final ArrayList<ActiveBeepVoice> activeBeepVoices = new ArrayList<>();
+    private static boolean beepMixerRunning = false;
+    private static volatile boolean beepMixerStopRequested = false;
+    private static long keepBeepStreamWarmUntilMs = 0L;
+
+    private static AudioTrack buildStreamingBeepTrack(int sampleRate, int chunkSamples) {
         AudioAttributes.Builder attrBuilder = new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC);
@@ -167,7 +179,7 @@ public final class SlapRFHost extends Activity {
                 .build();
         int minBuf = AudioTrack.getMinBufferSize(
                 sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
-        int targetBufBytes = Math.max(minBuf > 0 ? minBuf : 9600, ((sampleRate * 240) / 1000) * 2);
+        int targetBufBytes = Math.max(minBuf > 0 ? minBuf : 7680, chunkSamples * 2 * 4);
         AudioTrack.Builder tb = new AudioTrack.Builder()
                 .setAudioAttributes(attrBuilder.build())
                 .setAudioFormat(fmt)
@@ -177,80 +189,145 @@ public final class SlapRFHost extends Activity {
             // Standard mixer path guarantees Android AudioPlaybackCapture (screen/phone audio recorders) can tap the stream.
             tb.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_NONE);
         }
-        AudioTrack built = tb.build();
-        built.play();
-        sharedBeepTrack = built;
-        return built;
+        return tb.build();
     }
 
-    private static void releaseSharedBeepTrackLocked() {
-        if (sharedBeepTrack != null) {
-            try {
-                sharedBeepTrack.stop();
-            } catch (Exception ignored) {
-            }
-            try {
-                sharedBeepTrack.release();
-            } catch (Exception ignored) {
-            }
-            sharedBeepTrack = null;
+    private static void safeReleaseBeepTrack(AudioTrack track) {
+        if (track == null) {
+            return;
+        }
+        try {
+            track.stop();
+        } catch (Exception ignored) {
+        }
+        try {
+            track.release();
+        } catch (Exception ignored) {
         }
     }
 
     private static void shutdownSharedBeepTrack() {
-        beepExecutor.execute(SlapRFHost::releaseSharedBeepTrackLocked);
+        synchronized (beepLock) {
+            beepMixerStopRequested = true;
+            activeBeepVoices.clear();
+            beepLock.notifyAll();
+        }
+    }
+
+    private static void runBeepMixerLoop() {
+        final int sampleRate = 48000;
+        final int chunkSamples = 960; // 20 ms continuous mixer frames -> zero underrun & instant first-click playback
+        final short[] pcm = new short[chunkSamples];
+        final ArrayList<ActiveBeepVoice> localVoices = new ArrayList<>(8);
+        AudioTrack track = null;
+        try {
+            track = buildStreamingBeepTrack(sampleRate, chunkSamples);
+            // Prime 20 ms of silent lead-in before play() so AudioFlinger + AudioPlaybackCapture
+            // attach cleanly before sample 0 of the very first beep, while continuous 20 ms frames
+            // immediately push total queued frames past bufferSizeInFrames on Click #1!
+            Arrays.fill(pcm, (short) 0);
+            track.write(pcm, 0, chunkSamples, AudioTrack.WRITE_BLOCKING);
+            track.play();
+
+            while (true) {
+                localVoices.clear();
+                synchronized (beepLock) {
+                    if (beepMixerStopRequested) {
+                        beepMixerRunning = false;
+                        break;
+                    }
+                    if (activeBeepVoices.isEmpty()
+                            && SystemClock.uptimeMillis() >= keepBeepStreamWarmUntilMs) {
+                        beepMixerRunning = false;
+                        break;
+                    }
+                    localVoices.addAll(activeBeepVoices);
+                }
+
+                if (localVoices.isEmpty()) {
+                    Arrays.fill(pcm, (short) 0);
+                } else {
+                    for (int i = 0; i < chunkSamples; i++) {
+                        double sum = 0.0;
+                        for (int v = 0; v < localVoices.size(); v++) {
+                            ActiveBeepVoice voice = localVoices.get(v);
+                            int pos = voice.cursor;
+                            if (pos >= voice.totalSamples) {
+                                continue;
+                            }
+                            voice.cursor = pos + 1;
+                            double phase = (pos * voice.phaseInc) % 1.0;
+                            double tri = phase < 0.5 ? (4.0 * phase - 1.0) : (3.0 - 4.0 * phase);
+                            double env;
+                            if (pos < voice.attackSamples) {
+                                env = (double) pos / (double) voice.attackSamples;
+                            } else if (pos < voice.sustainEnd) {
+                                env = 1.0;
+                            } else {
+                                double relFrac = Math.min(
+                                        1.0,
+                                        (double) (pos - voice.sustainEnd) / (double) voice.releaseSamples);
+                                env = 0.5 * (1.0 + Math.cos(Math.PI * relFrac));
+                            }
+                            sum += tri * env * voice.peakAmp;
+                        }
+                        int val = (int) Math.round(sum);
+                        if (val > 32767) val = 32767;
+                        else if (val < -32768) val = -32768;
+                        pcm[i] = (short) val;
+                    }
+                    synchronized (beepLock) {
+                        for (int v = activeBeepVoices.size() - 1; v >= 0; v--) {
+                            if (activeBeepVoices.get(v).cursor >= activeBeepVoices.get(v).totalSamples) {
+                                activeBeepVoices.remove(v);
+                            }
+                        }
+                    }
+                }
+
+                if (track == null || track.getState() != AudioTrack.STATE_INITIALIZED) {
+                    safeReleaseBeepTrack(track);
+                    track = buildStreamingBeepTrack(sampleRate, chunkSamples);
+                    track.play();
+                } else if (track.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) {
+                    track.play();
+                }
+                int written = track.write(pcm, 0, chunkSamples, AudioTrack.WRITE_BLOCKING);
+                if (written < 0) {
+                    safeReleaseBeepTrack(track);
+                    track = buildStreamingBeepTrack(sampleRate, chunkSamples);
+                    track.play();
+                    track.write(pcm, 0, chunkSamples, AudioTrack.WRITE_BLOCKING);
+                }
+            }
+        } catch (Exception ignored) {
+            synchronized (beepLock) {
+                beepMixerRunning = false;
+            }
+        } finally {
+            safeReleaseBeepTrack(track);
+        }
     }
 
     private static void playCapturableGateBeep(final double freqHz, final int durationMs, final float volume) {
         final double safeFreq = Math.max(220.0, Math.min(8000.0, freqHz));
         final int safeDurMs = Math.max(80, Math.min(500, durationMs));
         final float safeVol = Math.max(0.08f, Math.min(1.0f, volume));
-        beepExecutor.execute(() -> {
-            final int sampleRate = 48000;
-            final long nowUptime = SystemClock.uptimeMillis();
-            final boolean wasIdle = (nowUptime - lastBeepWriteUptimeMs) > 350L;
-            // Prepend 24 ms silent lead-in after idle lulls so AudioFlinger + AudioPlaybackCapture
-            // wake up before the tone attack, and append 60 ms silent flush so the persistent
-            // MODE_STREAM track pushes every sample through the screen-recorder AAC encoder.
-            final int leadInSamples = wasIdle ? (sampleRate * 24) / 1000 : 0;
-            final int toneSamples = Math.max(960, (sampleRate * safeDurMs) / 1000);
-            final int tailSamples = (sampleRate * 60) / 1000;
-            final int attackSamples = Math.max(1, (sampleRate * 6) / 1000);
-            final int releaseSamples = Math.max(1, (sampleRate * 30) / 1000);
-            final int sustainEnd = Math.max(attackSamples, toneSamples - releaseSamples);
-            final short[] pcm = new short[leadInSamples + toneSamples + tailSamples];
-            final double peakAmp = 32767.0 * 0.52 * safeVol;
-            for (int i = 0; i < toneSamples; i++) {
-                double phase = (i * safeFreq / sampleRate) % 1.0;
-                double tri = phase < 0.5 ? (4.0 * phase - 1.0) : (3.0 - 4.0 * phase);
-                double env;
-                if (i < attackSamples) {
-                    env = (double) i / (double) attackSamples;
-                } else if (i < sustainEnd) {
-                    env = 1.0;
-                } else {
-                    double relFrac = Math.min(1.0, (double) (i - sustainEnd) / (double) releaseSamples);
-                    env = 0.5 * (1.0 + Math.cos(Math.PI * relFrac));
-                }
-                int val = (int) Math.round(tri * env * peakAmp);
-                if (val > 32767) val = 32767;
-                else if (val < -32768) val = -32768;
-                pcm[leadInSamples + i] = (short) val;
+        synchronized (beepLock) {
+            if (activeBeepVoices.size() >= 8) {
+                activeBeepVoices.remove(0);
             }
-
-            try {
-                AudioTrack track = ensureSharedBeepTrackLocked(sampleRate);
-                int written = track.write(pcm, 0, pcm.length, AudioTrack.WRITE_BLOCKING);
-                if (written < 0) {
-                    releaseSharedBeepTrackLocked();
-                    track = ensureSharedBeepTrackLocked(sampleRate);
-                    track.write(pcm, 0, pcm.length, AudioTrack.WRITE_BLOCKING);
-                }
-                lastBeepWriteUptimeMs = SystemClock.uptimeMillis();
-            } catch (Exception e) {
-                releaseSharedBeepTrackLocked();
+            activeBeepVoices.add(new ActiveBeepVoice(safeFreq, safeDurMs, safeVol, 48000));
+            keepBeepStreamWarmUntilMs = SystemClock.uptimeMillis() + 90_000L;
+            beepMixerStopRequested = false;
+            if (!beepMixerRunning) {
+                beepMixerRunning = true;
+                Thread mixer = new Thread(SlapRFHost::runBeepMixerLoop, "slaprf-beep-mixer");
+                mixer.setDaemon(true);
+                mixer.start();
             }
-        });
+            beepLock.notifyAll();
+        }
     }
 
     private static synchronized void ensureTtsInitialized(Context context) {

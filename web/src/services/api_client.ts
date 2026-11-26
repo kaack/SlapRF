@@ -192,6 +192,7 @@ export class ApiClient {
       if (!document.hidden) {
         this.connectStream();
         void this.refresh().catch(() => undefined);
+        void this.fetchMLStatus().catch(() => undefined);
       }
     });
 
@@ -201,6 +202,7 @@ export class ApiClient {
     this.hubBridge.setActive(true);
     this.bindUsbTimerSync();
     await this.refresh();
+    await this.fetchMLStatus().catch(() => undefined);
 
     if (this.backendMode) {
       this.simMode = this.store.simulatorRunning;
@@ -308,6 +310,7 @@ export class ApiClient {
     }
     clearBackendConnectionLost();
     await this.refresh();
+    await this.fetchMLStatus().catch(() => undefined);
     this.connectStream();
     return true;
   }
