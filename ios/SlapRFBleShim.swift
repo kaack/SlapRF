@@ -206,7 +206,6 @@ final class SlapRFBleShim: NSObject, CBCentralManagerDelegate, CBPeripheralDeleg
     private func ensureCentralInitialized() -> CBManagerState {
         stateLock.lock()
         let hadCentral = (central != nil)
-        let current = centralState
         stateLock.unlock()
 
         if !hadCentral {
