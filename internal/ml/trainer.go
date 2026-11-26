@@ -1064,7 +1064,7 @@ var (
 )
 
 // PretrainedBaseSummary returns the metadata summary of built-in `SlapRF Base` (`ai-base-v0`),
-// trained on verified 4-gate 5.8 GHz SlapRF hardware telemetry across 148 laps / 609 passes.
+// trained on verified 4-gate 5.8 GHz SlapRF hardware telemetry across 181 laps / 744 passes.
 func PretrainedBaseSummary() domain.MLModelSummary {
 	if pretrainedTCN != nil {
 		return pretrainedSnapshot.MLModelSummary
@@ -1073,33 +1073,33 @@ func PretrainedBaseSummary() domain.MLModelSummary {
 		ModelID:       "ai-base-v0",
 		Name:          "SlapRF Base",
 		Version:       0,
-		CreatedAt:     "2026-11-25T23:24:00Z",
+		CreatedAt:     "2026-11-26T00:01:30Z",
 		BuiltIn:       true,
 		Ready:         true,
 		EpochsTrained: 72,
-		TrainPacks:    5,
-		ValPacks:      5,
-		TrainPasses:   609,
-		FinalLoss:     0.0905,
+		TrainPacks:    6,
+		ValPacks:      6,
+		TrainPasses:   744,
+		FinalLoss:     0.0962,
 		AIMetrics: domain.MLMetrics{
-			TotalPasses:    609,
-			DetectedPasses: 587,
-			MissedPasses:   22,
-			FalseTriggers:  27,
-			Precision:      0.9560,
-			Recall:         0.9639,
-			F1:             0.9599,
-			MeanJitterMs:   47.7,
+			TotalPasses:    744,
+			DetectedPasses: 711,
+			MissedPasses:   33,
+			FalseTriggers:  33,
+			Precision:      0.9556,
+			Recall:         0.9556,
+			F1:             0.9556,
+			MeanJitterMs:   55.0,
 		},
 		ClassicMetrics: domain.MLMetrics{
-			TotalPasses:    609,
-			DetectedPasses: 250,
-			MissedPasses:   359,
-			FalseTriggers:  6,
-			Precision:      0.9766,
-			Recall:         0.4105,
-			F1:             0.5780,
-			MeanJitterMs:   57.0,
+			TotalPasses:    744,
+			DetectedPasses: 727,
+			MissedPasses:   17,
+			FalseTriggers:  57,
+			Precision:      0.9273,
+			Recall:         0.9772,
+			F1:             0.9516,
+			MeanJitterMs:   57.9,
 		},
 	}
 }
