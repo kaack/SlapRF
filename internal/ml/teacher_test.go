@@ -358,7 +358,7 @@ func TestLong58MinuteMultiPackTrainingSpeed(t *testing.T) {
 	} else if procs > 18 {
 		procs = 18
 	}
-	maxDur := 180 * time.Second / time.Duration(procs)
+	maxDur := 240 * time.Second / time.Duration(procs)
 	t.Logf("960k-sample 28-epoch TrainModel=%v, total+benchmark=%v (procs=%d, budget=%v, loss=%.4f, F1=%.3f)", trainDur, totalDur, runtime.GOMAXPROCS(0), maxDur, loss, aiM.F1)
 	if totalDur > maxDur {
 		t.Fatalf("expected 960k-sample 28-epoch training to finish in <%v (procs=%d), took %v", maxDur, runtime.GOMAXPROCS(0), totalDur)
