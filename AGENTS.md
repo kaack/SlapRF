@@ -13,6 +13,7 @@ SlapRF shares a single Go timing engine and TypeScript web UI across desktop, mo
 - `cmd/slaprf/`: Single-file cross-platform native Go server ("SlapRF Portable") embedding the compiled web UI (`cmd/slaprf/site/`).
 - `cmd/slaprf-wasm/`: Standalone browser demo engine compiled to `GOOS=js GOARCH=wasm` (`slaprf.wasm`) for `https://slaprf.app`.
 - `cmd/slaprf-android/` & `android/`: Native Android host (`libslaprf.so` + Java USB/BLE/WebView shims) packaged into a signed APK without Gradle by `cmd/build-android`.
+- `cmd/slaprf-ios/` & `ios/`: Native iOS/iPadOS host (`libslaprf.a` + Swift `WKWebView` / `CoreBluetooth` / `AVAudioEngine` shims, `DisableUSB: true`) packaged into a sideloadable `.ipa` (or Simulator/Device `.app`) by `cmd/build-ios`.
 - `firmware/`: ESP-IDF `v5.5.1` C projects for Seeed Studio XIAO ESP32-C5 (`firmware/slaprf` for USB Hub/Spokes and `firmware/slaprf_ble` for Bluetooth Hub) plus Python/PowerShell bench utilities in `firmware/tools/`.
 - `e2e/`: Playwright-Go end-to-end verification suite (`-tags=e2e`) covering REST/WASM API parity, UI components, and full race workflows.
 
@@ -20,7 +21,7 @@ SlapRF shares a single Go timing engine and TypeScript web UI across desktop, mo
 
 1. **Protected Tracked Assets**:
    - `web/firmware/slaprf-xiao-c5.bin` is force-tracked in git even though `web/firmware/*.bin` is in `.gitignore`. Never delete it or overwrite it with a synthetic placeholder image.
-   - `cmd/slaprf/site/.keep` and `cmd/slaprf-android/site/.keep` are required so `//go:embed all:site` compiles on a clean checkout. Always preserve them.
+   - `cmd/slaprf/site/.keep`, `cmd/slaprf-android/site/.keep`, and `cmd/slaprf-ios/site/.keep` are required so `//go:embed all:site` compiles on a clean checkout. Always preserve them.
 2. **Generated Version Stamp**:
    - Running `cmd/build-web` updates the build timestamp in `internal/api/generated/version.json`. Before committing source changes, revert timestamp-only diffs with `git checkout -- internal/api/generated/version.json`.
 3. **Windows Directory Locks on `_site`**:
@@ -48,6 +49,7 @@ Activate the relevant skill below whenever a task involves environment setup, bu
 - `docs-site-authoring` (`.agents/skills/docs-site-authoring/SKILL.md`): Hugo + Hextra shortcodes (`themed-image`, `web-flasher`, `api-spec-viewer`), 3-way `Light`/`Auto`/`Dark` theme switcher, dark-slate diagrams, and `cmd/build-docs`.
 - `doc-screenshots` (`.agents/skills/doc-screenshots/SKILL.md`): Generate crisp `2x` Retina matched Dark and Light screenshots for `README.md` and `docs-site/` via `capture_retina.go`.
 - `android-wifi-deploy` (`.agents/skills/android-wifi-deploy/SKILL.md`): Build the signed Android APK, pair/connect wireless `adb` over Wi-Fi (`adb mdns services`), install/launch `app.slaprf`, triage live Hub/Spoke `/v1` + WS streams over `:18090`, stream `logcat`, and attach CDP to the Android WebView.
+- `ios-device-deploy` (`.agents/skills/ios-device-deploy/SKILL.md`): Build `slaprf-ios-arm64.ipa` or Simulator/Device `.app` (`cmd/build-ios`), pair/deploy via free Apple ID Personal Team (`xcrun devicectl`), stream Go/Swift console logs, and attach Safari Web Inspector to `WKWebView`.
 - `esp32c5-firmware-build` (`.agents/skills/esp32c5-firmware-build/SKILL.md`): Compile `slaprf-xiao-c5.bin` (USB/Spoke), `slaprf-xiao-c5-ble.bin` (Bluetooth Hub), and `slaprf-p4-poe-bridge.bin` (ESP32-P4 PoE Bridge) locally with ESP-IDF `v5.5.1`.
 - `usb-timer-debug-and-flash` (`.agents/skills/usb-timer-debug-and-flash/SKILL.md`): Discover XIAO ESP32-C5 USB ports, avoid port locks and `usbser.sys` boot-latch pitfalls, flash/patch `SLAPRF02` images, and run live USB console/RF diagnostics.
 - `git-and-github-hygiene` (`.agents/skills/git-and-github-hygiene/SKILL.md`): Conventional Commits conventions, frequent local checkpoint commits, staging discipline, and rebasing/autosquashing before pushing.

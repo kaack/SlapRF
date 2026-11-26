@@ -1,0 +1,286 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000010000000000000001 /* SlapRFApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000010000000000000001 /* SlapRFApp.swift */; };
+		A10000020000000000000002 /* SlapRFViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000020000000000000002 /* SlapRFViewController.swift */; };
+		A10000030000000000000003 /* SlapRFBleShim.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000030000000000000003 /* SlapRFBleShim.swift */; };
+		A10000040000000000000004 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000040000000000000004 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A20000010000000000000001 /* SlapRFApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SlapRFApp.swift; sourceTree = "<group>"; };
+		A20000020000000000000002 /* SlapRFViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SlapRFViewController.swift; sourceTree = "<group>"; };
+		A20000030000000000000003 /* SlapRFBleShim.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SlapRFBleShim.swift; sourceTree = "<group>"; };
+		A20000040000000000000004 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A20000050000000000000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A20000060000000000000006 /* SlapRF-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "SlapRF-Bridging-Header.h"; sourceTree = "<group>"; };
+		A20000070000000000000007 /* SlapRF.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SlapRF.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A30000010000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A40000010000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				A20000010000000000000001 /* SlapRFApp.swift */,
+				A20000020000000000000002 /* SlapRFViewController.swift */,
+				A20000030000000000000003 /* SlapRFBleShim.swift */,
+				A20000060000000000000006 /* SlapRF-Bridging-Header.h */,
+				A20000040000000000000004 /* Assets.xcassets */,
+				A20000050000000000000005 /* Info.plist */,
+				A40000020000000000000002 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A40000020000000000000002 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A20000070000000000000007 /* SlapRF.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A50000010000000000000001 /* SlapRF */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A80000020000000000000002 /* Build configuration list for PBXNativeTarget "SlapRF" */;
+			buildPhases = (
+				A60000010000000000000001 /* Build Go libslaprf.a */,
+				A60000020000000000000002 /* Sources */,
+				A30000010000000000000001 /* Frameworks */,
+				A60000030000000000000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SlapRF;
+			productName = SlapRF;
+			productReference = A20000070000000000000007 /* SlapRF.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A70000010000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+			};
+			buildConfigurationList = A80000010000000000000001 /* Build configuration list for PBXProject "SlapRF" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A40000010000000000000001;
+			productRefGroup = A40000020000000000000002 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A50000010000000000000001 /* SlapRF */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A60000030000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000040000000000000004 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A60000010000000000000001 /* Build Go libslaprf.a */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Go libslaprf.a";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/libslaprf.a",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$HOME/go/bin:$PATH\"\nREPO_ROOT=\"$(cd \"${SRCROOT}/..\" && pwd)\"\nOUT_ARCHIVE=\"${BUILT_PRODUCTS_DIR}/libslaprf.a\"\nmkdir -p \"${BUILT_PRODUCTS_DIR}\"\nif [ \"${SLAPRF_SKIP_GO_ARCHIVE:-0}\" = \"1\" ] && [ -n \"${SLAPRF_PREBUILT_ARCHIVE:-}\" ] && [ -f \"${SLAPRF_PREBUILT_ARCHIVE}\" ]; then\n  cp -f \"${SLAPRF_PREBUILT_ARCHIVE}\" \"${OUT_ARCHIVE}\"\n  exit 0\nfi\ncd \"${REPO_ROOT}\"\nif [ ! -f \"cmd/slaprf-ios/site/index.html\" ]; then\n  go run ./cmd/build-web -web ./web -out ./cmd/slaprf-ios/site -skip-wasm -skip-docs\n  rm -rf ./cmd/slaprf-ios/site/wasm ./cmd/slaprf-ios/site/docs ./cmd/slaprf-ios/site/firmware\nfi\nif [ \"${PLATFORM_NAME}\" = \"iphonesimulator\" ]; then\n  if [ \"${ARCHS%% *}\" = \"x86_64\" ]; then\n    GOARCH=amd64\n    TRIPLE=\"x86_64-apple-ios16.0-simulator\"\n  else\n    GOARCH=arm64\n    TRIPLE=\"arm64-apple-ios16.0-simulator\"\n  fi\nelse\n  GOARCH=arm64\n  TRIPLE=\"arm64-apple-ios16.0\"\nfi\nCC_PATH=\"$(xcrun --sdk \"${PLATFORM_NAME}\" --find clang)\"\nCGO_FLAGS=\"-isysroot ${SDKROOT} -target ${TRIPLE}\"\nCGO_ENABLED=1 GOOS=ios GOARCH=\"${GOARCH}\" CC=\"${CC_PATH}\" CGO_CFLAGS=\"${CGO_FLAGS}\" CGO_LDFLAGS=\"${CGO_FLAGS}\" \\\n  go build -buildmode=c-archive -trimpath -ldflags=\"-s -w\" -o \"${OUT_ARCHIVE}\" ./cmd/slaprf-ios\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A60000020000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000010000000000000001 /* SlapRFApp.swift in Sources */,
+				A10000020000000000000002 /* SlapRFViewController.swift in Sources */,
+				A10000030000000000000003 /* SlapRFBleShim.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A90000010000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				SDKROOT = iphoneos;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A90000020000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		A90000030000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 20;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.0.20;
+				OTHER_LDFLAGS = (
+					"$(BUILT_PRODUCTS_DIR)/libslaprf.a",
+					"-lresolv",
+					"-framework",
+					CoreBluetooth,
+					"-framework",
+					WebKit,
+					"-framework",
+					AVFoundation,
+					"-framework",
+					AudioToolbox,
+					"-framework",
+					UniformTypeIdentifiers,
+					"-framework",
+					Security,
+					"-framework",
+					CoreFoundation,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.slaprf.timer;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OBJC_BRIDGING_HEADER = "SlapRF-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A90000040000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 20;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.0.20;
+				OTHER_LDFLAGS = (
+					"$(BUILT_PRODUCTS_DIR)/libslaprf.a",
+					"-lresolv",
+					"-framework",
+					CoreBluetooth,
+					"-framework",
+					WebKit,
+					"-framework",
+					AVFoundation,
+					"-framework",
+					AudioToolbox,
+					"-framework",
+					UniformTypeIdentifiers,
+					"-framework",
+					Security,
+					"-framework",
+					CoreFoundation,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.slaprf.timer;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OBJC_BRIDGING_HEADER = "SlapRF-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A80000010000000000000001 /* Build configuration list for PBXProject "SlapRF" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A90000010000000000000001 /* Debug */,
+				A90000020000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A80000020000000000000002 /* Build configuration list for PBXNativeTarget "SlapRF" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A90000030000000000000003 /* Debug */,
+				A90000040000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A70000010000000000000001 /* Project object */;
+}
