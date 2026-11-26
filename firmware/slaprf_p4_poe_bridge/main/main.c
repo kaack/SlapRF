@@ -45,7 +45,7 @@
 #include "usb/cdc_acm_host.h"
 #include "usb/usb_host.h"
 
-#define BRIDGE_FW_VERSION       "0.2.2"
+#define BRIDGE_FW_VERSION       "0.2.3"
 #define BRIDGE_TCP_PORT         5480
 #define MAX_TCP_CLIENTS         1
 #define DEFAULT_USB_BAUD        115200
@@ -578,6 +578,44 @@ static bool save_and_apply_baud(uint32_t baud)
     return true;
 }
 
+static bool set_cdc_lines_once(bool dtr, bool rts)
+{
+    bool ok = false;
+    xSemaphoreTake(g_cdc_tx_mu, portMAX_DELAY);
+    if (g_cdc_dev != NULL) {
+        cdc_acm_host_set_control_line_state(g_cdc_dev, dtr, rts);
+        ok = true;
+    }
+    xSemaphoreGive(g_cdc_tx_mu);
+    if (ok) {
+        xSemaphoreTake(g_state_mu, portMAX_DELAY);
+        g_state.usb_dtr = dtr;
+        g_state.usb_rts = rts;
+        xSemaphoreGive(g_state_mu);
+    }
+    return ok;
+}
+
+static bool reset_attached_usb_device(void)
+{
+    /* Atomic USB-Serial-JTAG + UART auto-reset into SPI flash app (NEVER (1,0)->(0,1) which latches
+     * ESP32-C3/C5/C6/S3/P4 ROM download mode!). On USB-Serial-JTAG, (0,0) -> (1,1) -> (0,1) asserts
+     * CHIP_RST with IO0=1, and (0,0) -> (1,0) releases CHIP_RST and re-asserts DTR for CDC streaming.
+     * Release g_cdc_tx_mu between steps so USB disconnect/re-enumeration callbacks never block. */
+    if (!set_cdc_lines_once(false, false)) {
+        return false;
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));
+    set_cdc_lines_once(true, true);
+    vTaskDelay(pdMS_TO_TICKS(60));
+    set_cdc_lines_once(false, true);
+    vTaskDelay(pdMS_TO_TICKS(120));
+    set_cdc_lines_once(false, false);
+    vTaskDelay(pdMS_TO_TICKS(150));
+    set_cdc_lines_once(true, false);
+    return true;
+}
+
 /* ---- Ethernet Events & Initialization ------------------------------------------------------- */
 
 static void eth_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
@@ -822,6 +860,12 @@ static void udp_discovery_task(void *arg)
             if (ok) {
                 vTaskDelay(pdMS_TO_TICKS(25));
                 apply_net_cfg_to_netif();
+            }
+        } else if (strcasecmp(cmd, "RESET_USB") == 0) {
+            bool ok = reset_attached_usb_device();
+            int ack_n = snprintf(tx_buf, sizeof(tx_buf), "{\"ok\":%s,\"cmd\":\"RESET_USB\"}", ok ? "true" : "false");
+            if (ack_n > 0) {
+                sendto(sock, tx_buf, (size_t)ack_n, 0, (struct sockaddr *)&src_addr, socklen);
             }
         } else if (strcasecmp(cmd, "RESET_COUNTERS") == 0) {
             xSemaphoreTake(g_state_mu, portMAX_DELAY);
@@ -1168,6 +1212,12 @@ static void uart0_console_task(void *arg)
                         mask,
                         gw
                     );
+                    if (n > 0) {
+                        uart_write_bytes(UART_NUM_0, reply, (size_t)n);
+                    }
+                } else if (strcasecmp(cmd, "RESET_USB") == 0) {
+                    bool ok = reset_attached_usb_device();
+                    int n = snprintf(reply, sizeof(reply), "@{\"t\":\"reset_usb\",\"ok\":%s}\n", ok ? "true" : "false");
                     if (n > 0) {
                         uart_write_bytes(UART_NUM_0, reply, (size_t)n);
                     }

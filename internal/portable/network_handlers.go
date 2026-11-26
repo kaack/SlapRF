@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"slaprf/internal/domain"
 	slaprfnet "slaprf/internal/slaprf/network"
@@ -173,6 +174,15 @@ func (s *Server) handleNetworkBridgeAction(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
+	}
+	if strings.EqualFold(strings.TrimSpace(req.Action), "reset-usb") {
+		// Reset HubRx state so Hub H1's boot HELLO immediately triggers a fresh 5.8 GHz channel push,
+		// and re-query STATUS? once the attached USB timer finishes booting.
+		s.realHubRx.Reset()
+		go func() {
+			time.Sleep(350 * time.Millisecond)
+			_ = s.netMgr.SendCommand(0, "STATUS?")
+		}()
 	}
 	writeJSONNoStore(w, http.StatusOK, res)
 }

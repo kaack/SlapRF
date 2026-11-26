@@ -928,20 +928,42 @@ func (t *Transport) SendBridgeAction(ctx context.Context, rawTarget string, req 
 		}, nil
 
 	case "reset-usb":
-		if _, err := t.udpRoundTrip(ctx, norm, "CTRL dtr=0 rts=1", 600*time.Millisecond); err != nil {
-			return nil, fmt.Errorf("failed to pulse USB-A reset lines: %w", err)
+		// Prefer firmware v0.2.3+ atomic `RESET_USB` command; fall back to the exact 5-step
+		// USB-Serial-JTAG SPI-flash boot sequence `(0,0)->(1,1)->(0,1)->(0,0)->(1,0)` (never `(1,0)->(0,1)`
+		// directly, which latches ESP32-C5 into ROM download mode!).
+		if rawAck, err := t.udpRoundTrip(ctx, norm, "RESET_USB", 1500*time.Millisecond); err == nil && len(rawAck) > 0 {
+			time.Sleep(650 * time.Millisecond)
+			st, _ := t.QueryBridgeStatus(ctx, norm)
+			return &BridgeActionResult{
+				OK:      true,
+				Action:  action,
+				Target:  norm,
+				Message: "USB-A device restarted.",
+				Bridge:  st,
+			}, nil
 		}
-		time.Sleep(90 * time.Millisecond)
-		if _, err := t.udpRoundTrip(ctx, norm, "CTRL dtr=1 rts=0", 600*time.Millisecond); err != nil {
-			return nil, fmt.Errorf("failed to release USB-A reset lines: %w", err)
+		steps := []struct {
+			cmd  string
+			wait time.Duration
+		}{
+			{"CTRL dtr=0 rts=0", 55 * time.Millisecond},
+			{"CTRL dtr=1 rts=1", 65 * time.Millisecond},
+			{"CTRL dtr=0 rts=1", 120 * time.Millisecond},
+			{"CTRL dtr=0 rts=0", 150 * time.Millisecond},
+			{"CTRL dtr=1 rts=0", 650 * time.Millisecond},
 		}
-		time.Sleep(180 * time.Millisecond)
+		for _, s := range steps {
+			if _, err := t.udpRoundTrip(ctx, norm, s.cmd, 600*time.Millisecond); err != nil {
+				return nil, fmt.Errorf("failed to restart USB-A device: %w", err)
+			}
+			time.Sleep(s.wait)
+		}
 		st, _ := t.QueryBridgeStatus(ctx, norm)
 		return &BridgeActionResult{
 			OK:      true,
 			Action:  action,
 			Target:  norm,
-			Message: "Reset pulse sent to attached USB-A device.",
+			Message: "USB-A device restarted.",
 			Bridge:  st,
 		}, nil
 
