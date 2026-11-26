@@ -90,8 +90,19 @@ If high-speed passes through a gate do not register:
 
 ## Diagnostic Logs
 
-SlapRF records user actions, race and practice events, completed laps, and hardware link transitions in a rolling `slaprf.log` file alongside the app on desktop and Android (and in a bounded `1,000`-line in-memory buffer in standalone Browser Demo Mode), tagging simulated activity with `[SIM]`:
+### In-App Operational Logs
+
+SlapRF records user actions, race and practice events, completed laps, and hardware link transitions in a rolling `slaprf.log` file alongside the app on desktop, Android, and iOS (and in a bounded `1,000`-line in-memory buffer in standalone Browser Demo Mode), tagging simulated activity with `[SIM]`:
 
 1. Open **Settings** and scroll to the **Diagnostics** section at the bottom of the page.
 2. Change the log level from `INFO (default)` to `DEBUG` or `TRACE` before reproducing an issue.
 3. Click **Download** to save `slaprf-YYYY-MM-DD.log` for inspection or bug reports, then switch the level back to `INFO (default)`.
+
+### Android App Does Not Open
+
+If the Android app closes immediately or fails to open from the launcher:
+
+1. If the **SlapRF Startup Diagnostic** screen appears, tap **Share Log** or **Save File...** to save `slaprf-startup-log.txt`.
+2. If no screen appears, tap the **SlapRF** app icon one more time so SlapRF exports the previous failed launch trace to **`Downloads/slaprf-startup-log.txt`**.
+3. Open the Android **Files** app, select **Downloads**, and locate `slaprf-startup-log.txt` (this file records the Android build, startup checkpoints, native exit reason, and `slaprf.log` tail with no personal race data).
+4. Open a bug report on [GitHub Issues](https://github.com/kaack/SlapRF/issues/new) and attach `slaprf-startup-log.txt`.
