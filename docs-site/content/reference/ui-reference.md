@@ -9,7 +9,7 @@ Reference guide to the screens, live signal scope controls, and crossing detecti
 
 | Screen | Purpose |
 | :--- | :--- |
-| Practice | Practice session directory and workspace (`Pilots`, **Track**, `Overview`, `Laps`, `Trends`, `Signals`, and `Analytics`). Each session stores its own track layout and timing rules. |
+| Practice | Practice session directory and workspace (`Pilots`, **Track**, `Overview`, `Laps`, `Trends`, `Signals`, `Review`, `Analytics`, and `AI Training`). Each session stores its own track layout, `.rfbin` waveform trace, and timing rules. |
 | Races | Event creation, MultiGP import, per-race **Track** & timing rules editor, visual Format Canvas brackets, live Marshal / Race Control horns, and Review waveforms. |
 | Pilots | Pilot directory with callsigns, phonetic TTS spellings, and default 5.8 GHz channels (`Raceband`, `Fatshark`, `Boscam`, `IMD6`). |
 | Network | Timing system selector (`SlapRF (USB)`, `SlapRF (Bluetooth)`, `LapRF 8-Way (Network)`, `LapRF 8-Way (USB)`, `RotorHazard (Network)`, `RotorHazard (USB)`), connection manager, topology graph, and live RSSI monitor. |
@@ -32,15 +32,18 @@ Available inside **Practice -> Signals** and **Race -> Signals**:
 | Timer Chips / Rows | Filter by `All`, `H1`, or `T1`-`T6` to inspect Enter and Exit lines. Select an individual timer (or use its row actions on mobile) to calibrate or open **Fine-tune**. |
 | `Calibrate` | Appears for a selected timer once flight pass data is recorded. Computes Enter and Exit dBm levels from recent passes, with `Clear calibration` to restore defaults. |
 
-## Crossing Rules
+## Crossing Detection & Rules
 
-SlapRF runs a hysteresis detector (`Enter dBm` -> peak tracking -> `Exit dBm`) governed by per-track timing rules configured in each Practice session or Race **Track** tab, with optional per-timer and per-pilot-at-timer overrides in **Track** and **Signals -> Fine-tune**:
+Each Practice session and Race **Track** tab includes a **Crossing detector** card that switches between **AI** mode and traditional **DSP** mode (see [AI Crossing Detection & Training](../../journeys/ai-crossing-detection)):
+- **AI Mode**: Evaluates `5.8 GHz` RSSI waveforms with the built-in **`SlapRF Base (1P)`** neural model or a user-trained custom model from **Practice -> AI Training**, with an optional **`2L Tune`** adaptive head toggle and `Off | On` crossing beeps.
+- **DSP Mode**: Runs a traditional hysteresis detector (`Enter dBm` -> peak tracking -> `Exit dBm`) with per-track, per-timer, and per-pilot-at-timer overrides in **Track** and **Signals -> Fine-tune**.
 
 | Parameter | Role |
 | :--- | :--- |
-| Enter Threshold (`dBm`) | RSSI level required to open a crossing window. |
-| Exit Threshold (`dBm`) | RSSI level required to close the crossing window and record the peak timestamp (`6` to `12 dBm` below Enter prevents double-counting). |
-| Min Crossing Time (`s`) | Minimum duration RSSI must remain inside the crossing window, rejecting brief single-sample RF noise spikes (`SPIKE`). |
-| Min Lap Time (`s`) | Minimum valid lap time between consecutive Start / Finish crossings for the same pilot (`MIN_LAP`). |
-| Max Lap Time (`s`) | Maximum duration before a long pause (such as landing to swap batteries) starts a fresh out-lap instead of recording a slow lap (`LAP_TOO_LONG`). |
-| Beep on Cross | Plays an immediate low-latency audio tone when a crossing registers, ahead of the spoken lap callout. |
+| Detector Mode (`AI` / `DSP`) | Selects neural waveform pass detection (`SlapRF Base` or custom model) or traditional `Enter` / `Exit` dBm threshold hysteresis. |
+| Enter Threshold (`dBm`, DSP) | RSSI level required to open a crossing window in **DSP** mode. |
+| Exit Threshold (`dBm`, DSP) | RSSI level required to close the crossing window and record the peak timestamp in **DSP** mode (`6` to `12 dBm` below Enter prevents double-counting). |
+| Min Crossing Time (`s`, DSP) | Minimum duration RSSI must remain inside the **DSP** crossing window, rejecting brief single-sample RF spikes (`SHORT`). |
+| Min Lap Time (`s`) | Minimum valid lap time between consecutive Start / Finish crossings for the same pilot (`SHORT`). |
+| Max Lap Time (`s`) | Maximum duration before a long pause (such as landing to swap batteries) starts a fresh out-lap instead of recording a slow lap (`LONG`). |
+| Beep on Crossing | Plays an immediate confirmation tone when a gate crossing registers (`Off \| On` in **AI** mode; `Off \| Enter \| Peak \| Exit` in **DSP** mode). |

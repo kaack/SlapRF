@@ -24,7 +24,7 @@ Every Spoke streams its 5.8 GHz RSSI sweeps to `H1` over 2.4 GHz ESP-NOW while `
 
 ### Flash Spokes
 
-Use the [Firmware Flasher](../hardware/flashing) (or the built-in **Flasher** in the SlapRF Android or desktop app over USB-C) to assign each Spoke board a unique slot (`T1` through `T6`) on the same firmware version as `H1`.
+Use the [Firmware Flasher](../../hardware/flashing) (or the built-in **Flasher** in the SlapRF Android or desktop app over USB-C) to assign each Spoke board a unique slot (`T1` through `T6`) on the same firmware version as `H1`.
 
 ### Place Timers
 
@@ -34,9 +34,11 @@ In Bluetooth Hub mode, place `H1` at Start / Finish and place Spokes (`T1`, `T2`
 
 Open **Network** to confirm `H1` and all powered Spokes report `Online`. Open **Practice** (or **Races**), select your session or event, and open its **Track** tab. Drag your active timers onto the track line in flight order and click the checkered flag under your Start / Finish gate. Each session and race saves its own gate order and timing rules independently.
 
-### Calibrate Each Gate
+### Fly (or Calibrate Gates in DSP Mode)
 
-Tap **Start** in your **Practice** session and fly 2 to 3 complete laps through every gate. Open **Signals**, select a gate timer (or use each timer row on mobile), and tap **Calibrate** once pass data is recorded to compute Enter and Exit thresholds for each gate.
+Tap **Start** in your **Practice** session:
+- **In AI mode (`SlapRF Base`)**: Fly immediately through all gates with no per-gate dBm calibration (see [AI Crossing Detection & Training](../ai-crossing-detection)).
+- **In DSP mode**: Fly 2 to 3 complete laps through every gate, open **Signals**, select each gate timer (or use each timer row on mobile), and tap **Calibrate** to compute `Enter` and `Exit` thresholds.
 
 {{% /steps %}}
 

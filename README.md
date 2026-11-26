@@ -67,6 +67,7 @@ SlapRF has two parts. You can use them together or separately:
 | Build qualifying, redemption, and finals stages on the bracket graph. | Run start horns, record holeshots and laps, and monitor 50 Hz RSSI. |
 
 - **Practice and Section Splits**: Configure an independent track layout and timing rules per session, and record best laps, 3-lap and 5-lap averages, consistency spread, and `S1`/`S2`/`S3` section deltas with voice callouts.
+- **AI and DSP Crossing Detection**: Fly out of the box with the pre-trained `SlapRF Base` neural crossing detector, train or fine-tune custom models on your own `.rfbin` practice sessions, or switch to traditional `Enter` and `Exit` dBm threshold detection.
 - **Tournament Formats**: Run Controlled Qualifying, Double-Elimination brackets, Chase-the-Ace finals, and Open Qualifier (ZippyQ) queues, each with its own race track and timing rules.
 - **Waveform Review**: Inspect recorded `5.8 GHz` RSSI pass curves after a heat. Add missed crossings, remove false triggers, or apply time penalties.
 - **MultiGP RaceSync**: Import chapters, pilot rosters, and schedules from MultiGP. Send heat results and event standings back to MultiGP.
@@ -117,7 +118,7 @@ See **[Installation and LAN Sharing](https://slaprf.app/docs/getting-started/ins
 
 - **Getting Started**: [Overview](https://slaprf.app/docs/) · [Architecture and Modes](https://slaprf.app/docs/getting-started/architecture/) · [Installation and LAN Sharing](https://slaprf.app/docs/getting-started/installation/)
 - **Hardware**: [Parts and Assembly](https://slaprf.app/docs/hardware/parts-and-assembly/) · [Web Firmware Flasher](https://slaprf.app/docs/hardware/flashing/) · [Status LED Guide](https://slaprf.app/docs/hardware/status-leds/)
-- **Guides**: [Practice](https://slaprf.app/docs/journeys/practice/) · [Multi-Gate Section Splits](https://slaprf.app/docs/journeys/multi-gate-splits/) · [Race Events](https://slaprf.app/docs/journeys/race-events/) · [RotorHazard and LapRF 8-Way](https://slaprf.app/docs/journeys/external-timers/)
+- **Guides**: [Practice](https://slaprf.app/docs/journeys/practice/) · [Multi-Gate Section Splits](https://slaprf.app/docs/journeys/multi-gate-splits/) · [AI Detection and Training](https://slaprf.app/docs/journeys/ai-crossing-detection/) · [Race Events](https://slaprf.app/docs/journeys/race-events/) · [RotorHazard and LapRF 8-Way](https://slaprf.app/docs/journeys/external-timers/)
 - **Reference**: [UI Reference](https://slaprf.app/docs/reference/ui-reference/) · [REST API (OpenAPI 3.1)](https://slaprf.app/docs/reference/api-reference/rest/) · [Stream API (AsyncAPI 3.0)](https://slaprf.app/docs/reference/api-reference/async/) · [Troubleshooting](https://slaprf.app/docs/reference/troubleshooting/)
 
 ---

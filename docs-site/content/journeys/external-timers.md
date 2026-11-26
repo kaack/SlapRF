@@ -1,7 +1,7 @@
 ---
 title: RotorHazard & LapRF 8-Way
 linkTitle: RotorHazard & LapRF
-weight: 4
+weight: 5
 ---
 
 Connect the SlapRF App to existing RotorHazard or ImmersionRC LapRF 8-Way hardware over LAN or USB without building new timers.

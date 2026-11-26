@@ -25,8 +25,9 @@ SlapRF consists of two parts that you can use together or separately:
   {{< card link="hardware/parts-and-assembly" title="Build SlapRF Hardware" icon="chip" subtitle="Assemble battery-powered XIAO ESP32-C5 gate timers with zero soldering." >}}
   {{< card link="hardware/flashing" title="Flash Firmware" icon="lightning-bolt" subtitle="Flash Bluetooth Hub, USB Hub, and Spoke boards directly from your browser." >}}
   {{< card link="hardware/status-leds" title="Status LED Patterns" icon="sparkles" subtitle="View live blinking animations and timing strips for every XIAO LED pattern." >}}
-  {{< card link="journeys/practice" title="Solo & Club Practice" icon="play" subtitle="Connect your timer, calibrate thresholds in one tap, and fly with spoken callouts." >}}
+  {{< card link="journeys/practice" title="Solo & Club Practice" icon="play" subtitle="Connect your timer and fly immediately with SlapRF Base AI or calibrated DSP thresholds." >}}
   {{< card link="journeys/multi-gate-splits" title="Multi-Gate Splits" icon="chart-bar" subtitle="Place Spoke timers around the course to measure S1, S2, and S3 section splits." >}}
+  {{< card link="journeys/ai-crossing-detection" title="AI Detection & Training" icon="sparkles" subtitle="Fly out of the box with SlapRF Base, fine-tune custom models, or use DSP thresholds." >}}
   {{< card link="journeys/race-events" title="Run a Race Event" icon="flag" subtitle="Manage brackets, heats, horns, Marshal Review waveforms, and MultiGP sync." >}}
   {{< card link="journeys/external-timers" title="RotorHazard & LapRF" icon="server" subtitle="Connect the SlapRF software to existing RotorHazard or LapRF 8-Way timers." >}}
   {{< card link="reference/troubleshooting" title="Troubleshooting" icon="support" subtitle="Fix USB flashing, Bluetooth pairing, calibration, and power issues." >}}

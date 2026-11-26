@@ -1,6 +1,6 @@
 ---
 title: Running a Race Event
-weight: 3
+weight: 4
 ---
 
 SlapRF includes a full race control workspace for club races, qualifiers, elimination brackets, and MultiGP chapter events.
@@ -19,6 +19,7 @@ Open **Races** from the main navigation to start a new event:
 Inside an event workspace, open **Track** to configure the course for that specific race:
 
 - Drag active timers (`H1`, `T1`-`T6`, RotorHazard, or LapRF units) onto the track line in flight order and click the checkered flag under the Start / Finish gate.
+- For SlapRF timers, select **AI** (`SlapRF Base` or a custom trained model) or **DSP** (`Enter` and `Exit` thresholds) in **Crossing detector** (see [AI Crossing Detection & Training](../ai-crossing-detection)).
 - Set track-wide **Timing rules** (`Min lap time`, `Max lap time`, `Min crossing time`, and `Beep on crossing`), or select an individual timer chip to override rules for a single gate.
 
 Each race stores its own track and timing rules independently from practice sessions and other races. When a race is completed or scrapped, its recorded track and timing rules lock read-only.
