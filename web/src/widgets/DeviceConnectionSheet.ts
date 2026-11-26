@@ -5,6 +5,7 @@ import { getPairedBluetoothHub, TimerConsole } from "../services/timer_console";
 export interface DeviceConnectionSheetOptions {
   console: TimerConsole;
   bluetoothMode: boolean;
+  networkMode?: boolean;
   onAfterAction?: () => void;
 }
 
@@ -32,6 +33,7 @@ export function openDeviceConnectionSheet(opts: DeviceConnectionSheetOptions): v
   const s = c.lastStatus;
   const cfg = c.lastConfig;
   const isBle = Boolean(opts.bluetoothMode || c.transportLabel === "Bluetooth");
+  const isNet = Boolean(!isBle && (opts.networkMode || c.transportLabel === "Ethernet"));
   const paired = isBle ? getPairedBluetoothHub() : null;
   const isOther = c.isOtherDevice;
   const isSpoke = s ? s.role === 2 : cfg?.role === "spoke";
@@ -42,7 +44,9 @@ export function openDeviceConnectionSheet(opts: DeviceConnectionSheetOptions): v
   const titleText = fp ? `${label} ${fp}` : label;
   const descText = isBle
     ? `Disconnect for now while keeping ${label} paired to this device, or forget ${label} so another phone, computer, or Raspberry Pi can pair.`
-    : `Close the USB-C connection to ${label}.`;
+    : isNet
+      ? `Close the PoE Ethernet Bridge connection to ${label}.`
+      : `Close the USB-C connection to ${label}.`;
 
   const actionsFootHtml = `
     <button type="button" class="btn device-conn-btn" data-conn-action="disconnect">

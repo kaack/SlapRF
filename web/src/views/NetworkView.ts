@@ -3948,6 +3948,9 @@ export class NetworkView extends Component {
     const isBleHub =
       this.store.timingHardwareMode === "slaprf_ble" ||
       (usbPool.hubConsole() ?? sharedTimerConsole).transportLabel === "Bluetooth";
+    const isEthHub =
+      this.store.timingHardwareMode === "slaprf_net" ||
+      (usbPool.hubConsole() ?? sharedTimerConsole).transportLabel === "Ethernet";
     const hubSelected = selectedSlot === 1;
     const hubDotClass = hub.emergencyMode ? "is-emergency" : hub.online ? "is-up" : hub.populated ? "is-warn" : "";
     const hubTitle = hub.populated && hub.label ? hub.label : "Hub";
@@ -3956,7 +3959,9 @@ export class NetworkView extends Component {
       : hub.viaUsb
         ? isBleHub
           ? `BLE · Ch ${hub.ch}`
-          : `USB · Ch ${hub.ch}`
+          : isEthHub
+            ? `PoE · Ch ${hub.ch}`
+            : `USB · Ch ${hub.ch}`
         : hub.online
           ? `Ch ${hub.ch} · Sync`
           : hub.populated
@@ -4191,6 +4196,7 @@ export class NetworkView extends Component {
 
       const hubConsole = usbPool.hubConsole() ?? sharedTimerConsole;
       const isBleHub = this.store.timingHardwareMode === "slaprf_ble" || hubConsole.transportLabel === "Bluetooth";
+      const isEthHub = this.store.timingHardwareMode === "slaprf_net" || hubConsole.transportLabel === "Ethernet";
       const populatedSpokes = [...spokes.values()].filter((sp) => sp.populated);
       const activeSpokes = populatedSpokes.filter((sp) => sp.espNowActive);
       const totalSpokeFrames = populatedSpokes.reduce((acc, sp) => acc + (sp.frames ?? 0), 0);
@@ -4365,7 +4371,7 @@ export class NetworkView extends Component {
                      </div>`
                   : `<div class="debug-kv-row">
                        <dt>TDMA slot</dt>
-                       <dd>Slot 1 <span class="note">· Beacon master &amp; USB collector</span></dd>
+                       <dd>Slot 1 <span class="note">· ${isEthHub ? "Beacon master &amp; PoE Ethernet collector" : "Beacon master &amp; USB collector"}</span></dd>
                      </div>
                      <div class="debug-kv-row">
                        <dt>2.4 GHz link</dt>

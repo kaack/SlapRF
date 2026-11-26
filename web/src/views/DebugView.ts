@@ -944,6 +944,7 @@ export class DebugView extends Component {
     const mode = this.hwMode();
     const isSlap = isSlapRFMode(mode);
     const isSlapBLE = mode === "slaprf_ble";
+    const isSlapNet = mode === "slaprf_net";
     const isRHNet = mode === "rotorhazard";
     const isRHUSB = mode === "rotorhazard_usb";
     const isLapRF = isLapRFMode(mode);
@@ -1069,6 +1070,37 @@ export class DebugView extends Component {
         "spectrum-scan",
         "Spectrum scan &amp; waterfall",
         `<p>Scans 5180-5917 MHz on the Bluetooth Hub to spot rogue VTXs or 5 GHz Wi-Fi interference (Raceband <strong>R3-R6 overlap Wi-Fi UNII-3</strong>, channels 149-165, 5735-5835 MHz).</p><p><strong>Scan once</strong> captures a single sweep. <strong>Stream</strong> scans continuously with live, average, and max-hold traces (pausing the 8-channel stream while active).</p>`
+      );
+    } else if (isSlapNet) {
+      setIntro(
+        "connection",
+        "PoE Ethernet Bridge",
+        `<p>Connect a SlapRF Hub over the ESP32-P4 PoE Ethernet Bridge (<span class="mono">:5480</span>) to inspect its Ethernet link, sweep timing, and live 5.8 GHz receiver telemetry.</p>`
+      );
+      setIntro(
+        "self-test",
+        "Self-test",
+        `<p>Runs a 10-second end-to-end check over the PoE Ethernet Bridge: console, identity, 5.8 GHz receiver, sweep timing, memory, last restart, course link, and engine feed. Copy the report when troubleshooting.</p>`
+      );
+      setIntro(
+        "status-health",
+        "Status &amp; health",
+        `<p>Identity, Ethernet bridge link, uptime, last restart reason, free memory, sweep timing, and 5.8 GHz boot check. Updates every 2 seconds with a 5-minute trend.</p>`
+      );
+      setIntro(
+        "monitored-channels",
+        "Monitored channels",
+        `<p>The 8 pilot channels scanned each sweep by the PoE-bridged Hub. Click a channel to toggle it on or off (fewer active channels sweep faster). Click <strong>Stream</strong> for live 5.8 GHz signal bars.</p>`
+      );
+      setIntro(
+        "signal-noise",
+        "Signal over time &amp; channel noise",
+        `<p>Click <strong>Stream</strong> to plot live sweeps over Ethernet, crossing peaks, 5 GHz Wi-Fi bursts, noise floors, and pilot thresholds.</p><p>The table below shows mean, spread, max, floor, hits/s, and how often noise reaches a pilot's enter threshold ("would trigger": anything above 0% with no drone flying risks false passes).</p>`
+      );
+      setIntro(
+        "spectrum-scan",
+        "Spectrum scan &amp; waterfall",
+        `<p>Scans 5180-5917 MHz on the PoE-bridged Hub to spot rogue VTXs or 5 GHz Wi-Fi interference (Raceband <strong>R3-R6 overlap Wi-Fi UNII-3</strong>, channels 149-165, 5735-5835 MHz).</p><p><strong>Scan once</strong> captures a single sweep. <strong>Stream</strong> scans continuously with live, average, and max-hold traces (pausing the 8-channel stream while active).</p>`
       );
     } else {
       setIntro(
@@ -3273,13 +3305,15 @@ export class DebugView extends Component {
           const slot = Number(t.dataset.usbSlot);
           const targetConsole = usbPool.slots[slot] ?? usbPool.mainConsole;
           const isBle = this.hwMode() === "slaprf_ble";
+          const isNet = this.hwMode() === "slaprf_net";
           const isHub = targetConsole.lastStatus
             ? targetConsole.lastStatus.role === 1
             : targetConsole.lastConfig?.role === "hub";
-          if (targetConsole.connected && (!isHub || isBle)) {
+          if (targetConsole.connected && (!isHub || isBle || isNet)) {
             openDeviceConnectionSheet({
               console: targetConsole,
               bluetoothMode: isBle,
+              networkMode: isNet,
               onAfterAction: () => {
                 if (slot === 1 && !usbPool.slots[1]?.connected) {
                   usbPool.setDebugSlot(0);
@@ -3297,7 +3331,7 @@ export class DebugView extends Component {
           const isHub = targetConsole?.lastStatus
             ? targetConsole.lastStatus.role === 1
             : targetConsole?.lastConfig?.role === "hub";
-          if (targetConsole && (!isHub || this.hwMode() === "slaprf_ble")) {
+          if (targetConsole && (!isHub || this.hwMode() === "slaprf_ble" || this.hwMode() === "slaprf_net")) {
             if (slot === 1) {
               await usbPool.revertDebugToMain();
             } else {
