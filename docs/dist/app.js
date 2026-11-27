@@ -1,4 +1,4 @@
-(()=>{var define_SLAPRF_ABOUT_INFO_default={frontendVersion:"0.1.0",releaseTag:"v0.0.6",commitHash:"4c500027c3ade49d5ce184b13552f8dffba36c12",branchName:"main",licenseSummary:`This work is dual-licensed under "GNU General Public License, version 3"
+(()=>{var define_SLAPRF_ABOUT_INFO_default={frontendVersion:"0.1.0",releaseTag:"v0.0.6",commitHash:"45a0923dbd3cdc52b6a1e999a019e1e2546dbd1f",branchName:"main",licenseSummary:`This work is dual-licensed under "GNU General Public License, version 3"
 and "Fair Source License, version 0.9"  (or any later version).
 
 You can choose between one of them if you use this work.`,licenseFairSource:`Fair Source License, version 0.9
@@ -11854,7 +11854,7 @@ STATUS?
               <strong class="net-mnode-title">${esc(spTitle)}</strong>
             </span>
             <span class="net-mnode-sub mono">${spSubHtml}</span>
-          </button>`}).join(""),footNote=n2===0?hub.online?"No Spokes linked yet \xB7 powered-on Spokes appear here automatically.":isBleHub?"Connect Hub H1 over Bluetooth to view linked Spokes.":"Connect Hub H1 over USB-C to view linked Spokes.":"Tap Hub or any Spoke node to inspect it below.";return`
+          </button>`}).join(""),footNote=n2===0?hub.online?"No Spokes linked yet \xB7 powered-on Spokes appear here automatically.":isBleHub?"Connect Hub H1 over Bluetooth to view linked Spokes.":isEthHub?"Connect Hub H1 over Ethernet to view linked Spokes.":"Connect Hub H1 over USB-C to view linked Spokes.":"Tap Hub or any Spoke node to inspect it below.";return`
       <div class="net-mobile-graph" data-mobile-topology-graph>
         <div class="net-mobile-graph-stage" style="height:${H2}px">
           <svg class="net-mobile-graph-svg" viewBox="0 0 ${W2} ${H2}" preserveAspectRatio="none" aria-hidden="true">
