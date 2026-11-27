@@ -452,8 +452,17 @@ func resolveConnectedDevice(spec string) string {
 					TunnelState  string `json:"tunnelState"`
 				} `json:"connectionProperties"`
 				DeviceProperties struct {
-					Name string `json:"name"`
+					Name     string `json:"name"`
+					Provider string `json:"provider"`
 				} `json:"deviceProperties"`
+				HardwareProperties struct {
+					Reality string `json:"reality"`
+				} `json:"hardwareProperties"`
+				Properties struct {
+					Hardware struct {
+						Reality string `json:"reality"`
+					} `json:"hardware"`
+				} `json:"properties"`
 			} `json:"devices"`
 		} `json:"result"`
 	}
@@ -461,6 +470,13 @@ func resolveConnectedDevice(spec string) string {
 		log.Fatalf("[build-ios] parse devicectl JSON: %v", err)
 	}
 	for _, d := range parsed.Result.Devices {
+		reality := d.HardwareProperties.Reality
+		if reality == "" {
+			reality = d.Properties.Hardware.Reality
+		}
+		if strings.EqualFold(reality, "simulated") || strings.Contains(strings.ToLower(d.DeviceProperties.Provider), "simulator") {
+			continue
+		}
 		if d.Identifier != "" && strings.EqualFold(d.ConnectionProperties.PairingState, "paired") {
 			log.Printf("[build-ios] Auto-selected paired device %q (%s)", d.DeviceProperties.Name, d.Identifier)
 			return d.Identifier
