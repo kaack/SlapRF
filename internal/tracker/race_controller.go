@@ -1002,6 +1002,16 @@ func (e *Engine) ConfigureAndGenerateRaceForID(
 		e.mu.Unlock()
 		return snap
 	}
+	if e.raceState.Lifecycle == domain.LifecycleCompleted || e.raceState.Lifecycle == domain.LifecycleScrapped || e.raceState.IsComplete {
+		var snap domain.RaceTournamentState
+		if swap.swapped {
+			snap = e.exitTargetRaceLocked(&swap, false)
+		} else {
+			snap = cloneRaceState(e.raceState)
+		}
+		e.mu.Unlock()
+		return snap
+	}
 	prevCfg := e.raceState.Config.Normalized()
 	nextCfg := cfg.Normalized()
 	if strings.TrimSpace(nextCfg.EventName) == "" {
@@ -1056,7 +1066,10 @@ func (e *Engine) ConfigureAndGenerateRaceForID(
 		if e.syncNewlyResolvedAllPilotsChainsLocked() {
 			e.resolveActiveTournamentLocked()
 		}
-	} else if e.raceState.RaceID != "" {
+		if e.raceState.RaceID != "" && !swap.swapped {
+			e.syncActiveRaceToEventLocked()
+		}
+	} else if e.raceState.RaceID != "" && !swap.swapped {
 		e.syncActiveRaceToEventLocked()
 	}
 

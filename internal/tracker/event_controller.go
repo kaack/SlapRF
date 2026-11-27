@@ -1705,19 +1705,22 @@ func (e *Engine) eventActionBodyLocked(
 
 		case "reopen_race":
 			willBeActive := hasAnyStartedHeatInState(&e.raceState)
+			reopenAsPaused := false
 			if willBeActive {
-				if other := e.findOtherOngoingRaceLocked(e.raceState.RaceID); other != nil {
+				otherOngoing := e.findOtherOngoingRaceLocked(e.raceState.RaceID) != nil
+				practiceActive := e.practiceState.ActiveSessionID != ""
+				if otherOngoing || practiceActive {
 					if req.PreemptOngoing {
-						if e.pauseAllOtherOngoingRacesLocked(e.raceState.RaceID) {
+						if otherOngoing && e.pauseAllOtherOngoingRacesLocked(e.raceState.RaceID) {
+							cfgChanged = true
+						}
+						if practiceActive && e.pauseActivePracticeSessionLocked() {
+							practiceChanged = true
 							cfgChanged = true
 						}
 					} else {
-						return cloneRaceState(e.raceState), fmt.Errorf("cannot reopen race %q while race %q is ongoing — pause or complete it first", raceDisplayName(&e.raceState), raceDisplayName(other))
+						reopenAsPaused = true
 					}
-				}
-				if e.stopActivePracticeSessionLocked() {
-					practiceChanged = true
-					cfgChanged = true
 				}
 			}
 			e.resetAbortedHeatsToStagedLocked()
@@ -1735,7 +1738,9 @@ func (e *Engine) eventActionBodyLocked(
 					}
 				}
 			}
-			if willBeActive {
+			if reopenAsPaused {
+				e.raceState.Lifecycle = domain.LifecyclePaused
+			} else if willBeActive {
 				e.raceState.Lifecycle = domain.LifecycleActive
 			} else {
 				e.raceState.Lifecycle = domain.LifecycleDraft
@@ -4448,7 +4453,7 @@ func (e *Engine) feederSourceLabelLocked(f *domain.SeatFeeder) string {
 		return ""
 	}
 	if f.FromHeatID != "" {
-		return fmt.Sprintf("%s · %s", race.Ordinal(f.FromRank), f.FromHeatID)
+		return fmt.Sprintf("%s · %s", race.Ordinal(f.FromRank), race.FormatHeatShortLabel(f.FromHeatID))
 	}
 	if f.FromRoundID != "" {
 		if srcR := e.findRoundByIDLocked(f.FromRoundID); srcR != nil {

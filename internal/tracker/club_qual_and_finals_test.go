@@ -203,3 +203,82 @@ func TestClubQualifyingAddRoundFixedLineupsAwayReseedAndFinalsStructure(t *testi
 		t.Fatalf("expected 4 confirmed qualifying heats preserved + B-H1 + CTA-G1, got confirmedQual=%d hasBMain=%v hasAMainCTA=%v", confirmedQualCount, hasBMain, hasAMainCTA)
 	}
 }
+
+func TestLegacyShortLabelRestoreAndRaceSettingsWhilePracticeActive(t *testing.T) {
+	e := NewRealEngine()
+
+	// 1. Create a race, apply template, corrupt ShortLabel back to legacy "Q1-1"/"CTA-1", and RestoreState
+	r1, err := e.EventAction(EventActionPayload{Action: "create_race", Name: "Legacy Label Race"})
+	if err != nil {
+		t.Fatalf("create_race: %v", err)
+	}
+	_, _ = e.EventAction(EventActionPayload{Action: "check_in_all", RaceID: r1.RaceID})
+	_, err = e.BracketEditAction(BracketEditPayload{
+		Action:        "apply_template",
+		RaceID:        r1.RaceID,
+		TemplateID:    "qual_chase_the_ace",
+		PilotsPerHeat: 4,
+	})
+	if err != nil {
+		t.Fatalf("apply_template: %v", err)
+	}
+	snap := e.ExportState()
+	for ri := range snap.EventState.Races {
+		for hi := range snap.EventState.Races[ri].Heats {
+			h := &snap.EventState.Races[ri].Heats[hi]
+			h.ShortLabel = h.ID
+		}
+	}
+	for hi := range snap.RaceState.Heats {
+		snap.RaceState.Heats[hi].ShortLabel = snap.RaceState.Heats[hi].ID
+	}
+
+	e2 := NewRealEngine()
+	e2.RestoreState(snap, true)
+	for _, h := range e2.RaceSnapshot().Heats {
+		if h.ID == "Q1-1" && h.ShortLabel != "Q1-H1" {
+			t.Fatalf("expected restored Q1-1 ShortLabel upgraded to Q1-H1, got %q", h.ShortLabel)
+		}
+		if h.ID == "CTA-1" && h.ShortLabel != "CTA-G1" {
+			t.Fatalf("expected restored CTA-1 ShortLabel upgraded to CTA-G1, got %q", h.ShortLabel)
+		}
+	}
+
+	// 2. Start an active Practice session and verify Race Settings & Reopen work without stopping Practice!
+	ps, err := e2.PracticeAction(PracticeActionPayload{Action: "create_session", Name: "Warmup Packs"})
+	if err != nil {
+		t.Fatalf("create_session: %v", err)
+	}
+	sessID := ps.SelectedSessionID
+	ps, err = e2.PracticeAction(PracticeActionPayload{Action: "start_session", SessionID: sessID, PreemptOngoing: true})
+	if err != nil {
+		t.Fatalf("start_session: %v", err)
+	}
+	if ps.ActiveSessionID != sessID {
+		t.Fatalf("expected practice session %s active", sessID)
+	}
+
+	// Update Race Settings (targetLaps=5, countdownSec=3) while Practice is active -> syncs into EventState.Races cleanly!
+	nextCfg := e2.RaceSnapshot().Config
+	nextCfg.TargetLaps = 5
+	nextCfg.CountdownSec = 3
+	updatedRace := e2.ConfigureAndGenerateRaceForID(r1.RaceID, nextCfg, false, true)
+	if updatedRace.Config.TargetLaps != 5 || updatedRace.Config.CountdownSec != 3 {
+		t.Fatalf("expected updated race config persisted, got %+v", updatedRace.Config)
+	}
+	foundInEvent := false
+	for _, er := range e2.EventSnapshot().Races {
+		if er.RaceID == r1.RaceID {
+			foundInEvent = true
+			if er.Config.TargetLaps != 5 || er.Config.CountdownSec != 3 {
+				t.Fatalf("expected EventState.Races synced with updated config, got %+v", er.Config)
+			}
+		}
+	}
+	if !foundInEvent {
+		t.Fatalf("expected race %s in EventState.Races", r1.RaceID)
+	}
+	if e2.PracticeSnapshot().ActiveSessionID != sessID {
+		t.Fatalf("expected practice session still active after editing race settings")
+	}
+}

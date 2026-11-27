@@ -1053,6 +1053,35 @@ func ReconcileStagesFromRoundContents(st *domain.RaceTournamentState, rounds []d
 	}
 }
 
+// UpgradeLegacyHeatShortLabels upgrades any raw heat IDs stored in `Heat.ShortLabel`
+// (for example `"Q1-1"` -> `"Q1-H1"`, `"CTA-1"` -> `"CTA-G1"`, `"OQ-1"` -> `"OQ-H1"`)
+// and feeder seat `SourceLabel` strings (`"1st · W1-1"` -> `"1st · W1-H1"`) on restored races.
+func UpgradeLegacyHeatShortLabels(st *domain.RaceTournamentState) {
+	if st == nil {
+		return
+	}
+	for i := range st.Heats {
+		h := &st.Heats[i]
+		if h.ShortLabel == "" || h.ShortLabel == h.ID {
+			h.ShortLabel = FormatHeatShortLabel(h.ID)
+		} else {
+			upgraded := FormatHeatShortLabel(h.ShortLabel)
+			if upgraded != "" && upgraded != h.ShortLabel {
+				h.ShortLabel = upgraded
+			}
+		}
+		for si := range h.Seats {
+			s := &h.Seats[si]
+			if s.Feeder != nil && s.Feeder.FromHeatID != "" && s.Feeder.FromRank > 0 {
+				legacy := fmt.Sprintf("%s · %s", Ordinal(s.Feeder.FromRank), s.Feeder.FromHeatID)
+				if s.SourceLabel == legacy {
+					s.SourceLabel = fmt.Sprintf("%s · %s", Ordinal(s.Feeder.FromRank), FormatHeatShortLabel(s.Feeder.FromHeatID))
+				}
+			}
+		}
+	}
+}
+
 // MigrateLegacyStagesToUnifiedGraph converts any multi-stage tournament (`TotalStages > 1`, `len(Stages) > 1`,
 // `StructureTwoStage`, or `FromStageSeed` portal wires) into the unified single-graph architecture
 // (`StageIndex = 1`, `TotalStages = 1`) with direct `RoundConnection` wires and non-overlapping
@@ -1061,6 +1090,7 @@ func MigrateLegacyStagesToUnifiedGraph(st *domain.RaceTournamentState) bool {
 	if st == nil {
 		return false
 	}
+	UpgradeLegacyHeatShortLabels(st)
 	needs := len(st.Stages) > 1 || st.TotalStages > 1 || st.Config.Structure == domain.StructureTwoStage || len(st.StageConnections) > 0
 	if !needs {
 		for _, h := range st.Heats {

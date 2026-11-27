@@ -1943,7 +1943,7 @@ export function openRaceSettingsModal(opts: RaceSettingsModalOptions): void {
 
       void renamePromise
         .then(() => tagsPromise)
-        .then(() => api.configureRace(nextCfg, false, true))
+        .then(() => api.configureRace(nextCfg, false, true, curRace.raceId))
         .then(() => close())
         .catch((err) => {
           saveBtn.disabled = false;

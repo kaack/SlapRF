@@ -187,6 +187,28 @@ interface StoredCanvasPanelsLayout {
 const CANVAS_LAYOUT_STORAGE_KEY = "slaprf.rc.canvasPanels.v13";
 const RACE_CAMERAS_STORAGE_KEY = "slaprf.rc.cameras.v2";
 const DESKTOP_SETUP_VIEW_STORAGE_KEY = "slaprf.rc.setupView.v1";
+export const SETUP_VIEW_INTRO_STORAGE_KEY = "slaprf.rc.setupViewIntroSeen.v1";
+
+function hasSeenSetupViewIntro(): boolean {
+  try {
+    return (
+      typeof window !== "undefined" &&
+      window.localStorage.getItem(SETUP_VIEW_INTRO_STORAGE_KEY) === "1"
+    );
+  } catch {
+    return true;
+  }
+}
+
+function markSetupViewIntroSeen(): void {
+  try {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(SETUP_VIEW_INTRO_STORAGE_KEY, "1");
+    }
+  } catch {
+    // Ignore storage quota / privacy errors
+  }
+}
 
 function loadStoredDesktopSetupView(): DesktopSetupViewMode {
   try {
@@ -675,6 +697,7 @@ export class RacesView extends Component {
 
   private activeTab: WorkspaceTab = "edit";
   private desktopSetupView: DesktopSetupViewMode = loadStoredDesktopSetupView();
+  private showSetupViewIntro = false;
   private prevRenderedSetupView: "" | DesktopSetupViewMode = "";
   private readonly desktopTableUi: DesktopRaceTableUiState =
     createDefaultDesktopRaceTableState();
@@ -852,6 +875,7 @@ export class RacesView extends Component {
   public override onDeactivate(): void {
     this.isViewActive = false;
     this.dismissAutoPromptTemplateModal();
+    this.showSetupViewIntro = false;
     closeActiveRoundModal();
     closeActiveDesktopTableModal();
     closeActiveMobileEditorSheet();
@@ -2764,6 +2788,10 @@ export class RacesView extends Component {
       this.saveCurrentCamera();
     }
     this.dismissAutoPromptTemplateModal();
+    if (nextTab !== "edit" && this.showSetupViewIntro) {
+      markSetupViewIntroSeen();
+      this.showSetupViewIntro = false;
+    }
     closeActiveRoundModal();
     closeActiveDesktopTableModal();
     closeActiveMobileEditorSheet();
@@ -3136,6 +3164,7 @@ export class RacesView extends Component {
       this.editingTagsForRaceId,
       this.mobileSelectedRaceId,
       this.activeTab,
+      this.showSetupViewIntro ? 1 : 0,
       this.isMobileViewport() ? 1 : 0,
       this.mobileEditorUi.activePageId,
       this.mobileEditorUi.connectToPreviousOnAdd ? 1 : 0,
@@ -4153,6 +4182,7 @@ export class RacesView extends Component {
           this.render();
           const curSt = this.getCurrentViewStage();
           this.fitAndStoreCurrentCamera(this.activeTab, curSt);
+          this.maybeShowSetupViewIntroCoachmark();
         })
         .catch(this.reportErr);
 
@@ -4194,6 +4224,21 @@ export class RacesView extends Component {
     void doApply();
   }
 
+  private maybeShowSetupViewIntroCoachmark(): void {
+    if (this.isMobileViewport() || hasSeenSetupViewIntro()) return;
+    this.showSetupViewIntro = true;
+    this.lastSig = "";
+    this.render();
+  }
+
+  private dismissSetupViewIntroCoachmark(): void {
+    markSetupViewIntroSeen();
+    if (!this.showSetupViewIntro) return;
+    this.showSetupViewIntro = false;
+    this.lastSig = "";
+    this.render();
+  }
+
   private openTemplatesDialog(autoPrompted = false): void {
     const race = this.currentRace;
     this.fabOpen = false;
@@ -4217,6 +4262,7 @@ export class RacesView extends Component {
         const cur = this.currentRace;
         const roundCount = (cur.rounds ?? []).filter((r) => !isHandoffPortalRound(r)).length;
         if (!cur.generated && roundCount === 0) {
+          this.maybeShowSetupViewIntroCoachmark();
           return;
         }
         const startedHeats = cur.heats.filter((h) => !isHeatUnstarted(h.state)).length;
@@ -4236,6 +4282,7 @@ export class RacesView extends Component {
                 this.bracketStage = 0;
                 this.mobileEditorUi.activePageId = "";
                 this.switchWorkspaceTab("edit");
+                this.maybeShowSetupViewIntroCoachmark();
               })
               .catch(this.reportErr),
         });
@@ -4860,6 +4907,10 @@ export class RacesView extends Component {
   private handleGlobalKeyDown = (e: KeyboardEvent): void => {
     if (!this.isViewActive || this.showDirectory) return;
     if (document.querySelector(".slaprf-modal-backdrop")) return;
+    if (e.key === "Escape" && this.showSetupViewIntro) {
+      this.dismissSetupViewIntroCoachmark();
+      return;
+    }
     const active = document.activeElement;
     if (
       active instanceof HTMLInputElement ||
@@ -5345,8 +5396,35 @@ export class RacesView extends Component {
       return;
     }
 
+    const setupIntroBtn = target.closest<HTMLButtonElement>("[data-setup-intro-act]");
+    if (setupIntroBtn) {
+      const introAct = setupIntroBtn.dataset.setupIntroAct;
+      markSetupViewIntroSeen();
+      this.showSetupViewIntro = false;
+      if (introAct === "switch-other") {
+        const nextView: DesktopSetupViewMode =
+          this.desktopSetupView === "graph" ? "table" : "graph";
+        if (this.desktopSetupView === "graph") {
+          this.saveCurrentCamera();
+        }
+        this.desktopSetupView = nextView;
+        persistDesktopSetupView(nextView);
+        this.lastSig = "";
+        this.render();
+        this.triggerDesktopWorkspaceFade(true);
+      } else {
+        this.lastSig = "";
+        this.render();
+      }
+      return;
+    }
+
     const setupViewBtn = target.closest<HTMLButtonElement>("[data-setup-view]");
     if (setupViewBtn) {
+      if (this.showSetupViewIntro) {
+        markSetupViewIntroSeen();
+        this.showSetupViewIntro = false;
+      }
       const nextView: DesktopSetupViewMode =
         setupViewBtn.dataset.setupView === "table" ? "table" : "graph";
       if (this.desktopSetupView !== nextView) {
@@ -5358,6 +5436,9 @@ export class RacesView extends Component {
         this.lastSig = "";
         this.render();
         this.triggerDesktopWorkspaceFade(true);
+      } else {
+        this.lastSig = "";
+        this.render();
       }
       return;
     }
@@ -6303,35 +6384,15 @@ export class RacesView extends Component {
           }
           this.lifecyclePrompt = "";
           this.confirmReset = false;
-          if (
-            lifecycleAction === "start_race" ||
-            lifecycleAction === "resume_race" ||
-            lifecycleAction === "reopen_race"
-          ) {
-            const verb =
-              lifecycleAction === "resume_race"
-                ? "Resuming"
-                : lifecycleAction === "reopen_race"
-                  ? "Reopening"
-                  : "Starting";
+          if (lifecycleAction === "start_race" || lifecycleAction === "resume_race") {
+            const verb = lifecycleAction === "resume_race" ? "Resuming" : "Starting";
             this.runWithPreemptCheck(curRace, verb, "OK", (preemptOngoing) =>
-              this.api
-                .eventAction({
-                  action: "race_lifecycle",
-                  raceId: curRace.raceId,
-                  lifecycleAction,
-                  preemptOngoing,
-                })
-                .then(() => {
-                  if (!this.disposed && lifecycleAction === "reopen_race") {
-                    const updated = this.currentRace;
-                    if (updated.activeStageIndex && updated.activeStageIndex >= 1) {
-                      this.bracketStage = updated.activeStageIndex;
-                    }
-                    this.lastSig = "";
-                    this.render();
-                  }
-                })
+              this.api.eventAction({
+                action: "race_lifecycle",
+                raceId: curRace.raceId,
+                lifecycleAction,
+                preemptOngoing,
+              })
             );
           } else {
             void this.api
@@ -6339,6 +6400,16 @@ export class RacesView extends Component {
                 action: "race_lifecycle",
                 raceId: curRace.raceId,
                 lifecycleAction,
+              })
+              .then(() => {
+                if (!this.disposed && lifecycleAction === "reopen_race") {
+                  const updated = this.currentRace;
+                  if (updated.activeStageIndex && updated.activeStageIndex >= 1) {
+                    this.bracketStage = updated.activeStageIndex;
+                  }
+                  this.lastSig = "";
+                  this.render();
+                }
               })
               .catch(this.reportErr);
           }
@@ -7012,6 +7083,8 @@ export class RacesView extends Component {
                                              role="menuitem"
                                              data-race-act="dir-open-race-settings"
                                              data-race-id="${esc(rid)}"
+                                             ${r.lifecycle === "completed" || r.lifecycle === "scrapped" || r.isComplete ? "disabled" : ""}
+                                             title="${r.lifecycle === "completed" || r.lifecycle === "scrapped" || r.isComplete ? "Reopen this race to edit settings" : "Race settings"}"
                                            ><span>Settings</span></button>
                                            <button
                                              type="button"
@@ -7578,28 +7651,56 @@ export class RacesView extends Component {
   }
 
   private renderDesktopSetupViewToggle(): string {
+    const showCoach = this.showSetupViewIntro && !this.isMobileViewport();
+    const otherModeLabel = this.desktopSetupView === "graph" ? "Table" : "Graph";
+    const coachmarkHtml = showCoach
+      ? `<div class="rc-setup-view-coachmark" data-setup-view-coachmark role="region" aria-label="Setup view mode guide">
+          <div class="rc-setup-coach-arrow" aria-hidden="true"></div>
+          <div class="rc-setup-coach-head">
+            <strong>Two Ways to Set Up Rounds</strong>
+            <button type="button" class="rc-setup-coach-close" data-setup-intro-act="dismiss" aria-label="Dismiss guide" title="Dismiss">${icons.close(13)}</button>
+          </div>
+          <div class="rc-setup-coach-modes">
+            <div class="rc-setup-coach-item ${this.desktopSetupView === "graph" ? "is-current" : ""}">
+              <strong>Graph</strong>
+              <span>Move round cards freely and wire progression lines visually.</span>
+            </div>
+            <div class="rc-setup-coach-item ${this.desktopSetupView === "table" ? "is-current" : ""}">
+              <strong>Table</strong>
+              <span>Manage side-by-side round columns with heats stacked in each column.</span>
+            </div>
+          </div>
+          <div class="rc-setup-coach-foot">
+            <button type="button" class="btn btn-ghost btn-xs" data-setup-intro-act="switch-other">Try ${otherModeLabel} View</button>
+            <button type="button" class="btn btn-armed btn-xs" data-setup-intro-act="dismiss">Got it</button>
+          </div>
+        </div>`
+      : "";
     return `
-      <div
-        class="rc-setup-view-toggle"
-        role="group"
-        aria-label="Setup view mode"
-        data-setup-view-switcher
-        data-active-view="${this.desktopSetupView}"
-      >
-        <button
-          type="button"
-          class="rc-setup-view-btn ${this.desktopSetupView === "graph" ? "is-active" : ""}"
-          data-setup-view="graph"
-          aria-pressed="${this.desktopSetupView === "graph" ? "true" : "false"}"
-          title="Switch to Graph view"
-        >Graph</button>
-        <button
-          type="button"
-          class="rc-setup-view-btn ${this.desktopSetupView === "table" ? "is-active" : ""}"
-          data-setup-view="table"
-          aria-pressed="${this.desktopSetupView === "table" ? "true" : "false"}"
-          title="Switch to Table view"
-        >Table</button>
+      <div class="rc-setup-view-wrap ${showCoach ? "has-coachmark" : ""}">
+        <div
+          class="rc-setup-view-toggle ${showCoach ? "has-coachmark-highlight" : ""}"
+          role="group"
+          aria-label="Setup view mode"
+          data-setup-view-switcher
+          data-active-view="${this.desktopSetupView}"
+        >
+          <button
+            type="button"
+            class="rc-setup-view-btn ${this.desktopSetupView === "graph" ? "is-active" : ""}"
+            data-setup-view="graph"
+            aria-pressed="${this.desktopSetupView === "graph" ? "true" : "false"}"
+            title="Switch to Graph view"
+          >Graph</button>
+          <button
+            type="button"
+            class="rc-setup-view-btn ${this.desktopSetupView === "table" ? "is-active" : ""}"
+            data-setup-view="table"
+            aria-pressed="${this.desktopSetupView === "table" ? "true" : "false"}"
+            title="Switch to Table view"
+          >Table</button>
+        </div>
+        ${coachmarkHtml}
       </div>`;
   }
 

@@ -2245,7 +2245,7 @@ function openMobileRaceSettingsSheet(cb: MobileRaceEditorCallbacks): void {
 
     void renamePromise
       .then(() => tagsPromise)
-      .then(() => cb.api.configureRace(nextCfg, false, true))
+      .then(() => cb.api.configureRace(nextCfg, false, true, curRace.raceId))
       .then(() => close(false))
       .catch((err) => {
         saveBtn.disabled = false;

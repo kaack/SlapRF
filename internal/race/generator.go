@@ -1924,7 +1924,7 @@ func buildFeederSeats(feeders []domain.SeatFeeder, seatChannels []uint8) []domai
 			fc := feeders[i]
 			seats[i] = domain.HeatSeat{
 				SeatIndex:    i + 1,
-				SourceLabel:  fmt.Sprintf("%s · %s", Ordinal(fc.FromRank), fc.FromHeatID),
+				SourceLabel:  fmt.Sprintf("%s · %s", Ordinal(fc.FromRank), FormatHeatShortLabel(fc.FromHeatID)),
 				Feeder:       &fc,
 				Band:         band,
 				Channel:      ch,
