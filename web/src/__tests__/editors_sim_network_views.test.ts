@@ -360,6 +360,45 @@ describe("widgets/PilotSlotsEditor & TrackEditor — Global Pilots & Course Line
       editor.destroy();
     }
   });
+
+  it("defaults 1-gate TrackEditor to Single Timer mode (hiding unassigned tray) and expands Splits on toggle", async () => {
+    const store = makeStore({
+      gates: [makeGate(1, { name: "Start/Finish", role: "START_FINISH", assignedTimerId: 1, trackOrder: 0 })],
+      timers: [
+        makeDetectedTimer(1, { timerLabel: "H1", isHub: true, online: true }),
+        makeDetectedTimer(2, { timerLabel: "T1", isHub: false, online: true }),
+      ],
+    });
+    const { api, calls } = makeMockApiClient(store);
+    const root = mountHtml(`<div id="track-single-host"></div>`);
+    const editor = new TrackEditor(root.querySelector("#track-single-host")!, store, api);
+
+    try {
+      expect(root.querySelector("[data-single-timer-card]")).not.toBeNull();
+      expect(root.querySelector("[data-unassigned-tray]")).toBeNull();
+      expect(root.querySelectorAll(".gate-line-item[data-gate]")).toHaveLength(1);
+
+      const sel = root.querySelector<HTMLSelectElement>("[data-single-timer-select]")!;
+      expect(sel).not.toBeNull();
+      sel.value = "2";
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+      await flushMicrotasks();
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "updateTrackNode" &&
+            (c.args[0] as { assignedTimerId?: number }).assignedTimerId === 2
+        )
+      ).toBe(true);
+
+      root.querySelector<HTMLButtonElement>("[data-track-mode='multi']")!.click();
+      await flushMicrotasks();
+      expect(root.querySelector("[data-single-timer-card]")).toBeNull();
+      expect(root.querySelector("[data-unassigned-tray]")).not.toBeNull();
+    } finally {
+      editor.destroy();
+    }
+  });
 });
 
 describe("services/sim_serial_port — Simulated ESP32-C5 USB Serial & SLIP Bootloader", () => {

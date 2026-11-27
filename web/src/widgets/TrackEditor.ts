@@ -73,6 +73,8 @@ export class TrackEditor extends Component {
   private trackScrollCueRaf = 0;
   private trackMomentumRaf = 0;
   private suppressNextTrackClick = false;
+  private modeOverride: "single" | "multi" | null = null;
+  private seenMultiNodes = false;
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient, opts: TrackEditorOptions = {}) {
     super(el);
@@ -80,8 +82,43 @@ export class TrackEditor extends Component {
     this.api = api;
     this.isReadOnlyFn = opts.readOnly ?? (() => false);
 
+    this.listen(el, "change", (e) => {
+      if (this.isReadOnlyFn()) return;
+      const target = e.target as HTMLElement | null;
+      if (target instanceof HTMLSelectElement && target.hasAttribute("data-single-timer-select")) {
+        const nextTimerId = Number(target.value) || 0;
+        if (nextTimerId > 0) {
+          void this.selectSingleTimer(nextTimerId);
+        }
+      }
+    });
+
     this.listen(el, "click", (e) => {
       const target = e.target as HTMLElement;
+      const modeBtn = target.closest<HTMLButtonElement>("[data-track-mode]");
+      if (modeBtn && !this.isReadOnlyFn()) {
+        e.preventDefault();
+        e.stopPropagation();
+        const nextMode = modeBtn.dataset.trackMode;
+        if (nextMode === "single") {
+          void this.switchToSingleTimerMode();
+        } else if (nextMode === "multi") {
+          this.modeOverride = "multi";
+          this.seenMultiNodes = true;
+          this.render(true);
+        }
+        return;
+      }
+      const assignSingleBtn = target.closest<HTMLButtonElement>("[data-assign-single-timer]");
+      if (assignSingleBtn && !this.isReadOnlyFn()) {
+        e.preventDefault();
+        e.stopPropagation();
+        const nextTimerId = Number(assignSingleBtn.dataset.assignSingleTimer) || 0;
+        if (nextTimerId > 0) {
+          void this.selectSingleTimer(nextTimerId);
+        }
+        return;
+      }
       const scrollBtn = target.closest<HTMLButtonElement>("[data-track-scroll]");
       if (scrollBtn) {
         e.preventDefault();
@@ -127,7 +164,7 @@ export class TrackEditor extends Component {
     this.listen(el, "pointerdown", (e) => {
       if (e.button !== 0 && e.pointerType === "mouse") return;
       const target = e.target as HTMLElement;
-      if (target.closest("[data-track-scroll], [data-make-start], [data-delete-timer]")) {
+      if (target.closest("[data-track-scroll], [data-make-start], [data-delete-timer], [data-track-mode], [data-single-timer-select], [data-assign-single-timer]")) {
         return;
       }
 
@@ -239,6 +276,168 @@ export class TrackEditor extends Component {
     return d?.isHub ? "H1" : `T${Math.max(1, timerId - 1)}`;
   }
 
+  private resolveEffectiveMode(nodes: TrackNode[]): "single" | "multi" {
+    if (nodes.length > 1) {
+      this.seenMultiNodes = true;
+      return "multi";
+    }
+    if (this.modeOverride === "multi") {
+      return "multi";
+    }
+    if (this.modeOverride === "single") {
+      return "single";
+    }
+    return this.seenMultiNodes ? "multi" : "single";
+  }
+
+  private pickPreferredSingleTimer(nodes: TrackNode[], detected: DetectedTimer[]): DetectedTimer | undefined {
+    const onlineHub = detected.find((d) => d.isHub && this.isTimerActive(d));
+    if (onlineHub) return onlineHub;
+    const startNode = nodes.find((n) => n.role === "START_FINISH") ?? nodes[0];
+    const startTimerId = startNode?.assignedTimerId ?? 0;
+    if (startTimerId > 0) {
+      const matched = detected.find((d) => d.timerId === startTimerId);
+      if (matched) return matched;
+    }
+    const anyHub = detected.find((d) => d.isHub);
+    if (anyHub) return anyHub;
+    return detected.find((d) => this.isTimerActive(d)) ?? detected[0];
+  }
+
+  private async switchToSingleTimerMode(): Promise<void> {
+    this.modeOverride = "single";
+    this.seenMultiNodes = false;
+    const nodes = this.orderedNodes;
+    const detected = this.detectedTimers;
+    const preferred = this.pickPreferredSingleTimer(nodes, detected);
+
+    if (nodes.length > 1) {
+      this.isDragging = true;
+      try {
+        const keepNode = nodes.find((n) => n.role === "START_FINISH") ?? nodes[0];
+        for (const n of nodes) {
+          if (n.gateId !== keepNode.gateId) {
+            await this.api.removeTrackNode(n.gateId);
+          }
+        }
+        const refreshedKeep = this.store.node(keepNode.gateId) ?? keepNode;
+        const targetTimerId = preferred?.timerId ?? refreshedKeep.assignedTimerId ?? 0;
+        if (
+          refreshedKeep.role !== "START_FINISH" ||
+          (targetTimerId > 0 && refreshedKeep.assignedTimerId !== targetTimerId)
+        ) {
+          await this.save(refreshedKeep, {
+            role: "START_FINISH",
+            assignedTimerId: targetTimerId > 0 ? targetTimerId : refreshedKeep.assignedTimerId,
+          });
+        }
+      } finally {
+        this.isDragging = false;
+      }
+    } else if (nodes.length === 0 && preferred) {
+      await this.api.addTrackNode("", preferred.timerId, 0);
+    }
+    this.render(true);
+  }
+
+  private async selectSingleTimer(timerId: number): Promise<void> {
+    this.modeOverride = "single";
+    this.seenMultiNodes = false;
+    const nodes = this.orderedNodes;
+    if (nodes.length === 0) {
+      await this.api.addTrackNode("", timerId, 0);
+    } else {
+      const keepNode = nodes.find((n) => n.role === "START_FINISH") ?? nodes[0];
+      for (const n of nodes) {
+        if (n.gateId !== keepNode.gateId) {
+          await this.api.removeTrackNode(n.gateId);
+        }
+      }
+      const refreshedKeep = this.store.node(keepNode.gateId) ?? keepNode;
+      await this.save(refreshedKeep, { role: "START_FINISH", assignedTimerId: timerId });
+    }
+    this.render(true);
+  }
+
+  private renderSingleTimerStage(
+    node: TrackNode | undefined,
+    detected: DetectedTimer[],
+    readOnly: boolean
+  ): string {
+    const assignedId = node?.assignedTimerId ?? 0;
+    const hasTimer = Boolean(node && assignedId > 0);
+    const tiedTimer = hasTimer ? detected.find((d) => d.timerId === assignedId) : undefined;
+    const shortCode = hasTimer ? this.formatTimerShortCode(assignedId, detected, node?.timerLabel) : "—";
+    const color = hasTimer ? timerColor(this.store, assignedId) : "#64748b";
+    const isOnline = hasTimer ? this.isTimerActive(tiedTimer, node) : false;
+    const preferred = !hasTimer ? this.pickPreferredSingleTimer([], detected) : undefined;
+    const preferredCode = preferred ? this.formatTimerShortCode(preferred.timerId, detected, preferred.timerLabel) : "";
+
+    const puckHtml = node
+      ? `<div
+          class="gate-line-item is-start is-single-mode ${hasTimer ? "has-timer" : "is-empty-gate"} ${hasTimer && !isOnline ? "is-offline" : ""}"
+          data-gate="${node.gateId}"
+          data-assigned-timer="${assignedId}"
+          data-timer-color="${color}"
+          style="--c:${color}"
+        >
+          <span class="gate-node-circle ${hasTimer ? (isOnline ? "is-filled" : "is-filled is-offline") : "is-unassigned"}">
+            ${hasTimer ? `<span class="gate-node-timer-code mono">${esc(shortCode)}</span>` : `<span class="gate-node-empty-label"></span>`}
+          </span>
+        </div>`
+      : `<div class="gate-line-item is-empty-placeholder is-single-mode" data-empty-placeholder>
+          <span class="gate-node-circle is-unassigned is-empty-slot-circle">
+            <span class="gate-node-empty-label"></span>
+          </span>
+        </div>`;
+
+    const copyHtml = hasTimer
+      ? `<div class="gate-single-timer-copy">
+          <strong>Start / Finish Gate · ${esc(shortCode)}${tiedTimer?.isHub ? " (Hub)" : ""}${isOnline ? "" : " · Offline"}</strong>
+          <span class="gate-single-timer-sub"><span class="rc-lbl-full">Every pass over ${esc(shortCode)} counts a full lap. Switch to Multiple Timers above only if you place extra split gates on the course.</span><span class="rc-lbl-short">Counts full laps at ${esc(shortCode)}.</span></span>
+        </div>`
+      : preferred && !readOnly
+        ? `<div class="gate-single-timer-copy">
+            <strong>No Start / Finish timer assigned yet</strong>
+            <span class="gate-single-timer-sub">Assign ${esc(preferredCode)} as your Start / Finish gate in one click.</span>
+          </div>`
+        : `<div class="gate-single-timer-copy">
+            <strong>No timer connected yet</strong>
+            <span class="gate-single-timer-sub">Connect a timer in the top bar and it will bind automatically as Start / Finish.</span>
+          </div>`;
+
+    const actionHtml = readOnly
+      ? ""
+      : !hasTimer && preferred
+        ? `<button type="button" class="btn btn-armed btn-xs" data-assign-single-timer="${preferred.timerId}">
+             ${icons.checkered(13)}<span>Use ${esc(preferredCode)}</span>
+           </button>`
+        : detected.length > 1
+          ? `<label class="gate-single-timer-picker">
+               <span class="rc-lbl-full">Timer</span>
+               <select class="input input-sm gate-single-timer-select" data-single-timer-select aria-label="Start / Finish timer">
+                 ${detected
+                   .map((d) => {
+                     const code = this.formatTimerShortCode(d.timerId, detected, d.timerLabel);
+                     const roleBit = d.isHub ? " (Hub)" : "";
+                     const offlineBit = this.isTimerActive(d) ? "" : " · Offline";
+                     return `<option value="${d.timerId}" ${d.timerId === assignedId ? "selected" : ""}>${esc(code + roleBit + offlineBit)}</option>`;
+                   })
+                   .join("")}
+               </select>
+             </label>`
+          : "";
+
+    return `
+      <div class="gate-single-timer-card" data-single-timer-card>
+        <div class="gate-single-timer-main">
+          ${puckHtml}
+          ${copyHtml}
+        </div>
+        ${actionHtml ? `<div class="gate-single-timer-actions">${actionHtml}</div>` : ""}
+      </div>`;
+  }
+
   private render(force = false): void {
     const readOnly = this.isReadOnlyFn();
     const nodes = this.orderedNodes;
@@ -247,57 +446,84 @@ export class TrackEditor extends Component {
       nodes.map((n) => n.assignedTimerId ?? 0).filter((id) => id > 0)
     );
     const unassignedTimers = detected.filter((d) => !assignedTimerIds.has(d.timerId));
+    const effectiveMode = this.resolveEffectiveMode(nodes);
+    const isSingle = effectiveMode === "single";
+
+    const modeSwitcherHtml = readOnly
+      ? ""
+      : `<div class="segmented gate-track-mode-seg" role="tablist" aria-label="Track timer layout" data-track-mode-toggle>
+          <button
+            type="button"
+            role="tab"
+            aria-selected="${isSingle ? "true" : "false"}"
+            class="${isSingle ? "is-active" : ""}"
+            data-track-mode="single"
+          ><span class="rc-lbl-full">Single Timer (Start / Finish)</span><span class="rc-lbl-short">1 Timer</span></button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected="${!isSingle ? "true" : "false"}"
+            class="${!isSingle ? "is-active" : ""}"
+            data-track-mode="multi"
+          ><span class="rc-lbl-full">Multiple Timers (Splits)</span><span class="rc-lbl-short">Splits</span></button>
+        </div>`;
 
     const html = `
-      <div class="gate-track-stage ${readOnly ? "is-readonly-track" : ""}">
+      <div class="gate-track-stage ${readOnly ? "is-readonly-track" : ""} ${isSingle ? "is-single-timer-stage" : "is-multi-timer-stage"}">
         <div class="gate-track-header">
+          ${modeSwitcherHtml}
           <span class="gate-track-caption">
             ${
               readOnly
                 ? "Recorded track order for this closed race · reopen the race to modify timers or gate order"
-                : "Drag timers onto the line to add them to the track · drag along the line to reorder · drag into Unassigned timers to remove"
+                : isSingle
+                  ? ""
+                  : "Drag timers onto the line to add them to the track · drag along the line to reorder · drag into Unassigned timers to remove"
             }
           </span>
         </div>
 
-        <div class="gate-track-scroll-shell" data-track-scroll-shell>
-          <button
-            type="button"
-            class="pilot-picker-cue gate-track-cue is-left"
-            data-track-scroll="-1"
-            aria-label="Scroll track timers left"
-            title="More timers left"
-            hidden
-          >${icons.chevronLeft(16)}</button>
-          <div class="gate-track-scroll" data-track-dropzone>
-            <div class="gate-track-line ${nodes.length === 0 ? "is-empty-line" : ""}" data-track-line role="list" aria-label="Course timer order">
-              ${
-                nodes.length === 0
-                  ? this.renderEmptyTimelinePlaceholder()
-                  : nodes
-                      .map((n, idx) =>
-                        this.renderTrackNode(
-                          n,
-                          idx,
-                          nodes,
-                          detected
-                        )
-                      )
-                      .join("")
-              }
-            </div>
-          </div>
-          <button
-            type="button"
-            class="pilot-picker-cue gate-track-cue is-right"
-            data-track-scroll="1"
-            aria-label="Scroll track timers right"
-            title="More timers right"
-            hidden
-          >${icons.chevronRight(16)}</button>
-        </div>
-
-        ${readOnly ? "" : this.renderUnassignedTray(unassignedTimers)}
+        ${
+          isSingle
+            ? this.renderSingleTimerStage(nodes[0], detected, readOnly)
+            : `<div class="gate-track-scroll-shell" data-track-scroll-shell>
+                <button
+                  type="button"
+                  class="pilot-picker-cue gate-track-cue is-left"
+                  data-track-scroll="-1"
+                  aria-label="Scroll track timers left"
+                  title="More timers left"
+                  hidden
+                >${icons.chevronLeft(16)}</button>
+                <div class="gate-track-scroll" data-track-dropzone>
+                  <div class="gate-track-line ${nodes.length === 0 ? "is-empty-line" : ""}" data-track-line role="list" aria-label="Course timer order">
+                    ${
+                      nodes.length === 0
+                        ? this.renderEmptyTimelinePlaceholder()
+                        : nodes
+                            .map((n, idx) =>
+                              this.renderTrackNode(
+                                n,
+                                idx,
+                                nodes,
+                                detected
+                              )
+                            )
+                            .join("")
+                    }
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  class="pilot-picker-cue gate-track-cue is-right"
+                  data-track-scroll="1"
+                  aria-label="Scroll track timers right"
+                  title="More timers right"
+                  hidden
+                >${icons.chevronRight(16)}</button>
+              </div>
+              ${readOnly ? "" : this.renderUnassignedTray(unassignedTimers)}`
+        }
       </div>
     `;
     if (!force && html === this.lastRenderedHtml) {

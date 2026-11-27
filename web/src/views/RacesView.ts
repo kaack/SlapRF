@@ -24,6 +24,7 @@ import {
   slugifyRaceName,
 } from "../core/router";
 import { ApiClient } from "../services/api_client";
+import { capabilitiesSnapshot } from "../services/capabilities";
 import {
   Announcer,
   formatSpokenHeatLabel,
@@ -3718,7 +3719,39 @@ export class RacesView extends Component {
         name,
         dontSelect: true,
       })
-      .then(() => {
+      .then(async (created) => {
+        if (this.disposed) return;
+        if (capabilitiesSnapshot().demoMode && created?.raceId) {
+          const scope = { kind: "race" as const, id: created.raceId };
+          const raceObj =
+            this.getEffectiveRaces().find((r) => r.raceId === created.raceId) ?? created;
+          const nodes = [...this.store.raceNodes(raceObj).nodes].sort(
+            (a, b) => a.trackOrder - b.trackOrder
+          );
+          if (nodes.length > 1) {
+            const hubTimer = this.store.detectedTimers.find((d) => d.isHub && d.online) ??
+              this.store.detectedTimers.find((d) => d.isHub);
+            const keepNode = nodes.find((n) => n.role === "START_FINISH") ?? nodes[0];
+            for (const n of nodes) {
+              if (n.gateId !== keepNode.gateId) {
+                await this.api.removeTrackNode(n.gateId, scope).catch(() => undefined);
+              }
+            }
+            const targetTimerId = hubTimer?.timerId ?? keepNode.assignedTimerId ?? 1;
+            await this.api
+              .updateTrackNode(
+                {
+                  gateId: keepNode.gateId,
+                  name: keepNode.name,
+                  color: keepNode.color,
+                  role: "START_FINISH",
+                  assignedTimerId: targetTimerId,
+                },
+                scope
+              )
+              .catch(() => undefined);
+          }
+        }
         if (this.disposed) return;
         this.showDirectory = true;
         this.syncWorkspaceHash();

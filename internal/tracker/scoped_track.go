@@ -150,7 +150,14 @@ func (e *Engine) defaultNewTrackGatesLocked() []domain.TrackGate {
 		ids = append(ids, int(id))
 	}
 	if len(ids) == 0 {
-		// If only a USB Hub is connected with zero Spokes, leave empty so user can drag H1 if desired.
+		// Single-timer Hub setup: when only a Hub (H1) is online with zero Spokes, assign Hub H1 directly as Start/Finish.
+		for id, d := range e.detected {
+			if d != nil && d.Online && d.IsHub {
+				ids = append(ids, int(id))
+			}
+		}
+	}
+	if len(ids) == 0 {
 		return []domain.TrackGate{}
 	}
 	sort.Ints(ids)

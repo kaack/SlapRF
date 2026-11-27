@@ -20,14 +20,75 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 10px 12px;
   margin-bottom: 14px;
   min-width: 0;
+}
+.gate-track-mode-seg {
+  flex-shrink: 0;
 }
 .gate-track-caption {
   font-size: 12px;
   color: var(--text-3);
   min-width: 0;
+}
+.gate-track-caption:empty {
+  display: none;
+}
+.gate-single-timer-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px 18px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.gate-single-timer-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  flex: 1 1 240px;
+}
+.gate-line-item.is-single-mode {
+  padding: 0;
+  min-width: 0;
+  flex-shrink: 0;
+}
+.gate-single-timer-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.gate-single-timer-copy > strong {
+  font-size: 13.5px;
+  color: var(--text);
+}
+.gate-single-timer-sub {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+.gate-single-timer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.gate-single-timer-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.gate-single-timer-select {
+  min-width: 120px;
 }
 .gate-track-scroll-shell {
   position: relative;
