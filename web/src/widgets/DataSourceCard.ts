@@ -398,9 +398,10 @@ export class DataSourceCard extends Component {
     const assets = orderedPortableAssets();
     const primaryAsset = assets[0];
     const isDirectServerOrigin = caps.portable && !caps.remoteBackend;
+    const versionLabel = `v${caps.version.replace(/^v+/i, "")}`;
 
     const modeSubtitle = caps.portable
-      ? `Connected to native Go server (<span class="mono">${esc(caps.backendBaseUrl || window.location.origin)}</span> · v${esc(caps.version)}). Engines, <span class="mono">slaprf.db</span> persistence, ${caps.nativeUsb ? "native USB-C serial &amp; flasher" : "Bluetooth LE Hub, PoE Bridge"}, LapRF 8-Way, and RotorHazard run on the server.`
+      ? `Connected to native Go server (<span class="mono">${esc(caps.backendBaseUrl || window.location.origin)}</span> · ${esc(versionLabel)}). Engines, <span class="mono">slaprf.db</span> persistence, ${caps.nativeUsb ? "native USB-C serial &amp; flasher" : "Bluetooth LE Hub, PoE Bridge"}, LapRF 8-Way, and RotorHazard run on the server.`
       : effectiveMode === "server"
         ? `Connect to a local (<span class="mono">127.0.0.1:8090</span>) or LAN / Raspberry Pi <strong>SlapRF Server</strong> for native performance, <span class="mono">slaprf.db</span> storage, and physical timing hardware.`
         : `Running standalone in your browser with no backend server. Switch to <strong>Server</strong> to connect a local or LAN SlapRF Server for persistent storage and physical timing hardware.`;
@@ -460,7 +461,7 @@ export class DataSourceCard extends Component {
                 <span>Connected${caps.hostname ? ` · ${esc(caps.hostname)}` : ""}</span>
               </div>
               <div class="option-sub mono">
-                ${esc(caps.backendBaseUrl || window.location.origin)} · v${esc(caps.version)} · bbolt (slaprf.db)
+                ${esc(caps.backendBaseUrl || window.location.origin)} · ${esc(versionLabel)} · bbolt (slaprf.db)
               </div>
               ${
                 !androidApp && caps.lanIPs.length > 0
