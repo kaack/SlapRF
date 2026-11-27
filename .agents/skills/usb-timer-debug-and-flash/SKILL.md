@@ -36,6 +36,9 @@ Opening an ESP32-C5 USB-Serial-JTAG port with default `pyserial` settings glitch
   attrs = termios.tcgetattr(s.fd); attrs[2] &= ~termios.HUPCL
   termios.tcsetattr(s.fd, termios.TCSANOW, attrs)
   ```
+- **Linux `open()` Hang & `ModemManager` / `esptool` Stub Reset Caveats**:
+  - If an ESP32-C5 is reset-looping on Linux, plain `serial.Serial.open()` (blocking open without `O_NONBLOCK` / `CLOCAL`) can hang indefinitely waiting on carrier detect. Always wrap ad-hoc serial scripts in `timeout 6 ...` or open `/dev/ttyACM*` with `os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)`.
+  - Check `ps aux | grep ModemManager`: if `/usr/sbin/ModemManager` is running on a Linux workstation, it probes newly enumerated `/dev/ttyACM*` ports and toggles DTR/RTS. After running `esptool` with its RAM stub flasher (`read_flash` / `erase_region` / `write_flash`) on an ESP32-C5 Bluetooth Hub, **physically unplug the board from the Linux data port and power it from a USB wall brick / power bank** (`ESP_RST_POWERON`) before testing standalone Bluetooth LE advertising.
 - On Windows `usbser.sys`, if a board was left in `(1,1)` download-mode latch, disarm it after opening:
   ```python
   s.rts = False; s.dtr = True; s.rts = False; time.sleep(0.05)
