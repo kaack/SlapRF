@@ -485,3 +485,35 @@ func TestOpenQualifierTitleAndConsecutive2Metric(t *testing.T) {
 		t.Fatalf("expected BestConsecutive2Sec=28.2, got %v", st.Standings[0].BestConsecutive2Sec)
 	}
 }
+
+func TestFormatHeatShortLabel(t *testing.T) {
+	cases := []struct {
+		id   string
+		want string
+	}{
+		{"Q1-1", "Q1-H1"},
+		{"Q1-4", "Q1-H4"},
+		{"Q2-1", "Q2-H1"},
+		{"Q2-H1", "Q2-H1"},
+		{"W1-1", "W1-H1"},
+		{"L2-2", "L2-H2"},
+		{"SF-1", "SF-H1"},
+		{"C1-1", "C-H1"},
+		{"B1-1", "B-H1"},
+		{"A1-1", "A-H1"},
+		{"C1", "C-H1"},
+		{"A2", "A2-H1"},
+		{"GF-1", "GF-H1"},
+		{"CTA-1", "CTA-G1"},
+		{"CTA-2", "CTA-G2"},
+		{"CTA-G2", "CTA-G2"},
+		{"OQ-1", "OQ-H1"},
+		{"S2-W1-1", "S2-W1-H1"},
+		{"S2-CTA-1", "S2-CTA-G1"},
+	}
+	for _, tc := range cases {
+		if got := FormatHeatShortLabel(tc.id); got != tc.want {
+			t.Errorf("FormatHeatShortLabel(%q) = %q, want %q", tc.id, got, tc.want)
+		}
+	}
+}

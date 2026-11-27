@@ -32,6 +32,7 @@ import {
 } from "./BracketDiagram";
 import { openConfirmModal } from "./ConfirmModal";
 import {
+  formatDesktopRoundDisplayTitle,
   formatInitialSeedModeLabel,
   formatLaneBadge,
   formatMobileConnectionSummary,
@@ -630,7 +631,7 @@ function renderDesktopRoundColumn(
           )
           .join("");
 
-  const displayTitle = formatMobileRoundDisplayTitle(round);
+  const displayTitle = formatDesktopRoundDisplayTitle(round);
   const addHeatCheck = getRoundAddHeatRestriction(
     race,
     round,

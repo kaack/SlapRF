@@ -3586,12 +3586,19 @@ function renderRoundNode(
         </button>`
       : "";
 
+  const qualRoundTitleMatch = /^qual(?:ifying|ifier)(?:\s*·?\s*(?:round|rd))?\s*r?(\d+)$/i.exec(
+    (round.title || "").trim()
+  );
+  const roundTitleHtml = qualRoundTitleMatch
+    ? `<span class="rc-lbl-full">Qualifying · Round ${esc(qualRoundTitleMatch[1])}</span><span class="rc-lbl-short">Qual R${esc(qualRoundTitleMatch[1])}</span>`
+    : esc(round.title);
+
   const headerHtml = editableActive
     ? `<div class="bkt-round-head is-draggable-head" data-round-drag-handle="${esc(round.id)}" data-bkt-stop-select title="Drag anywhere on card to move · Double-click header to customize">
         <div class="bkt-round-head-top">
           <div class="bkt-round-title-wrap">
             <span class="bkt-node-drag-grip">${icons.grip(13)}</span>
-            <strong class="bkt-round-title-static">${esc(round.title)}</strong>
+            <strong class="bkt-round-title-static">${roundTitleHtml}</strong>
           </div>
           <div class="bkt-round-head-btns">
             ${addHeatHeaderBtn}
@@ -3629,9 +3636,19 @@ function renderRoundNode(
           ${
             isTimed
               ? (() => {
-                  const stgObj = race.stages?.find((s) => s.index === (round.stageIndex || 1));
-                  const qRnds = stgObj?.settings?.qualifyingRounds || race.config.qualifyingRounds || 2;
-                  return `<button type="button" class="bkt-meta-pill" data-bkt-action="open_qual_stage_settings" data-stage-idx="${round.stageIndex || 1}" data-round-id="${esc(round.id)}" data-bkt-stop-select title="Configure qualifying rounds (1 heat per pilot per round)">${icons.sliders(10)}<span>${qRnds} ${qRnds === 1 ? "round" : "rounds"} · 1 heat/pilot</span></button>`;
+                  const stgIdx = round.stageIndex || 1;
+                  const stgObj = race.stages?.find((s) => s.index === stgIdx);
+                  const qualRoundsInStage = (race.rounds ?? []).filter(
+                    (r) => (r.stageIndex || 1) === stgIdx && r.stageFormat === "qualifying"
+                  );
+                  const qTotal = Math.max(
+                    qualRoundsInStage.length,
+                    stgObj?.settings?.qualifyingRounds || race.config.qualifyingRounds || 1
+                  );
+                  const foundIdx = qualRoundsInStage.findIndex((r) => r.id === round.id);
+                  const qIdx = foundIdx >= 0 ? foundIdx + 1 : Math.max(1, round.round || 1);
+                  const heatWord = heats.length === 1 ? "heat" : "heats";
+                  return `<button type="button" class="bkt-meta-pill" data-bkt-action="open_qual_stage_settings" data-stage-idx="${stgIdx}" data-round-id="${esc(round.id)}" data-bkt-stop-select title="Configure qualifying rounds (1 heat per pilot per round)">${icons.sliders(10)}<span class="rc-lbl-full">Round ${qIdx} of ${qTotal} · ${heats.length} ${heatWord}</span><span class="rc-lbl-short">R${qIdx}/${qTotal} · ${heats.length}H</span></button>`;
                 })()
               : ""
           }
@@ -3644,7 +3661,7 @@ function renderRoundNode(
         <div class="bkt-round-head-top">
           <div class="bkt-round-title-wrap">
             ${canvasMode ? `<span class="bkt-node-drag-grip">${icons.grip(13)}</span>` : ""}
-            <strong class="bkt-round-title-static">${esc(round.title)}</strong>
+            <strong class="bkt-round-title-static">${roundTitleHtml}</strong>
           </div>
           <span class="note mono">${confirmedCount}/${heats.length}</span>
         </div>

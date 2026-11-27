@@ -1469,7 +1469,7 @@ func (e *Engine) reconcileQualifyingStageLocked(stageIdx int) {
 					th.StartMode = domain.StartModeStaggered
 					th.TargetLaps = settings.TargetLaps
 					th.TimeLimitSec = settings.TimeLimitSec
-					th.ShortLabel = fmt.Sprintf("Q%d-%d", r.Round, hi+1)
+					th.ShortLabel = fmt.Sprintf("Q%d-H%d", r.Round, hi+1)
 					if len(targetHeats) == 1 {
 						th.Title = r.Title
 					} else {

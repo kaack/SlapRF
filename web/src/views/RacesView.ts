@@ -26,6 +26,7 @@ import {
 import { ApiClient } from "../services/api_client";
 import {
   Announcer,
+  formatSpokenHeatLabel,
   isQualifierStageFormat,
   resolveHeatStageFormat,
 } from "../services/announcer";
@@ -8847,7 +8848,7 @@ export class RacesView extends Component {
           .join(" · ");
         textHtml = `Call to flight line: ${lineList}`;
         mobileTextHtml = `Call pilots to flight line`;
-        spokenText = `Flight line call for ${heat.title}. ${activeSeats
+        spokenText = `Flight line call for ${formatSpokenHeatLabel(heat)}. ${activeSeats
           .map((s) => `${pilotVoiceName(s)} on ${formatSeatVoiceChannel(s.band, s.channel)}`)
           .join(", ")}.`;
       } else {

@@ -1119,8 +1119,8 @@ func resolveSingleCTAFinals(
 				Column:          firstCTA.Column,
 				Order:           len(st.Heats) + 1,
 				BracketLane:     "finals",
-				Title:           fmt.Sprintf("Chase the Ace · Heat %d (First to %d Wins)", nextNum, reqWins),
-				ShortLabel:      nextID,
+				Title:           fmt.Sprintf("Chase the Ace · Game %d (First to %d Wins)", nextNum, reqWins),
+				ShortLabel:      FormatHeatShortLabel(nextID),
 				StartMode:       domain.StartModeHeadsUp,
 				TargetLaps:      firstCTA.TargetLaps,
 				TimeLimitSec:    firstCTA.TimeLimitSec,
@@ -2982,9 +2982,12 @@ func SyncRoundsMetadata(st *domain.RaceTournamentState) {
 		}
 	}
 
-	// Ensure every heat has a deterministic or preserved RoundID
+	// Ensure every heat has a deterministic or preserved RoundID and clear ShortLabel
 	for i := range st.Heats {
 		h := &st.Heats[i]
+		if h.ShortLabel == "" || h.ShortLabel == h.ID {
+			h.ShortLabel = FormatHeatShortLabel(h.ID)
+		}
 		if h.RoundID != "" {
 			if _, ok := existingByID[h.RoundID]; ok {
 				continue

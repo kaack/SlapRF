@@ -237,7 +237,7 @@ func (e *Engine) spawnOpenQualPackLocked(stg *domain.RaceStage, stgSettings doma
 		Order:           len(e.raceState.Heats) + 1,
 		BracketLane:     "open_qual",
 		Title:           fmt.Sprintf("%s · %s", roundTitle, packTitle),
-		ShortLabel:      fmt.Sprintf("%s-%d", shortPrefix, seq),
+		ShortLabel:      fmt.Sprintf("%s-H%d", shortPrefix, seq),
 		StartMode:       domain.StartModeStaggered,
 		TargetLaps:      tLaps,
 		TimeLimitSec:    tLimit,

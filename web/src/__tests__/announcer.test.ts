@@ -1,7 +1,13 @@
 import { downloadBinaryFile, downloadTextFile } from "../core/android_bridge";
 import { Router } from "../core/router";
 import { Sidebar } from "../layout/Sidebar";
-import { ANDROID_SYSTEM_VOICE_URI, Announcer, lapCallout, spokenName } from "../services/announcer";
+import {
+  ANDROID_SYSTEM_VOICE_URI,
+  Announcer,
+  formatSpokenHeatLabel,
+  lapCallout,
+  spokenName,
+} from "../services/announcer";
 import { usbPool, type TimerStatus } from "../services/timer_console";
 import {
   beforeEach,
@@ -1117,6 +1123,29 @@ describe("services/announcer — Phonetic Names, Lap Formatting, Queue Dedup & W
     } finally {
       ann.stop();
     }
+  });
+
+  it("expands compact heat and Chase the Ace short codes into natural spoken phrases", () => {
+    expect(formatSpokenHeatLabel({ id: "Q1-1", shortLabel: "Q1-H1" })).toBe(
+      "Qualifying Round 1, Heat 1"
+    );
+    expect(formatSpokenHeatLabel({ id: "Q2-3", shortLabel: "Q2-H3" })).toBe(
+      "Qualifying Round 2, Heat 3"
+    );
+    expect(formatSpokenHeatLabel({ id: "CTA-1", shortLabel: "CTA-G1" })).toBe(
+      "Chase the Ace, Game 1"
+    );
+    expect(formatSpokenHeatLabel({ id: "W1-2", shortLabel: "W1-H2" })).toBe(
+      "Winners Round 1, Heat 2"
+    );
+    expect(formatSpokenHeatLabel({ id: "L1-1", shortLabel: "L1-H1" })).toBe(
+      "Redemption Round 1, Heat 1"
+    );
+    expect(formatSpokenHeatLabel({ id: "C1-1", shortLabel: "C-H1" })).toBe("C Main");
+    expect(formatSpokenHeatLabel({ id: "GF-1", shortLabel: "GF-H1" })).toBe("Grand Final");
+    expect(formatSpokenHeatLabel({ title: "Qualifying R2 · Heat 1" })).toBe(
+      "Qualifying Round 2, Heat 1"
+    );
   });
 });
 

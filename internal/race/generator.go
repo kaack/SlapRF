@@ -416,7 +416,7 @@ func generateLadderMainsTournament(
 			BracketLane:     lane,
 			Division:        letter,
 			Title:           hTitle,
-			ShortLabel:      heatID,
+			ShortLabel:      FormatHeatShortLabel(heatID),
 			StartMode:       domain.StartModeHeadsUp,
 			TargetLaps:      cfg.TargetLaps,
 			TimeLimitSec:    cfg.TimeLimitSec,
@@ -602,6 +602,81 @@ func buildInitialSeeding(roster []domain.PilotSlot, method domain.SeedingMethod,
 	return out
 }
 
+// FormatHeatShortLabel converts an internal Heat.ID (kept backwards-compatible, e.g. "Q1-1",
+// "W1-2", "L1-1", "C1-1", "GF-1", "CTA-1", "OQ-1") into an unambiguous compact UI label
+// ("Q1-H1", "W1-H2", "L1-H1", "C-H1", "GF-H1", "CTA-G1", "OQ-H1").
+func FormatHeatShortLabel(heatID string) string {
+	raw := strings.TrimSpace(heatID)
+	if raw == "" {
+		return ""
+	}
+	stagePrefix := ""
+	rest := raw
+	if len(rest) >= 4 && (rest[0] == 'S' || rest[0] == 's') && rest[1] >= '0' && rest[1] <= '9' {
+		dash := strings.IndexByte(rest, '-')
+		if dash >= 2 {
+			allDigits := true
+			for i := 1; i < dash; i++ {
+				if rest[i] < '0' || rest[i] > '9' {
+					allDigits = false
+					break
+				}
+			}
+			if allDigits {
+				stagePrefix = strings.ToUpper(rest[:dash+1])
+				rest = rest[dash+1:]
+			}
+		}
+	}
+
+	lastDash := strings.LastIndexByte(rest, '-')
+	if lastDash > 0 && lastDash < len(rest)-1 {
+		head := rest[:lastDash]
+		tail := rest[lastDash+1:]
+		tailDigits := len(tail) > 0
+		for i := 0; i < len(tail); i++ {
+			if tail[i] < '0' || tail[i] > '9' {
+				tailDigits = false
+				break
+			}
+		}
+		if tailDigits {
+			upperHead := strings.ToUpper(head)
+			// Chase the Ace games: CTA-1 -> CTA-G1, F2-CTA-1 -> F2-CTA-G1
+			if upperHead == "CTA" || strings.HasSuffix(upperHead, "-CTA") {
+				return stagePrefix + upperHead + "-G" + tail
+			}
+			// Already formatted (-H1 or -G1) -> return normalized
+			// Ladder Mains: A1-1..H1-1 -> A-H1..H-H1
+			if len(upperHead) == 2 && upperHead[0] >= 'A' && upperHead[0] <= 'H' && upperHead[1] == '1' {
+				return fmt.Sprintf("%s%c-H%s", stagePrefix, upperHead[0], tail)
+			}
+			// Direct division/stage prefix: GF-1 -> GF-H1, SF-1 -> SF-H1, OQ-1 -> OQ-H1, ZQ-1 -> ZQ-H1,
+			// Q1-1 -> Q1-H1, W1-1 -> W1-H1, L1-1 -> L1-H1, R1-1 -> R1-H1, M1-1 -> M1-H1, A-1 -> A-H1
+			return stagePrefix + upperHead + "-H" + tail
+		}
+	}
+
+	// Points Mains single-token IDs: C1, B1, A1, A2 -> C1-H1 / A-H1
+	if len(rest) >= 2 && rest[0] >= 'A' && rest[0] <= 'H' {
+		roundDigits := true
+		for i := 1; i < len(rest); i++ {
+			if rest[i] < '0' || rest[i] > '9' {
+				roundDigits = false
+				break
+			}
+		}
+		if roundDigits {
+			if rest[1:] == "1" {
+				return fmt.Sprintf("%s%c-H1", stagePrefix, rest[0])
+			}
+			return stagePrefix + strings.ToUpper(rest) + "-H1"
+		}
+	}
+
+	return raw
+}
+
 func generateQualifyingHeats(
 	cfg domain.RaceSetupConfig,
 	seeded []seededPilot,
@@ -663,7 +738,7 @@ func generateQualifyingHeats(
 					Order:           order,
 					BracketLane:     "qualifying",
 					Title:           fmt.Sprintf("Qualifying Round %d · Heat %d", round, hIdx+1),
-					ShortLabel:      heatID,
+					ShortLabel:      FormatHeatShortLabel(heatID),
 					StartMode:       domain.StartModeStaggered,
 					TargetLaps:      cfg.QualifyingTargetLaps,
 					TimeLimitSec:    cfg.QualifyingTimeLimitSec,
@@ -798,7 +873,7 @@ func generateQualifyingHeats(
 				Order:           order,
 				BracketLane:     "qualifying",
 				Title:           fmt.Sprintf("Qualifying Round %d · Heat %d", round, hIdx+1),
-				ShortLabel:      heatID,
+				ShortLabel:      FormatHeatShortLabel(heatID),
 				StartMode:       domain.StartModeStaggered,
 				TargetLaps:      cfg.QualifyingTargetLaps,
 				TimeLimitSec:    cfg.QualifyingTimeLimitSec,
@@ -876,8 +951,8 @@ func generateChaseTheAceStandalone(
 		Column:          1,
 		Order:           orderOffset + 1,
 		BracketLane:     "finals",
-		Title:           fmt.Sprintf("Chase the Ace · Heat 1 (First to %d Wins)", cfg.AceWinsRequired),
-		ShortLabel:      "CTA-1",
+		Title:           fmt.Sprintf("Chase the Ace · Game 1 (First to %d Wins)", cfg.AceWinsRequired),
+		ShortLabel:      "CTA-G1",
 		StartMode:       domain.StartModeHeadsUp,
 		TargetLaps:      cfg.TargetLaps,
 		TimeLimitSec:    cfg.TimeLimitSec,
@@ -937,7 +1012,7 @@ func generatePointsMains(
 				BracketLane:     "mains",
 				Division:        divLabel,
 				Title:           fmt.Sprintf("%s Main · Round %d", divLabel, round),
-				ShortLabel:      heatID,
+				ShortLabel:      FormatHeatShortLabel(heatID),
 				StartMode:       domain.StartModeHeadsUp,
 				TargetLaps:      cfg.TargetLaps,
 				TimeLimitSec:    cfg.TimeLimitSec,
@@ -982,7 +1057,7 @@ func generateSingleElimination(
 			Order:           orderOffset + 1,
 			BracketLane:     "finals",
 			Title:           "Grand Final",
-			ShortLabel:      "GF-1",
+			ShortLabel:      "GF-H1",
 			StartMode:       domain.StartModeHeadsUp,
 			TargetLaps:      cfg.TargetLaps,
 			TimeLimitSec:    cfg.TimeLimitSec,
@@ -1035,7 +1110,7 @@ func generateSingleElimination(
 			Order:           order,
 			BracketLane:     "winners",
 			Title:           fmt.Sprintf("Round 1 · Heat %d", hIdx+1),
-			ShortLabel:      hid,
+			ShortLabel:      FormatHeatShortLabel(hid),
 			StartMode:       domain.StartModeHeadsUp,
 			TargetLaps:      cfg.TargetLaps,
 			TimeLimitSec:    cfg.TimeLimitSec,
@@ -1116,7 +1191,7 @@ func generateSingleElimination(
 				expWin = 1
 				if cfg.FinalsFormat == domain.FinalsChaseTheAce {
 					hid = "CTA-1"
-					title = fmt.Sprintf("Chase the Ace · Heat 1 (First to %d Wins)", cfg.AceWinsRequired)
+					title = fmt.Sprintf("Chase the Ace · Game 1 (First to %d Wins)", cfg.AceWinsRequired)
 				} else {
 					hid = "GF-1"
 					title = "Grand Final"
@@ -1143,7 +1218,7 @@ func generateSingleElimination(
 				Order:           order,
 				BracketLane:     lane,
 				Title:           title,
-				ShortLabel:      hid,
+				ShortLabel:      FormatHeatShortLabel(hid),
 				StartMode:       domain.StartModeHeadsUp,
 				TargetLaps:      cfg.TargetLaps,
 				TimeLimitSec:    cfg.TimeLimitSec,
@@ -1270,7 +1345,7 @@ func generateDoubleElimination(
 			Order:           order,
 			BracketLane:     "winners",
 			Title:           title,
-			ShortLabel:      hid,
+			ShortLabel:      FormatHeatShortLabel(hid),
 			StartMode:       domain.StartModeHeadsUp,
 			TargetLaps:      cfg.TargetLaps,
 			TimeLimitSec:    cfg.TimeLimitSec,
@@ -1469,7 +1544,7 @@ func generateDoubleElimination(
 				Order:           order,
 				BracketLane:     "losers",
 				Title:           losersTitle(lRoundNum, hIdx+1, numL, isLosersFinal),
-				ShortLabel:      hid,
+				ShortLabel:      FormatHeatShortLabel(hid),
 				StartMode:       domain.StartModeHeadsUp,
 				TargetLaps:      cfg.TargetLaps,
 				TimeLimitSec:    cfg.TimeLimitSec,
@@ -1581,7 +1656,7 @@ func generateDoubleElimination(
 				Order:           order,
 				BracketLane:     "winners",
 				Title:           title,
-				ShortLabel:      hid,
+				ShortLabel:      FormatHeatShortLabel(hid),
 				StartMode:       domain.StartModeHeadsUp,
 				TargetLaps:      cfg.TargetLaps,
 				TimeLimitSec:    cfg.TimeLimitSec,
@@ -1629,7 +1704,7 @@ func generateDoubleElimination(
 	finalTitle := "Grand Final"
 	if cfg.FinalsFormat == domain.FinalsChaseTheAce {
 		finalID = "CTA-1"
-		finalTitle = fmt.Sprintf("Chase the Ace · Heat 1 (First to %d Wins)", cfg.AceWinsRequired)
+		finalTitle = fmt.Sprintf("Chase the Ace · Game 1 (First to %d Wins)", cfg.AceWinsRequired)
 	}
 	edges = appendGroupedBracketEdges(edges, finalFeeders, finalID, dropByHeat)
 	heats = append(heats, domain.RaceHeat{
@@ -1642,7 +1717,7 @@ func generateDoubleElimination(
 		Order:           order,
 		BracketLane:     "finals",
 		Title:           finalTitle,
-		ShortLabel:      finalID,
+		ShortLabel:      FormatHeatShortLabel(finalID),
 		StartMode:       domain.StartModeHeadsUp,
 		TargetLaps:      cfg.TargetLaps,
 		TimeLimitSec:    cfg.TimeLimitSec,
@@ -1679,7 +1754,7 @@ func generateCompactDoubleElim(
 		Order:           orderOffset + 1,
 		BracketLane:     "winners",
 		Title:           "Winners Heat",
-		ShortLabel:      "W1-1",
+		ShortLabel:      "W1-H1",
 		StartMode:       domain.StartModeHeadsUp,
 		TargetLaps:      cfg.TargetLaps,
 		TimeLimitSec:    cfg.TimeLimitSec,
@@ -1708,7 +1783,7 @@ func generateCompactDoubleElim(
 		Order:           orderOffset + 2,
 		BracketLane:     "losers",
 		Title:           "Redemption Heat",
-		ShortLabel:      "L1-1",
+		ShortLabel:      "L1-H1",
 		StartMode:       domain.StartModeHeadsUp,
 		TargetLaps:      cfg.TargetLaps,
 		TimeLimitSec:    cfg.TimeLimitSec,
@@ -1736,7 +1811,7 @@ func generateCompactDoubleElim(
 		Order:           orderOffset + 3,
 		BracketLane:     "finals",
 		Title:           "Grand Final",
-		ShortLabel:      "GF-1",
+		ShortLabel:      "GF-H1",
 		StartMode:       domain.StartModeHeadsUp,
 		TargetLaps:      cfg.TargetLaps,
 		TimeLimitSec:    cfg.TimeLimitSec,

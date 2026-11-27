@@ -216,7 +216,7 @@ export function formatMobileRoundDisplayTitle(round: RaceRound): string {
   if (/^(?:finals|grand\s*finals?)$/i.test(t)) {
     return "Fin";
   }
-  const qualMatch = /^qual(?:ifying|ifier)(?:\s+round)?\s*r?(\d+)$/i.exec(t);
+  const qualMatch = /^qual(?:ifying|ifier)(?:\s*·?\s*(?:round|rd))?\s*r?(\d+)$/i.exec(t);
   if (qualMatch) {
     return `Q${qualMatch[1]}`;
   }
@@ -245,6 +245,18 @@ export function formatMobileRoundDisplayTitle(round: RaceRound): string {
   }
   if (/^open\s+qualifier$/i.test(t)) {
     return "OQ";
+  }
+  return t;
+}
+
+export function formatDesktopRoundDisplayTitle(round: RaceRound): string {
+  const t = (round.title || "").trim();
+  if (!t) {
+    return `Round ${round.round || 1}`;
+  }
+  const qualMatch = /^qual(?:ifying|ifier)(?:\s*·?\s*(?:round|rd))?\s*r?(\d+)$/i.exec(t);
+  if (qualMatch) {
+    return `Qualifying · Round ${qualMatch[1]}`;
   }
   return t;
 }

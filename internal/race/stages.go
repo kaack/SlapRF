@@ -832,8 +832,8 @@ func PrefixStageHeats(heats []domain.RaceHeat, edges []domain.BracketEdge, prefi
 			newID := prefix + oldID
 			remap[oldID] = newID
 			heats[i].ID = newID
-			if heats[i].ShortLabel == oldID || heats[i].ShortLabel == "" {
-				heats[i].ShortLabel = newID
+			if heats[i].ShortLabel == oldID || heats[i].ShortLabel == FormatHeatShortLabel(oldID) || heats[i].ShortLabel == "" {
+				heats[i].ShortLabel = FormatHeatShortLabel(newID)
 			}
 		}
 	}

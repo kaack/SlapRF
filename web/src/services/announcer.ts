@@ -141,6 +141,56 @@ export function lapCallout(callsign: string, lapTimeSec: number, phoneticName?: 
 }
 
 /**
+ * Expands compact heat/game short codes (`Q1-H2`, `W1-H1`, `L1-H1`, `C-H1`, `CTA-G1`, `GF-H1`, `OQ-H1`)
+ * and abbreviated round titles (`Qualifying R2 · Q2-1`) into natural spoken English for TTS callouts
+ * while keeping on-screen mobile labels compact.
+ */
+export function formatSpokenHeatLabel(heat: {
+  shortLabel?: string;
+  title?: string;
+  id?: string;
+}): string {
+  const code = (heat.shortLabel || heat.id || "").trim().replace(/^S\d+-/i, "");
+  let m: RegExpExecArray | null;
+  if ((m = /^Q(\d+)-H?(\d+)$/i.exec(code))) {
+    return `Qualifying Round ${m[1]}, Heat ${m[2]}`;
+  }
+  if ((m = /^(?:F\d+-)?CTA-G?(\d+)$/i.exec(code))) {
+    return `Chase the Ace, Game ${m[1]}`;
+  }
+  if ((m = /^(?:F\d+-)?GF-H?(\d+)$/i.exec(code))) {
+    return Number(m[1]) > 1 ? `Grand Final, Heat ${m[1]}` : "Grand Final";
+  }
+  if ((m = /^W(\d+)-H?(\d+)$/i.exec(code))) {
+    return `Winners Round ${m[1]}, Heat ${m[2]}`;
+  }
+  if ((m = /^L(\d+)-H?(\d+)$/i.exec(code))) {
+    return `Redemption Round ${m[1]}, Heat ${m[2]}`;
+  }
+  if ((m = /^SF-H?(\d+)$/i.exec(code))) {
+    return `Semi-Final, Heat ${m[1]}`;
+  }
+  if ((m = /^(OQ|ZQ)-H?(\d+)$/i.exec(code))) {
+    const prefixName = m[1].toUpperCase() === "ZQ" ? "Zippy Q" : "Open Qualifier";
+    return `${prefixName}, Heat ${m[2]}`;
+  }
+  if ((m = /^([A-H])(\d+)?-H(\d+)$/i.exec(code)) || (m = /^([A-H])(1)-(\d+)$/i.exec(code))) {
+    const div = m[1].toUpperCase();
+    const rnd = m[2] && Number(m[2]) > 1 ? ` Round ${m[2]},` : "";
+    return Number(m[3]) > 1 ? `${div} Main,${rnd} Heat ${m[3]}` : `${div} Main${rnd.replace(/,$/, "")}`;
+  }
+  if ((m = /^R(\d+)-H?(\d+)$/i.exec(code))) {
+    return `Round ${m[1]}, Heat ${m[2]}`;
+  }
+  const rawTitle = (heat.title || code).trim();
+  return rawTitle
+    .replace(/\bQualifying\s+R(\d+)\b/gi, "Qualifying Round $1")
+    .replace(/\bWinners\s+R(\d+)\b/gi, "Winners Round $1")
+    .replace(/\b(?:Redemption|Losers)\s+R(\d+)\b/gi, "Redemption Round $1")
+    .replace(/\s*·\s*/g, ", ");
+}
+
+/**
  * Speaks pilot name and lap time each time a lap is completed at the start / finish gate,
  * using the browser's built-in speech synthesis (works offline). Runs for the whole app,
  * independent of whichever view is on screen.
