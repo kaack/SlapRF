@@ -100,9 +100,22 @@ jobs:
             git -C "$WORKTREE_DIR" rm -rf . || true
           fi
 
+          PREVIEW_BACKUP="$(mktemp -d)"
+          HAS_PREVIEW=0
+          if [ -d "$WORKTREE_DIR/docs/preview" ]; then
+            cp -r "$WORKTREE_DIR/docs/preview/." "$PREVIEW_BACKUP/"
+            HAS_PREVIEW=1
+          fi
+
           rm -rf "$WORKTREE_DIR/docs"
           mkdir -p "$WORKTREE_DIR/docs"
           cp -r ./_site/. "$WORKTREE_DIR/docs/"
+
+          if [ "$HAS_PREVIEW" -eq 1 ]; then
+            mkdir -p "$WORKTREE_DIR/docs/preview"
+            cp -r "$PREVIEW_BACKUP/." "$WORKTREE_DIR/docs/preview/"
+          fi
+          rm -rf "$PREVIEW_BACKUP"
 
           printf '## SlapRF (GitHub Page)\n\nThis branch holds the static files for hosting the application as a GitHub Page.\n' > "$WORKTREE_DIR/README.md"
           printf '.idea\n*.iml\n.DS_Store\n' > "$WORKTREE_DIR/.gitignore"

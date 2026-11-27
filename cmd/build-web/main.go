@@ -19,6 +19,7 @@ func main() {
 	outDir := flag.String("out", "./_site", "Output static site directory for GitHub Pages")
 	skipWasm := flag.Bool("skip-wasm", false, "Skip compiling and copying wasm/slaprf.wasm (for native Go server builds)")
 	skipDocs := flag.Bool("skip-docs", false, "Skip building Hugo documentation into <out>/docs")
+	preview := flag.Bool("preview", false, "Build isolated /preview/ bundle whose asset filenames bypass root service worker suffix matching")
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags)
@@ -122,12 +123,14 @@ func main() {
 		log.Printf("[build-web] Built wasm/slaprf.wasm (%d bytes)", info.Size())
 
 		// 5. Also sync wasm/wasm_exec.js and wasm/slaprf.wasm into <webDir>/wasm/ so the web/ tree
-		// has the latest compiled WASM engine on disk.
-		webWasmDir := filepath.Join(*webDir, "wasm")
-		if err := os.MkdirAll(webWasmDir, 0o755); err == nil {
-			if filepath.Clean(webWasmDir) != filepath.Clean(filepath.Join(*outDir, "wasm")) {
-				mustCopyFile(filepath.Join(*outDir, "wasm", "wasm_exec.js"), filepath.Join(webWasmDir, "wasm_exec.js"))
-				mustCopyFile(wasmOut, filepath.Join(webWasmDir, "slaprf.wasm"))
+		// has the latest compiled WASM engine on disk (skipped for isolated -preview builds).
+		if !*preview {
+			webWasmDir := filepath.Join(*webDir, "wasm")
+			if err := os.MkdirAll(webWasmDir, 0o755); err == nil {
+				if filepath.Clean(webWasmDir) != filepath.Clean(filepath.Join(*outDir, "wasm")) {
+					mustCopyFile(filepath.Join(*outDir, "wasm", "wasm_exec.js"), filepath.Join(webWasmDir, "wasm_exec.js"))
+					mustCopyFile(wasmOut, filepath.Join(webWasmDir, "slaprf.wasm"))
+				}
 			}
 		}
 	}
@@ -161,7 +164,9 @@ func main() {
 
 	// 7. Write .nojekyll so GitHub Pages serves all files unaltered
 	_ = os.WriteFile(filepath.Join(*outDir, ".nojekyll"), []byte{}, 0o644)
-	_ = os.WriteFile(filepath.Join(*outDir, "CNAME"), []byte("slaprf.app\n"), 0o644)
+	if !*preview {
+		_ = os.WriteFile(filepath.Join(*outDir, "CNAME"), []byte("slaprf.app\n"), 0o644)
+	}
 	// 7. Offline shell assets: web manifest (display:browser), icons, sounds, then the service worker
 	// (last, so its content-hashed precache manifest covers every file written above).
 	mustCopyFile(filepath.Join(*webDir, "manifest.webmanifest"), filepath.Join(*outDir, "manifest.webmanifest"))
@@ -177,7 +182,7 @@ func main() {
 			mustCopyFile(filepath.Join(*webDir, "icons", e.Name()), filepath.Join(*outDir, "icons", e.Name()))
 		}
 	}
-	if !*skipWasm {
+	if !*skipWasm && !*preview {
 		if err := writeAltStoreAssets(*outDir); err != nil {
 			log.Fatalf("altstore-source.json generation failed: %v", err)
 		}
@@ -193,11 +198,19 @@ func main() {
 			}
 		}
 	}
-	swVersion, swCount, err := writeServiceWorker(*webDir, *outDir)
-	if err != nil {
-		log.Fatalf("service worker generation failed: %v", err)
+	if *preview {
+		previewRev, err := finalizePreviewBundle(*outDir)
+		if err != nil {
+			log.Fatalf("preview bundle finalization failed: %v", err)
+		}
+		log.Printf("[build-web] Finalized isolated /preview/ bundle (revision %s)", previewRev)
+	} else {
+		swVersion, swCount, err := writeServiceWorker(*webDir, *outDir)
+		if err != nil {
+			log.Fatalf("service worker generation failed: %v", err)
+		}
+		log.Printf("[build-web] Generated sw.js (cache version %s, %d precached files)", swVersion, swCount)
 	}
-	log.Printf("[build-web] Generated sw.js (cache version %s, %d precached files)", swVersion, swCount)
 
 	log.Printf("[build-web] Static site ready in %s", *outDir)
 }

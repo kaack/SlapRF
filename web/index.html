@@ -12,6 +12,10 @@
         location.replace("/docs/" + location.search + location.hash);
         return;
       }
+      if (location.pathname === "/preview") {
+        location.replace("/preview/" + location.search + location.hash);
+        return;
+      }
       try {
         var t = localStorage.getItem("slaprf.ui.theme.v1");
         var mode = t === "light" ? "light" : "dark";

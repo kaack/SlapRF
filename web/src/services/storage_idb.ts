@@ -13,7 +13,9 @@
  * start their transaction before the handler returns).
  */
 
-export const DB_NAME = "slaprf";
+import { isPreviewPath } from "./offline";
+
+export const DB_NAME = isPreviewPath() ? "slaprf-preview" : "slaprf";
 export const DB_VERSION = 1;
 
 export const STORE_KV = "kv";

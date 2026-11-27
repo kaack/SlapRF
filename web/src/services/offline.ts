@@ -59,6 +59,11 @@ export function isDevHost(hostname: string = location.hostname): boolean {
   );
 }
 
+/** True when served from the isolated `/preview/` evaluation subpath (`https://slaprf.app/preview/`). */
+export function isPreviewPath(pathname: string = typeof location !== "undefined" ? location.pathname : ""): boolean {
+  return pathname === "/preview" || pathname.startsWith("/preview/");
+}
+
 /**
  * Best-effort `navigator.storage.persist()` (called once) + `estimate()`. Never rejects.
  * Call again to refresh usage/quota; persist() is only requested the first time.
@@ -180,6 +185,10 @@ export function installOffline(): void {
   if (isDevHost()) {
     status.swDisabledReason = "dev-host";
     void cleanupDevWorkers();
+    return;
+  }
+  if (isPreviewPath()) {
+    status.swDisabledReason = "preview-path";
     return;
   }
   if (!window.isSecureContext) {

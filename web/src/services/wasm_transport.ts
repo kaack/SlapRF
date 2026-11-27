@@ -144,20 +144,22 @@ export class WasmSimTransport implements ApiTransport {
   private async bootWasm(): Promise<SlaprfWasmBridge> {
     // Read the persisted engine state from IndexedDB in parallel with the wasm download.
     const bootStatePromise = enginePersistence.loadBootState();
+    const previewRev = (window as { __SLAPRF_PREVIEW_REV__?: string }).__SLAPRF_PREVIEW_REV__;
+    const wasmExecUrl = previewRev ? `./wasm/wasm_exec.preview.js?v=${previewRev}` : "./wasm/wasm_exec.js?v=301";
     window.__slaprfBootStatus?.("Loading WebAssembly runtime…", 18);
     if (!window.Go) {
       await new Promise<void>((resolve, reject) => {
         const script = document.createElement("script");
-        script.src = "./wasm/wasm_exec.js?v=301";
+        script.src = wasmExecUrl;
         script.onload = () => resolve();
-        script.onerror = () => reject(new Error("Failed to load ./wasm/wasm_exec.js"));
+        script.onerror = () => reject(new Error(`Failed to load ${wasmExecUrl}`));
         document.head.appendChild(script);
       });
     }
 
     window.__slaprfBootStatus?.("Downloading SlapRF 5.8 GHz timing engine…", 28);
     const go = new window.Go!();
-    const wasmUrl = "./wasm/slaprf.wasm?v=301";
+    const wasmUrl = previewRev ? `./wasm/slaprf.preview.wasm?v=${previewRev}` : "./wasm/slaprf.wasm?v=301";
 
     const response = await fetch(wasmUrl);
     if (!response.ok) {

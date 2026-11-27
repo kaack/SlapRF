@@ -1,0 +1,71 @@
+name: Deploy Preview Page (/preview/)
+
+on:
+  workflow_dispatch:
+    inputs:
+      clear_preview:
+        description: "Remove /preview/ from GitHub Pages instead of deploying"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: "github-page"
+  cancel-in-progress: true
+
+jobs:
+  deploy-preview:
+    name: Build & Push /preview/ SPA to github-page branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        if: ${{ !inputs.clear_preview }}
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+
+      - name: Build isolated /preview/ SPA and Go WASM simulation engine
+        if: ${{ !inputs.clear_preview }}
+        run: go run ./cmd/build-web -web ./web -out ./_site_preview -skip-docs -preview
+
+      - name: Deploy /preview/ files to github-page branch
+        run: |
+          WORKTREE_DIR="$(mktemp -d)"
+          for i in 1 2 3; do
+            git fetch origin github-page && break || sleep 5
+          done
+          if ! git show-ref --verify --quiet refs/remotes/origin/github-page; then
+            echo "github-page branch does not exist yet; run Build & Deploy GitHub Page first."
+            exit 1
+          fi
+          git worktree add -B github-page "$WORKTREE_DIR" origin/github-page
+
+          rm -rf "$WORKTREE_DIR/docs/preview"
+          if [ "${{ inputs.clear_preview }}" != "true" ]; then
+            mkdir -p "$WORKTREE_DIR/docs/preview"
+            cp -r ./_site_preview/. "$WORKTREE_DIR/docs/preview/"
+          fi
+
+          cd "$WORKTREE_DIR"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit on github-page branch."
+          else
+            VERSION="${GITHUB_REF_NAME:-preview} (${GITHUB_SHA::7})"
+            if [ "${{ inputs.clear_preview }}" = "true" ]; then
+              git commit -m "Remove /preview/ from GitHub Page"
+            else
+              git commit -m "Deploy /preview/ GitHub Page for ${VERSION}"
+            fi
+            for i in 1 2 3; do
+              git push origin github-page --force && break || sleep 5
+            fi
+          fi

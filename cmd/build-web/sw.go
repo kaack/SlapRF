@@ -57,7 +57,7 @@ func buildPrecache(outDir string) ([]precacheEntry, string, error) {
 		}
 		rel = filepath.ToSlash(rel)
 		base := path.Base(rel)
-		if precacheExcluded[rel] || rel == "docs" || strings.HasPrefix(rel, "docs/") || strings.HasPrefix(base, ".") || strings.HasSuffix(base, ".md") {
+		if precacheExcluded[rel] || rel == "docs" || strings.HasPrefix(rel, "docs/") || rel == "preview" || strings.HasPrefix(rel, "preview/") || strings.HasPrefix(base, ".") || strings.HasSuffix(base, ".md") {
 			return nil
 		}
 		data, err := os.ReadFile(p)

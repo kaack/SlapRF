@@ -22,13 +22,14 @@
  * the first `/v1/state` the UI fetches already contains the restored data.
  */
 
-import { isDevHost } from "./offline";
+import { isDevHost, isPreviewPath } from "./offline";
 import { ALL_STORES, IdbError, openDatabase, SlaprfDb, STORE_CROSSINGS, STORE_FILTERED, STORE_KV, STORE_LAPS, WriteOp } from "./storage_idb";
 
 /** Pre-IndexedDB engine-state keys; deleted on startup (no migration by design). */
 export const LEGACY_LOCALSTORAGE_KEYS = ["slaprf.sim_state.v1", "slaprf.real_state.v1", "slaprf.real_state_backup.v1"];
 export const LAST_BACKUP_STORAGE_KEY = "slaprf.ui.last_backup.v1";
-export const WRITER_LOCK_NAME = "slaprf-engine-writer";
+export const WRITER_LOCK_NAME = isPreviewPath() ? "slaprf-engine-writer-preview" : "slaprf-engine-writer";
+const TAB_OWNER_CHANNEL_NAME = isPreviewPath() ? "slaprf-tab-owner-preview-v1" : "slaprf-tab-owner-v1";
 
 export const KV_REAL_CONFIG = "real.config";
 export const KV_SIM_STATE = "sim.state";
@@ -370,7 +371,7 @@ export class EnginePersistence {
     if (this.tabChannel) return this.tabChannel;
     if (typeof BroadcastChannel === "undefined") return null;
     try {
-      const ch = new BroadcastChannel("slaprf-tab-owner-v1");
+      const ch = new BroadcastChannel(TAB_OWNER_CHANNEL_NAME);
       ch.addEventListener("message", (ev: MessageEvent) => {
         const data = ev.data as { type?: string; requesterId?: string } | null;
         if (!data || data.type !== "takeover-request" || data.requesterId === this.tabId) return;

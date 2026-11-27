@@ -477,6 +477,10 @@ const start = () => {
     window.location.replace(`/docs/${window.location.search}${window.location.hash}`);
     return;
   }
+  if (window.location.pathname === "/preview") {
+    window.location.replace(`/preview/${window.location.search}${window.location.hash}`);
+    return;
+  }
   initAppTheme();
   installOffline();
   bootstrap().catch((err) => {
