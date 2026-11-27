@@ -13,7 +13,7 @@ Download the latest native SlapRF release from [GitHub Releases](https://github.
 | Platform / Device | Bluetooth Hub | USB-C Hub | USB Flasher | LAN Timers | Verified Environment & Notes |
 | :--- | :---: | :---: | :---: | :---: | :--- |
 | Android (`ARM64` Phone / Tablet) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Android (`arm64-v8a` APK); use a USB-C OTG data cable for USB Hub and in-app Flasher. |
-| iOS / iPadOS (`ARM64` iPhone / iPad) | {{< unverified >}} | {{< no >}} | {{< no >}} | {{< unverified >}} | Free sideload (`slaprf-ios-arm64.ipa` on iOS/iPadOS 16.0+ via Sideloadly or SideStore); verified in iOS Simulator, pending physical iPhone/iPad test. |
+| iOS / iPadOS (`ARM64` iPhone / iPad) | {{< yes >}} | {{< no >}} | {{< no >}} | {{< yes >}} | Verified on iPad (`A16`, iPadOS); free sideload (`slaprf-ios-arm64.ipa` on iOS/iPadOS 16.0+ via Sideloadly, SideStore, or Xcode). |
 | Windows 11 (`x86_64`) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Windows 11 (`slaprf-windows-amd64.exe`, `WinRT` Bluetooth LE and `COM` serial). |
 | macOS (`Apple Silicon`) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Apple Silicon (`slaprf-macos-arm64`, `CoreBluetooth` and `/dev/cu.usbmodem*`); Intel (`amd64`) binary also built in CI. |
 | Linux Desktop (`x86_64`) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Ubuntu `x86_64` (`slaprf-linux-amd64`, `BlueZ` and `/dev/ttyACM*`). |
@@ -21,7 +21,6 @@ Download the latest native SlapRF release from [GitHub Releases](https://github.
 
 <div class="doc-status-legend not-prose" aria-label="Platform support legend">
   <span class="doc-status-legend-item">{{< yes >}} <span>Verified on physical hardware</span></span>
-  <span class="doc-status-legend-item">{{< unverified >}} <span>Built (pending physical hardware test)</span></span>
   <span class="doc-status-legend-item">{{< no >}} <span>Not supported</span></span>
 </div>
 
@@ -46,7 +45,7 @@ Download the latest native SlapRF release from [GitHub Releases](https://github.
   #### Option A: Sideloadly (Recommended for Windows and macOS)
   1. Install [Sideloadly](https://sideloadly.io/) on your Windows PC or Mac, then connect your iPhone or iPad over USB once and tap **Trust This Computer**.
   2. Download `slaprf-ios-arm64.ipa` from [GitHub Releases](https://github.com/kaack/SlapRF/releases/latest) (or click **Install via Sideloadly** in **Settings -> Datasource** on `https://slaprf.app`), enter your Apple ID in Sideloadly, and click **Start**.
-  3. On your iPhone or iPad, enable **Settings -> Privacy & Security -> Developer Mode**, then open **Settings -> General -> VPN & Device Management**, select your Apple ID profile, and tap **Trust**.
+  3. On your iPhone or iPad, enable **Settings -> Privacy & Security -> Developer Mode** (appears at the bottom under **Security** after your first sideload install), restart when prompted, then open **Settings -> General -> VPN & Device Management**, select your Apple ID profile, and tap **Trust**.
   4. Keep Sideloadly running in the background on your computer with **Wi-Fi auto-refresh** enabled so the 7-day free signature renews automatically over your home Wi-Fi without plugging in a cable.
 
   #### Option B: SideStore or AltStore (On-Device Updates)

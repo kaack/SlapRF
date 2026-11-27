@@ -4025,7 +4025,9 @@ export class NetworkView extends Component {
           ? "No Spokes linked yet · powered-on Spokes appear here automatically."
           : isBleHub
             ? "Connect Hub H1 over Bluetooth to view linked Spokes."
-            : "Connect Hub H1 over USB-C to view linked Spokes."
+            : isEthHub
+              ? "Connect Hub H1 over Ethernet to view linked Spokes."
+              : "Connect Hub H1 over USB-C to view linked Spokes."
         : "Tap Hub or any Spoke node to inspect it below.";
 
     return `
