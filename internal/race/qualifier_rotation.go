@@ -18,6 +18,120 @@ type BalancedSlotAssignment struct {
 	Channel        uint8
 }
 
+// ScheduleFixedQualifyingRound preserves the exact heat groupings and VTX channels from `baseHeats`
+// (Round 1) for all active pilots in `activePilots` so pilots never change VTX channels across rounds.
+// Any newly checked-in walk-up pilot not present in `baseHeats` is placed into the first open seat.
+func ScheduleFixedQualifyingRound(
+	baseHeats []*domain.RaceHeat,
+	dstHeatCount int,
+	seatChannels []uint8,
+	activePilots []domain.PilotSlot,
+) [][]BalancedSlotAssignment {
+	numSeats := len(seatChannels)
+	if numSeats < 2 {
+		seatChannels = domain.DefaultSeatChannels(4)
+		numSeats = len(seatChannels)
+	}
+	if len(baseHeats) > dstHeatCount {
+		dstHeatCount = len(baseHeats)
+	}
+	if dstHeatCount < 1 {
+		dstHeatCount = 1
+	}
+
+	activeBySlot := make(map[int]domain.PilotSlot, len(activePilots))
+	seedBySlot := make(map[int]int, len(activePilots))
+	for i, p := range activePilots {
+		if p.SlotIndex > 0 {
+			activeBySlot[p.SlotIndex] = p
+			seedBySlot[p.SlotIndex] = i + 1
+		}
+	}
+
+	grid := make([][]BalancedSlotAssignment, dstHeatCount)
+	for hIdx := 0; hIdx < dstHeatCount; hIdx++ {
+		grid[hIdx] = make([]BalancedSlotAssignment, numSeats)
+		for sIdx := 0; sIdx < numSeats; sIdx++ {
+			grid[hIdx][sIdx].Channel = seatChannels[sIdx]
+		}
+	}
+
+	placed := make(map[int]bool, len(activePilots))
+	for hIdx, bh := range baseHeats {
+		if bh == nil || hIdx >= dstHeatCount {
+			continue
+		}
+		for sIdx, s := range bh.Seats {
+			if s.PilotSlotIndex <= 0 || placed[s.PilotSlotIndex] {
+				continue
+			}
+			p, ok := activeBySlot[s.PilotSlotIndex]
+			if !ok {
+				continue
+			}
+			chCode := domain.EncodeBandChannel(s.Band, s.Channel)
+			targetSeat := -1
+			for k := 0; k < numSeats; k++ {
+				if grid[hIdx][k].PilotSlotIndex == 0 && grid[hIdx][k].Channel == chCode {
+					targetSeat = k
+					break
+				}
+			}
+			if targetSeat < 0 && sIdx < numSeats && grid[hIdx][sIdx].PilotSlotIndex == 0 {
+				targetSeat = sIdx
+				if chCode > 0 {
+					grid[hIdx][targetSeat].Channel = chCode
+				}
+			}
+			if targetSeat < 0 {
+				for k := 0; k < numSeats; k++ {
+					if grid[hIdx][k].PilotSlotIndex == 0 {
+						targetSeat = k
+						break
+					}
+				}
+			}
+			if targetSeat >= 0 {
+				placed[p.SlotIndex] = true
+				grid[hIdx][targetSeat] = BalancedSlotAssignment{
+					PilotSlotIndex: p.SlotIndex,
+					Callsign:       p.Callsign,
+					PhoneticName:   p.PhoneticName,
+					Color:          p.Color,
+					Seed:           seedBySlot[p.SlotIndex],
+					Channel:        grid[hIdx][targetSeat].Channel,
+				}
+			}
+		}
+	}
+
+	for _, p := range activePilots {
+		if p.SlotIndex <= 0 || placed[p.SlotIndex] {
+			continue
+		}
+		done := false
+		for hIdx := 0; hIdx < dstHeatCount && !done; hIdx++ {
+			for sIdx := 0; sIdx < numSeats; sIdx++ {
+				if grid[hIdx][sIdx].PilotSlotIndex == 0 {
+					placed[p.SlotIndex] = true
+					grid[hIdx][sIdx] = BalancedSlotAssignment{
+						PilotSlotIndex: p.SlotIndex,
+						Callsign:       p.Callsign,
+						PhoneticName:   p.PhoneticName,
+						Color:          p.Color,
+						Seed:           seedBySlot[p.SlotIndex],
+						Channel:        grid[hIdx][sIdx].Channel,
+					}
+					done = true
+					break
+				}
+			}
+		}
+	}
+
+	return grid
+}
+
 type qualPilotEntry struct {
 	slot         int
 	callsign     string

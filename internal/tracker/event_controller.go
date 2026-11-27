@@ -55,8 +55,9 @@ type BracketEditPayload struct {
 	HeatCount           int                     `json:"heatCount,omitempty"`
 	TargetLaps          int                     `json:"targetLaps,omitempty"`
 	TimeLimitSec        int                     `json:"timeLimitSec,omitempty"`
-	QualifyingRounds    int                     `json:"qualifyingRounds,omitempty"`
-	QualifyingMetric    domain.QualifyingMetric `json:"qualifyingMetric,omitempty"`
+	QualifyingRounds     int                         `json:"qualifyingRounds,omitempty"`
+	QualifyingMetric     domain.QualifyingMetric     `json:"qualifyingMetric,omitempty"`
+	QualifyingLineupMode domain.QualifyingLineupMode `json:"qualifyingLineupMode,omitempty"`
 	MaxPacksPerPilot    *int                    `json:"maxPacksPerPilot,omitempty"`
 	ForceImmediate      bool                    `json:"forceImmediate,omitempty"`
 	Stage2MaxSeeds      *int                    `json:"stage2MaxSeeds,omitempty"`
@@ -1903,6 +1904,9 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 		if req.QualifyingMetric != "" {
 			cfg.QualifyingMetric = req.QualifyingMetric
 		}
+		if req.QualifyingLineupMode == domain.QualLineupFixed || req.QualifyingLineupMode == domain.QualLineupBalanced {
+			cfg.QualifyingLineupMode = req.QualifyingLineupMode
+		}
 		if req.MaxPacksPerPilot != nil {
 			cfg.MaxPacksPerPilot = *req.MaxPacksPerPilot
 		} else {
@@ -2167,6 +2171,145 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 	case "update_stage_settings":
 		if err := e.updateStageSettingsLocked(req); err != nil {
 			return cloneRaceState(e.raceState), err
+		}
+		cfgChanged = true
+
+	case "add_qualifying_round":
+		race.EnsureStagesMetadata(&e.raceState)
+		race.SyncRoundsMetadata(&e.raceState)
+		if len(req.Positions) > 0 {
+			e.applyRoundPositionsLocked(req.Positions)
+		}
+		stageIdx := req.StageIndex
+		if stageIdx <= 0 {
+			stageIdx = 1
+			for _, r := range e.raceState.Rounds {
+				if r.StageFormat == domain.FormatQualifying && !domain.IsStagePortalRoundID(r.ID) && !domain.IsOpenQualRoundID(r.ID) {
+					stageIdx = r.StageIndex
+					break
+				}
+			}
+		}
+		stg := e.findStageByIndexLocked(stageIdx)
+		if stg == nil {
+			return cloneRaceState(e.raceState), fmt.Errorf("qualifying stage not found")
+		}
+		for _, h := range e.raceState.Heats {
+			if !isUnstartedHeatState(h.State) && h.Note != "Auto-advance (bye)" {
+				if h.StageIndex > stageIdx || (h.StageIndex == stageIdx && h.StageFormat != domain.FormatQualifying && h.StageFormat != domain.FormatOpenQualifier) {
+					return cloneRaceState(e.raceState), fmt.Errorf("cannot add another qualifying round because %s has already started", h.ShortLabel)
+				}
+			}
+		}
+		curQualCount := 0
+		for _, r := range e.raceState.Rounds {
+			if r.StageIndex == stageIdx && r.StageFormat == domain.FormatQualifying && !domain.IsStagePortalRoundID(r.ID) && !domain.IsOpenQualRoundID(r.ID) {
+				curQualCount++
+			}
+		}
+		if curQualCount >= 20 {
+			return cloneRaceState(e.raceState), fmt.Errorf("maximum of 20 qualifying rounds reached")
+		}
+		nextRounds := curQualCount + 1
+		if nextRounds < 1 {
+			nextRounds = 1
+		}
+		stg.Settings.QualifyingRounds = nextRounds
+		if req.QualifyingLineupMode == domain.QualLineupFixed || req.QualifyingLineupMode == domain.QualLineupBalanced {
+			stg.Settings.QualifyingLineupMode = req.QualifyingLineupMode
+		}
+		if len(e.raceState.Stages) == 1 && stageIdx == 1 {
+			e.raceState.Config.QualifyingRounds = nextRounds
+			if req.QualifyingLineupMode == domain.QualLineupFixed || req.QualifyingLineupMode == domain.QualLineupBalanced {
+				e.raceState.Config.QualifyingLineupMode = req.QualifyingLineupMode
+			}
+		}
+		e.raceState.Stage2SeededEarly = false
+		stg.CompletedEarly = false
+		if stg.Status == domain.StageStatusCompleted {
+			stg.Status = domain.StageStatusActive
+		}
+		for ci := range e.raceState.Connections {
+			if e.raceState.Connections[ci].StageIndex == stageIdx {
+				e.raceState.Connections[ci].SeededEarly = false
+			}
+		}
+		if e.raceState.IsComplete || e.raceState.Lifecycle == domain.LifecycleCompleted {
+			e.raceState.IsComplete = false
+			e.raceState.Lifecycle = domain.LifecycleActive
+			e.raceState.ChampionSlotIndex = 0
+			e.raceState.ChampionCallsign = ""
+		}
+		e.reconcileQualifyingStageLocked(stageIdx)
+		e.resolveActiveTournamentLocked()
+		if e.raceState.ActiveHeatID == "" && e.raceState.NextReadyHeatID != "" {
+			e.raceState.ActiveHeatID = e.raceState.NextReadyHeatID
+		} else if cur := e.findHeatLocked(e.raceState.ActiveHeatID); cur != nil && cur.State == domain.HeatConfirmed && e.raceState.NextReadyHeatID != "" {
+			e.raceState.ActiveHeatID = e.raceState.NextReadyHeatID
+		}
+		cfgChanged = true
+
+	case "set_finals_structure":
+		race.EnsureStagesMetadata(&e.raceState)
+		race.SyncRoundsMetadata(&e.raceState)
+		for _, h := range e.raceState.Heats {
+			if h.State == domain.HeatCountdown || h.State == domain.HeatRunning {
+				return cloneRaceState(e.raceState), fmt.Errorf("stop or pause the running heat before changing Finals structure")
+			}
+			if !isUnstartedHeatState(h.State) && h.Note != "Auto-advance (bye)" && h.StageFormat != domain.FormatQualifying && h.StageFormat != domain.FormatOpenQualifier {
+				return cloneRaceState(e.raceState), fmt.Errorf("cannot change Finals structure after %s has already started", h.ShortLabel)
+			}
+		}
+		tpl := strings.TrimSpace(req.TemplateID)
+		cfg := e.raceState.Config.Normalized()
+		if req.FinalsFormat == domain.FinalsChaseTheAce || req.FinalsFormat == domain.FinalsSingle {
+			cfg.FinalsFormat = req.FinalsFormat
+		}
+		if req.AceWinsRequired >= 2 && req.AceWinsRequired <= 5 {
+			cfg.AceWinsRequired = req.AceWinsRequired
+		}
+		switch tpl {
+		case "qual_ladder_mains":
+			cfg.Structure = domain.StructureSingleStage
+			cfg.MainFormat = domain.FormatSingleElimination
+			cfg.Stage2MaxSeeds = 0
+		case "qual_mains":
+			cfg.Structure = domain.StructureTwoStage
+			cfg.MainFormat = domain.FormatPointsMains
+			cfg.Stage2MaxSeeds = 0
+			if req.PointsRounds >= 1 {
+				cfg.PointsRounds = req.PointsRounds
+			} else if cfg.PointsRounds < 1 {
+				cfg.PointsRounds = 1
+			}
+		case "qual_chase_the_ace":
+			cfg.Structure = domain.StructureTwoStage
+			cfg.MainFormat = domain.FormatChaseTheAce
+			cfg.FinalsFormat = domain.FinalsChaseTheAce
+			if req.Stage2MaxSeeds != nil && *req.Stage2MaxSeeds >= 2 {
+				cfg.Stage2MaxSeeds = *req.Stage2MaxSeeds
+			} else {
+				cfg.Stage2MaxSeeds = cfg.PilotsPerHeat
+			}
+		default:
+			return cloneRaceState(e.raceState), fmt.Errorf("unsupported finals structure %q", tpl)
+		}
+		e.raceState.Config = cfg.Normalized()
+		e.raceState.TemplateID = tpl
+		hasQualRound := false
+		for _, r := range e.raceState.Rounds {
+			if r.StageFormat == domain.FormatQualifying && !domain.IsStagePortalRoundID(r.ID) {
+				hasQualRound = true
+				break
+			}
+		}
+		if hasQualRound {
+			e.retemplatePostQualifyingOnUnifiedGraphLocked(tpl)
+		} else {
+			e.raceState.Stage2SeededEarly = false
+			e.raceState.Stages = nil
+			e.raceState.StageConnections = nil
+			e.regenerateTournamentLocked()
 		}
 		cfgChanged = true
 

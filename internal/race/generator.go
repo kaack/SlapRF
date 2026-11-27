@@ -775,6 +775,8 @@ func generateQualifyingHeats(
 	order := orderOffset
 	prevRoundStart := -1
 	prevRoundCount := 0
+	round1Start := -1
+	round1Count := 0
 
 	for round := 1; round <= numRounds; round++ {
 		var srcPtrs []*domain.RaceHeat
@@ -784,14 +786,23 @@ func generateQualifyingHeats(
 			}
 		}
 
-		grid := ScheduleBalancedQualifyingRound(
-			srcPtrs,
-			heatsPerRound,
-			seatChannels,
-			heats,
-			fallbackPilots,
-			round,
-		)
+		var grid [][]BalancedSlotAssignment
+		if round > 1 && cfg.QualifyingLineupMode == domain.QualLineupFixed && round1Start >= 0 && round1Count > 0 {
+			r1Ptrs := make([]*domain.RaceHeat, 0, round1Count)
+			for k := 0; k < round1Count; k++ {
+				r1Ptrs = append(r1Ptrs, &heats[round1Start+k])
+			}
+			grid = ScheduleFixedQualifyingRound(r1Ptrs, heatsPerRound, seatChannels, fallbackPilots)
+		} else {
+			grid = ScheduleBalancedQualifyingRound(
+				srcPtrs,
+				heatsPerRound,
+				seatChannels,
+				heats,
+				fallbackPilots,
+				round,
+			)
+		}
 
 		curRoundStart := len(heats)
 		curRoundCount := 0
@@ -888,6 +899,10 @@ func generateQualifyingHeats(
 
 		prevRoundStart = curRoundStart
 		prevRoundCount = curRoundCount
+		if round == 1 {
+			round1Start = curRoundStart
+			round1Count = curRoundCount
+		}
 	}
 	return heats
 }

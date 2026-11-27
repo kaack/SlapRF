@@ -9,6 +9,7 @@ import {
 import { ApiClient } from "../services/api_client";
 import {
   FinalsFormat,
+  QualifyingLineupMode,
   QualifyingMetric,
   RaceRound,
   RaceSetupConfig,
@@ -2215,20 +2216,34 @@ export function openStageSettingsModal(opts: StageSettingsModalOptions): void {
       : defaultChannelsForCount(curPph);
   let curQualMetric: QualifyingMetric =
     stgSettings.qualifyingMetric || initRace.config.qualifyingMetric || "consecutive_3";
+  let curQualLineup: QualifyingLineupMode =
+    stgSettings.qualifyingLineupMode === "fixed" ||
+    initRace.config.qualifyingLineupMode === "fixed"
+      ? "fixed"
+      : "balanced";
   let curFinalsFmt: FinalsFormat =
     stgSettings.finalsFormat || initRace.config.finalsFormat || "single_final";
 
+  const qualRoundsInStage = (initRace.rounds ?? []).filter(
+    (r) => (r.stageIndex || 1) === stageIndex && r.stageFormat === "qualifying"
+  );
   const stageHeats = initRace.heats.filter((h) => h.stageIndex === stageIndex);
   const unstartedCount = stageHeats.filter((h) => isHeatUnstarted(h.state)).length;
   const startedCount = stageHeats.length - unstartedCount;
   const startedQualRoundSet = new Set<string>();
   for (const h of stageHeats) {
-    if (!isHeatUnstarted(h.state)) {
+    if (
+      !isHeatUnstarted(h.state) &&
+      (stageObj.format === "qualifying" || h.stageFormat === "qualifying")
+    ) {
       startedQualRoundSet.add(h.roundId || `col-${h.column || h.round || 1}`);
     }
   }
   const minQualRounds = Math.max(1, startedQualRoundSet.size);
-  let curQualRounds = Math.max(minQualRounds, Math.min(12, stgSettings.qualifyingRounds || 2));
+  let curQualRounds = Math.max(
+    minQualRounds,
+    Math.min(20, qualRoundsInStage.length || stgSettings.qualifyingRounds || 2)
+  );
   let curMaxPacks = Math.max(0, Math.min(50, stgSettings.maxPacksPerPilot ?? 0));
 
   const pphOptions: CanvasSelectOption[] = [2, 3, 4, 5, 6, 8].map((n) => ({
@@ -2242,6 +2257,11 @@ export function openStageSettingsModal(opts: StageSettingsModalOptions): void {
     { value: "best_lap", label: "Fastest Single Lap" },
     { value: "laps_in_time", label: "Most Laps in Time" },
     { value: "points", label: "Qualifying Heat Points" },
+  ];
+
+  const qualLineupOptions: CanvasSelectOption[] = [
+    { value: "fixed", label: "Keep Same Heats & VTX Channels (Club Style)" },
+    { value: "balanced", label: "Balanced Opponent Rotation" },
   ];
 
   const finalsOptions: CanvasSelectOption[] = [
@@ -2285,6 +2305,17 @@ export function openStageSettingsModal(opts: StageSettingsModalOptions): void {
       title: "Ranking metric for this stage",
     });
 
+  const renderQualLineupSelect = (): string =>
+    renderCanvasSelect({
+      value: curQualLineup,
+      label:
+        qualLineupOptions.find((l) => l.value === curQualLineup)?.label ??
+        "Balanced Opponent Rotation",
+      options: qualLineupOptions,
+      dataAttrs: "data-stg-qual-lineup",
+      title: "How pilots and VTX channels are assigned across Qualifying rounds",
+    });
+
   const renderFinalsSelect = (): string =>
     renderCanvasSelect({
       value: curFinalsFmt,
@@ -2296,6 +2327,7 @@ export function openStageSettingsModal(opts: StageSettingsModalOptions): void {
     });
 
   const isQualStage = stageObj.format === "qualifying";
+  const hasQualRoundsInStage = isQualStage || qualRoundsInStage.length > 0;
   const isOpenQualStage = stageObj.format === "open_qualifier";
   const isPointsStage = stageObj.format === "points_mains";
   const isElimStage =
@@ -2425,7 +2457,7 @@ export function openStageSettingsModal(opts: StageSettingsModalOptions): void {
               </div>
               <div class="rc-setting-control" data-stg-metric-wrap>${renderMetricSelect()}</div>
             </div>`
-          : isQualStage
+          : hasQualRoundsInStage
             ? `<div class="rc-setting-row is-top-aligned">
                 <div class="rc-setting-info">
                   <span class="rc-setting-title">Qualifying rounds (heats per pilot)</span>
@@ -2446,7 +2478,7 @@ export function openStageSettingsModal(opts: StageSettingsModalOptions): void {
                     class="input mono"
                     data-stg-qual-rounds
                     min="${minQualRounds}"
-                    max="12"
+                    max="20"
                     value="${curQualRounds}"
                   />
                   <span class="note" data-stg-qual-rounds-note style="display:block;margin-top:4px;text-align:right">${curQualRounds} ${curQualRounds === 1 ? "heat" : "heats"}/pilot</span>
@@ -2454,11 +2486,45 @@ export function openStageSettingsModal(opts: StageSettingsModalOptions): void {
               </div>
               <div class="rc-setting-row">
                 <div class="rc-setting-info">
+                  <span class="rc-setting-title">Heat lineups across rounds</span>
+                  <span class="rc-setting-desc">Keep identical heats and VTX channels across Qualifying rounds, or rotate opponents each round.</span>
+                </div>
+                <div class="rc-setting-control" data-stg-qual-lineup-wrap>${renderQualLineupSelect()}</div>
+              </div>
+              <div class="rc-setting-row">
+                <div class="rc-setting-info">
                   <span class="rc-setting-title">Ranking metric</span>
                   <span class="rc-setting-desc">Metric used to compute overall qualifying standings.</span>
                 </div>
                 <div class="rc-setting-control" data-stg-metric-wrap>${renderMetricSelect()}</div>
-              </div>`
+              </div>
+              ${
+                isElimStage
+                  ? `<div class="rc-setting-row">
+                      <div class="rc-setting-info">
+                        <span class="rc-setting-title">Finals format</span>
+                        <span class="rc-setting-desc">How the Championship Finals round determines the stage winner.</span>
+                      </div>
+                      <div class="rc-setting-control" data-stg-finals-wrap>${renderFinalsSelect()}</div>
+                    </div>
+                    <div class="rc-setting-row" data-stg-ace-wins-wrap ${curFinalsFmt === "chase_the_ace" ? "" : "hidden"}>
+                      <div class="rc-setting-info">
+                        <span class="rc-setting-title">Ace wins required</span>
+                        <span class="rc-setting-desc">Heat wins required by a finalist to claim Stage Champion.</span>
+                      </div>
+                      <div class="rc-setting-control">
+                        <input
+                          type="number"
+                          class="input mono"
+                          data-stg-ace-wins
+                          min="2"
+                          max="5"
+                          value="${stgSettings.aceWinsRequired || 2}"
+                        />
+                      </div>
+                    </div>`
+                  : ""
+              }`
             : isPointsStage
               ? `<div class="rc-setting-row">
                   <div class="rc-setting-info">
@@ -2546,6 +2612,7 @@ export function openStageSettingsModal(opts: StageSettingsModalOptions): void {
 
   const pphWrap = backdrop.querySelector<HTMLElement>("[data-stg-pph-wrap]")!;
   const seatWrap = backdrop.querySelector<HTMLElement>("[data-stg-seat-pills]")!;
+  const qualLineupWrap = backdrop.querySelector<HTMLElement>("[data-stg-qual-lineup-wrap]");
   const metricWrap = backdrop.querySelector<HTMLElement>("[data-stg-metric-wrap]");
   const finalsWrap = backdrop.querySelector<HTMLElement>("[data-stg-finals-wrap]");
   const aceWinsWrap = backdrop.querySelector<HTMLElement>("[data-stg-ace-wins-wrap]");
@@ -2582,6 +2649,12 @@ export function openStageSettingsModal(opts: StageSettingsModalOptions): void {
         curChannels[idx] = ch;
         seatWrap.innerHTML = renderSeatChannelPills();
       }
+      return;
+    }
+
+    if (trigger.hasAttribute("data-stg-qual-lineup")) {
+      curQualLineup = val === "fixed" ? "fixed" : "balanced";
+      if (qualLineupWrap) qualLineupWrap.innerHTML = renderQualLineupSelect();
       return;
     }
 
@@ -2622,7 +2695,7 @@ export function openStageSettingsModal(opts: StageSettingsModalOptions): void {
     if (t.hasAttribute("data-stg-qual-rounds")) {
       curQualRounds = Math.max(
         minQualRounds,
-        Math.min(12, Number((t as HTMLInputElement).value) || curQualRounds)
+        Math.min(20, Number((t as HTMLInputElement).value) || curQualRounds)
       );
       syncQualAndPacksUi();
     } else if (t.hasAttribute("data-stg-max-packs")) {
@@ -2642,7 +2715,7 @@ export function openStageSettingsModal(opts: StageSettingsModalOptions): void {
     if (qualPresetBtn) {
       curQualRounds = Math.max(
         minQualRounds,
-        Math.min(12, Number(qualPresetBtn.dataset.stgQualRoundPreset ?? 2))
+        Math.min(20, Number(qualPresetBtn.dataset.stgQualRoundPreset ?? 2))
       );
       const qInp = backdrop.querySelector<HTMLInputElement>("[data-stg-qual-rounds]");
       if (qInp) qInp.value = String(curQualRounds);
@@ -2724,6 +2797,7 @@ export function openStageSettingsModal(opts: StageSettingsModalOptions): void {
           timeLimitSec,
           qualifyingRounds,
           qualifyingMetric: curQualMetric,
+          qualifyingLineupMode: curQualLineup,
           maxPacksPerPilot,
           pointsRounds,
           finalsFormat: curFinalsFmt,

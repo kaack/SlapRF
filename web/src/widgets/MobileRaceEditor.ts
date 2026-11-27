@@ -1032,6 +1032,21 @@ function renderSingleRoundPage(
     activePilots
   );
 
+  const qualRoundsInStage = (race.rounds ?? []).filter(
+    (r) => (r.stageIndex || 1) === (round.stageIndex || 1) && r.stageFormat === "qualifying"
+  );
+  const isLastQualRound =
+    round.stageFormat === "qualifying" &&
+    qualRoundsInStage.length > 0 &&
+    qualRoundsInStage[qualRoundsInStage.length - 1]?.id === round.id;
+  const postQualStarted = (race.heats ?? []).some(
+    (h) =>
+      (h.stageIndex || 1) === (round.stageIndex || 1) &&
+      h.stageFormat !== "qualifying" &&
+      h.stageFormat !== "open_qualifier" &&
+      !isHeatUnstarted(h.state)
+  );
+
   const heatsFooterHtml =
     round.stageFormat === "open_qualifier"
       ? `<div class="mre-heats-footer">
@@ -1050,6 +1065,19 @@ function renderSingleRoundPage(
             >
               ${icons.plus(14)}<span>Add Heat to ${esc(displayTitle)}</span>
             </button>
+            ${
+              isLastQualRound && !postQualStarted
+                ? `<button
+                    type="button"
+                    class="btn btn-ghost btn-sm mre-full-btn"
+                    style="margin-top:6px"
+                    data-mre-add-qual-round="${round.stageIndex || 1}"
+                    title="Append another Qualifying round"
+                  >
+                    ${icons.plus(14)}<span>+ Round</span>
+                  </button>`
+                : ""
+            }
           </div>`
         : "";
 
@@ -3954,6 +3982,24 @@ export function handleMobileRaceEditorClick(
         .bracketEdit({ action: "reopen_connection_seed", connectionId: cid })
         .catch(cb.onError);
     }
+    return true;
+  }
+
+  const addQualRoundBtn = target.closest<HTMLButtonElement>("[data-mre-add-qual-round]");
+  if (addQualRoundBtn && !addQualRoundBtn.disabled) {
+    const stageIndex = Number(addQualRoundBtn.dataset.mreAddQualRound) || 1;
+    void cb.api
+      .bracketEdit({ action: "add_qualifying_round", stageIndex })
+      .then((next) => {
+        const rem = getSortedMobileRounds(next);
+        const lastQual = [...rem].reverse().find((r) => r.stageFormat === "qualifying");
+        if (lastQual) {
+          cb.ui.activePageId = lastQual.id;
+        }
+        cb.ui.lastOrderedRoundIds = rem.map((r) => r.id);
+        cb.onUiMutated();
+      })
+      .catch(cb.onError);
     return true;
   }
 

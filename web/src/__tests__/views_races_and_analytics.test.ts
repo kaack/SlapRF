@@ -3309,4 +3309,202 @@ describe("PracticeView — AI Training, Pack Loop & Fast Pack Triage", () => {
       view.destroy();
     }
   });
+
+  it("renders unified Run tab first, LIVE jump bar, + Add Heat round button order, + Add Qualifying Round, CTA auto-spawn note, and Finals structure switcher", async () => {
+    const q1h1 = makeHeat("Q1-1", {
+      order: 1,
+      roundId: "r-q1",
+      round: 1,
+      column: 1,
+      bracketLane: "qualifying",
+      stageIndex: 1,
+      stageFormat: "qualifying",
+      shortLabel: "Q1-H1",
+      title: "Qualifying R1 · Heat 1",
+      state: "running",
+      timeLimitSec: 120,
+      elapsedSec: 20,
+      seats: [
+        makeSeat(1, 1, { callsign: "Alpha", channel: 1, status: "racing" }),
+        makeSeat(2, 2, { callsign: "Bravo", channel: 3, status: "racing" }),
+      ],
+    });
+    const q2h1 = makeHeat("Q2-1", {
+      order: 2,
+      roundId: "r-q2",
+      round: 2,
+      column: 2,
+      bracketLane: "qualifying",
+      stageIndex: 1,
+      stageFormat: "qualifying",
+      shortLabel: "Q2-H1",
+      title: "Qualifying R2 · Heat 1",
+      state: "waiting",
+      timeLimitSec: 120,
+      seats: [
+        makeSeat(1, 1, { callsign: "Alpha", channel: 1 }),
+        makeSeat(2, 2, { callsign: "Bravo", channel: 3 }),
+      ],
+    });
+    const cta1 = makeHeat("CTA-1", {
+      order: 3,
+      roundId: "r-finals",
+      round: 1,
+      column: 3,
+      bracketLane: "finals",
+      stageIndex: 1,
+      stageFormat: "chase_the_ace",
+      shortLabel: "CTA-G1",
+      title: "Chase the Ace · Game 1",
+      state: "waiting",
+      targetLaps: 3,
+      timeLimitSec: 120,
+      seats: [makeSeat(1, 0, { sourceLabel: "Qual #1" }), makeSeat(2, 0, { sourceLabel: "Qual #2" })],
+    });
+
+    const race = makeRaceState({
+      raceId: "club-ux-race",
+      templateId: "qual_chase_the_ace",
+      generated: true,
+      mode: "race",
+      lifecycle: "active",
+      activeStageIndex: 1,
+      activeHeatId: "Q1-1",
+      config: makeRaceSetupConfig({
+        eventName: "Club UX Race",
+        qualifyingRounds: 2,
+        finalsFormat: "chase_the_ace",
+        aceWinsRequired: 2,
+      }),
+      stages: [
+        makeStage(1, {
+          format: "chase_the_ace",
+          status: "active",
+          settings: {
+            pilotsPerHeat: 4,
+            seatChannels: [1, 3, 5, 8],
+            targetLaps: 3,
+            timeLimitSec: 120,
+            qualifyingRounds: 2,
+            qualifyingMetric: "consecutive_3",
+            qualifyingLineupMode: "fixed",
+            finalsFormat: "chase_the_ace",
+            aceWinsRequired: 2,
+          },
+        }),
+      ],
+      rounds: [
+        {
+          id: "r-q1",
+          stageIndex: 1,
+          round: 1,
+          column: 1,
+          bracketLane: "qualifying",
+          title: "Qualifying R1",
+          stageFormat: "qualifying",
+          targetLaps: 0,
+          timeLimitSec: 120,
+        },
+        {
+          id: "r-q2",
+          stageIndex: 1,
+          round: 2,
+          column: 2,
+          bracketLane: "qualifying",
+          title: "Qualifying R2",
+          stageFormat: "qualifying",
+          targetLaps: 0,
+          timeLimitSec: 120,
+        },
+        {
+          id: "r-finals",
+          stageIndex: 1,
+          round: 1,
+          column: 3,
+          bracketLane: "finals",
+          title: "Finals",
+          stageFormat: "chase_the_ace",
+          finalsFormat: "chase_the_ace",
+          aceWinsRequired: 2,
+          targetLaps: 3,
+          timeLimitSec: 120,
+        },
+      ],
+      connections: [
+        { id: "c-q1", stageIndex: 1, fromRoundId: "r-q1", toRoundId: "r-finals", mode: "standings_top", count: 4 },
+        { id: "c-q2", stageIndex: 1, fromRoundId: "r-q2", toRoundId: "r-finals", mode: "standings_top", count: 4 },
+      ],
+      heats: [q1h1, q2h1, cta1],
+    });
+
+    const store = makeStore({
+      pilots: [makePilot(1, { callsign: "Alpha" }), makePilot(2, { callsign: "Bravo" })],
+      gates: [makeGate(1)],
+      raceState: race,
+      eventState: {
+        initialized: true,
+        activeRaceId: "club-ux-race",
+        races: [race],
+      },
+    });
+    const { api, calls } = makeMockApiClient(store);
+    const announcer = new Announcer(store);
+    replaceAppHash("#/races/club-ux-race/setup");
+
+    const root = mountHtml(`<div id="club-ux-host" style="width:1440px;height:900px"></div>`);
+    const view = new RacesView(root.querySelector("#club-ux-host")!, store, api, announcer);
+    await flushMicrotasks();
+    calls.length = 0;
+
+    try {
+      // 1. Run tab is placed first in the workspace tab bar
+      const tabLabels = Array.from(
+        root.querySelectorAll<HTMLElement>(".rc-topleft-seg > button")
+      ).map((b) => b.textContent?.trim());
+      expect(tabLabels.slice(0, 4)).toEqual(["Run", "Pilots", "Track", "Setup"]);
+
+      // Ensure Graph Setup view is active
+      root.querySelector<HTMLButtonElement>('[data-setup-view="graph"]')?.click();
+      await flushMicrotasks();
+
+      // 2. Viewing Setup while Q1-H1 is running shows the 1-click LIVE jump strip
+      const liveJumpBar = root.querySelector<HTMLElement>('[data-ws-live-jump="race"]');
+      expect(liveJumpBar).not.toBeNull();
+      expect(liveJumpBar?.textContent).toContain("Q1-H1");
+
+      // 3. Round card header buttons follow exact [+ Add Heat] [Delete] [Hamburger] order
+      const q2Node = root.querySelector<HTMLElement>('[data-round-node="r-q2"]')!;
+      expect(q2Node).not.toBeNull();
+      const headBtns = Array.from(q2Node.querySelectorAll<HTMLButtonElement>(".bkt-round-head-btns > button"));
+      expect(headBtns.map((b) => b.className.split(" ")[0])).toEqual([
+        "bkt-node-add-heat-btn",
+        "bkt-node-delete-btn",
+        "bkt-node-hamburger",
+      ]);
+
+      // 4. Last Qualifying round card offers 1-click + Add Qualifying Round
+      const addQualRoundBtn = q2Node.querySelector<HTMLButtonElement>(
+        '[data-bkt-action="add_qualifying_round"]'
+      );
+      expect(addQualRoundBtn).not.toBeNull();
+      addQualRoundBtn!.click();
+      await flushMicrotasks();
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "bracketEdit" &&
+            (c.args[0] as { action?: string }).action === "add_qualifying_round"
+        )
+      ).toBe(true);
+
+      // 5. Finals card exposes the 1-click Finals participation pill AND CTA-G1 shows the auto-spawn note
+      const finalsNode = root.querySelector<HTMLElement>('[data-round-node="r-finals"]')!;
+      expect(finalsNode.querySelector('[data-bkt-action="open_finals_structure_menu"]')).not.toBeNull();
+      expect(finalsNode.querySelector("[data-cta-spawn-note]")?.textContent).toContain("CTA-G2");
+    } finally {
+      view.destroy();
+      announcer.update({ enabled: false });
+      document.querySelectorAll(".slaprf-modal-backdrop, .bkt-wire-drop-menu").forEach((el) => el.remove());
+    }
+  });
 });

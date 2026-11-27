@@ -806,6 +806,9 @@ func (e *Engine) updateStageSettingsLocked(req BracketEditPayload) error {
 	if req.QualifyingMetric != "" {
 		next.QualifyingMetric = req.QualifyingMetric
 	}
+	if req.QualifyingLineupMode == domain.QualLineupFixed || req.QualifyingLineupMode == domain.QualLineupBalanced {
+		next.QualifyingLineupMode = req.QualifyingLineupMode
+	}
 	if req.MaxPacksPerPilot != nil {
 		next.MaxPacksPerPilot = *req.MaxPacksPerPilot
 	}
@@ -832,6 +835,7 @@ func (e *Engine) updateStageSettingsLocked(req BracketEditPayload) error {
 		e.raceState.Config.TimeLimitSec = next.TimeLimitSec
 		e.raceState.Config.QualifyingRounds = next.QualifyingRounds
 		e.raceState.Config.QualifyingMetric = next.QualifyingMetric
+		e.raceState.Config.QualifyingLineupMode = next.QualifyingLineupMode
 		e.raceState.Config.MaxPacksPerPilot = next.MaxPacksPerPilot
 		e.raceState.Config.PointsRounds = next.PointsRounds
 		e.raceState.Config.FinalsFormat = next.FinalsFormat
@@ -876,17 +880,18 @@ func (e *Engine) updateStageSettingsLocked(req BracketEditPayload) error {
 		}
 	}
 	qualRoundsChanged := hasQualRoundsInStage && req.QualifyingRounds > 0 && prev.QualifyingRounds != next.QualifyingRounds
+	lineupModeChanged := hasQualRoundsInStage && prev.QualifyingLineupMode != next.QualifyingLineupMode
 
 	if !startedInStage && !stg.Customized && stg.Format != domain.FormatCustom && stg.Format != domain.FormatOpenQualifier {
 		e.rebuildSingleStageLocked(stg.Index)
 		return nil
 	}
 
-	if stg.Format == domain.FormatQualifying && (qualRoundsChanged || pphChanged || chChanged || lapsChanged || timeChanged) {
+	if stg.Format == domain.FormatQualifying && (qualRoundsChanged || lineupModeChanged || pphChanged || chChanged || lapsChanged || timeChanged) {
 		e.reconcileQualifyingStageLocked(stg.Index)
 		return nil
 	}
-	if qualRoundsChanged {
+	if qualRoundsChanged || lineupModeChanged {
 		e.reconcileQualifyingStageLocked(stg.Index)
 		if !pphChanged && !chChanged && !lapsChanged && !timeChanged {
 			return nil
@@ -1016,8 +1021,11 @@ func (e *Engine) reconcileOpenQualifierMaxPacksLocked(
 func (e *Engine) reconcileQualifyingStageLocked(stageIdx int) {
 	race.EnsureStagesMetadata(&e.raceState)
 	savedWantRounds := 0
+	var savedLineupMode domain.QualifyingLineupMode
 	if stgPre := e.findStageByIndexLocked(stageIdx); stgPre != nil {
-		savedWantRounds = stgPre.Settings.Normalized(e.raceState.Config, domain.FormatQualifying).QualifyingRounds
+		normPre := stgPre.Settings.Normalized(e.raceState.Config, domain.FormatQualifying)
+		savedWantRounds = normPre.QualifyingRounds
+		savedLineupMode = normPre.QualifyingLineupMode
 	}
 	race.SyncRoundsMetadata(&e.raceState)
 
@@ -1039,6 +1047,9 @@ func (e *Engine) reconcileQualifyingStageLocked(stageIdx int) {
 	}
 	if savedWantRounds > 0 {
 		stg.Settings.QualifyingRounds = savedWantRounds
+	}
+	if savedLineupMode != "" {
+		stg.Settings.QualifyingLineupMode = savedLineupMode
 	}
 	settings := stg.Settings.Normalized(e.raceState.Config, domain.FormatQualifying)
 	maxPerHeat := settings.PilotsPerHeat
@@ -1435,8 +1446,13 @@ func (e *Engine) reconcileQualifyingStageLocked(stageIdx int) {
 				targetHeats := e.ensureRoundHeatCountLocked(r.ID, wantH)
 
 				var srcPtrs []*domain.RaceHeat
+				var r1Ptrs []*domain.RaceHeat
 				var priorHeats []domain.RaceHeat
 				prevRoundID := ""
+				firstRoundID := ""
+				if len(qualRounds) > 0 {
+					firstRoundID = qualRounds[0].ID
+				}
 				if rIdx > 0 {
 					prevRoundID = qualRounds[rIdx-1].ID
 				}
@@ -1444,6 +1460,9 @@ func (e *Engine) reconcileQualifyingStageLocked(stageIdx int) {
 					h := &e.raceState.Heats[hi]
 					if h.StageIndex != stageIdx || h.RoundID == r.ID {
 						continue
+					}
+					if firstRoundID != "" && h.RoundID == firstRoundID {
+						r1Ptrs = append(r1Ptrs, h)
 					}
 					if prevRoundID != "" && h.RoundID == prevRoundID {
 						srcPtrs = append(srcPtrs, h)
@@ -1453,14 +1472,22 @@ func (e *Engine) reconcileQualifyingStageLocked(stageIdx int) {
 					}
 				}
 
-				grid := race.ScheduleBalancedQualifyingRound(
-					srcPtrs,
-					len(targetHeats),
-					seatChannels,
-					priorHeats,
-					pilots,
-					r.Round,
-				)
+				var grid [][]race.BalancedSlotAssignment
+				if rIdx > 0 && settings.QualifyingLineupMode == domain.QualLineupFixed && len(r1Ptrs) > 0 {
+					if len(r1Ptrs) > len(targetHeats) {
+						targetHeats = e.ensureRoundHeatCountLocked(r.ID, len(r1Ptrs))
+					}
+					grid = race.ScheduleFixedQualifyingRound(r1Ptrs, len(targetHeats), seatChannels, pilots)
+				} else {
+					grid = race.ScheduleBalancedQualifyingRound(
+						srcPtrs,
+						len(targetHeats),
+						seatChannels,
+						priorHeats,
+						pilots,
+						r.Round,
+					)
+				}
 				for hi, th := range targetHeats {
 					th.Round = r.Round
 					th.Column = r.Column

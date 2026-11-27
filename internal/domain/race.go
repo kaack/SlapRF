@@ -228,13 +228,23 @@ const (
 	PilotHeatDQ       PilotHeatStatus = "dq"  // Disqualified
 )
 
+// QualifyingLineupMode controls whether multi-round Qualifying keeps fixed heat groups & VTX channels
+// across rounds ("fixed", RotorHazard club style) or rotates opponents ("balanced").
+type QualifyingLineupMode string
+
+const (
+	QualLineupBalanced QualifyingLineupMode = "balanced"
+	QualLineupFixed    QualifyingLineupMode = "fixed"
+)
+
 // RaceSetupConfig stores all user-configurable tournament parameters.
 type RaceSetupConfig struct {
-	EventName              string              `json:"eventName"`
-	Structure              TournamentStructure `json:"structure"`
-	QualifyingRounds       int                 `json:"qualifyingRounds"`
-	QualifyingMetric       QualifyingMetric    `json:"qualifyingMetric"`
-	QualifyingTimeLimitSec int                 `json:"qualifyingTimeLimitSec"`
+	EventName              string               `json:"eventName"`
+	Structure              TournamentStructure  `json:"structure"`
+	QualifyingRounds       int                  `json:"qualifyingRounds"`
+	QualifyingMetric       QualifyingMetric     `json:"qualifyingMetric"`
+	QualifyingLineupMode   QualifyingLineupMode `json:"qualifyingLineupMode,omitempty"`
+	QualifyingTimeLimitSec int                  `json:"qualifyingTimeLimitSec"`
 	QualifyingTargetLaps   int                 `json:"qualifyingTargetLaps"`
 	MaxPacksPerPilot       int                 `json:"maxPacksPerPilot,omitempty"` // 0 = Unlimited packs (Open Qualifier), 1..50 = per-pilot cap
 	Stage2MaxSeeds         int                 `json:"stage2MaxSeeds,omitempty"`   // 0 = All qualified pilots; >0 = Top N seeds advance to Stage 2
@@ -353,13 +363,18 @@ func (c RaceSetupConfig) Normalized() RaceSetupConfig {
 	}
 	if c.QualifyingRounds < 1 {
 		c.QualifyingRounds = def.QualifyingRounds
-	} else if c.QualifyingRounds > 12 {
-		c.QualifyingRounds = 12
+	} else if c.QualifyingRounds > 20 {
+		c.QualifyingRounds = 20
 	}
 	switch c.QualifyingMetric {
 	case QualMetricConsecutive3, QualMetricConsecutive2, QualMetricBestLap, QualMetricLapsInTime, QualMetricPoints:
 	default:
 		c.QualifyingMetric = def.QualifyingMetric
+	}
+	switch c.QualifyingLineupMode {
+	case QualLineupFixed, QualLineupBalanced:
+	default:
+		c.QualifyingLineupMode = ""
 	}
 	if c.Stage2MaxSeeds < 0 {
 		c.Stage2MaxSeeds = 0
@@ -666,13 +681,14 @@ type PracticeSnapshot struct {
 // StageSettings stores per-stage racing parameters (separate from global RaceSetupConfig settings
 // such as EventName, CountdownSec, OvertimeGraceSec, and Seeding).
 type StageSettings struct {
-	PilotsPerHeat       int              `json:"pilotsPerHeat"`
-	SeatChannels        SeatChannelList  `json:"seatChannels"`
-	TargetLaps          int              `json:"targetLaps"` // 0 allowed for Qualifying timed rounds
-	TimeLimitSec        int              `json:"timeLimitSec"`
-	QualifyingRounds    int              `json:"qualifyingRounds"`
-	QualifyingMetric    QualifyingMetric `json:"qualifyingMetric"`
-	MaxPacksPerPilot    int              `json:"maxPacksPerPilot,omitempty"` // 0 = Unlimited packs (Open Qualifier), 1..50 = per-pilot cap
+	PilotsPerHeat        int                  `json:"pilotsPerHeat"`
+	SeatChannels         SeatChannelList      `json:"seatChannels"`
+	TargetLaps           int                  `json:"targetLaps"` // 0 allowed for Qualifying timed rounds
+	TimeLimitSec         int                  `json:"timeLimitSec"`
+	QualifyingRounds     int                  `json:"qualifyingRounds"`
+	QualifyingMetric     QualifyingMetric     `json:"qualifyingMetric"`
+	QualifyingLineupMode QualifyingLineupMode `json:"qualifyingLineupMode,omitempty"`
+	MaxPacksPerPilot     int                  `json:"maxPacksPerPilot,omitempty"` // 0 = Unlimited packs (Open Qualifier), 1..50 = per-pilot cap
 	PointsRounds        int              `json:"pointsRounds"`
 	FinalsFormat        FinalsFormat     `json:"finalsFormat"`
 	AceWinsRequired     int              `json:"aceWinsRequired"`
@@ -693,9 +709,10 @@ func DefaultStageSettingsFromConfig(cfg RaceSetupConfig, format StageFormat) Sta
 		SeatChannels:        append([]uint8(nil), cfg.SeatChannels...),
 		TargetLaps:          laps,
 		TimeLimitSec:        tSec,
-		QualifyingRounds:    cfg.QualifyingRounds,
-		QualifyingMetric:    cfg.QualifyingMetric,
-		MaxPacksPerPilot:    cfg.MaxPacksPerPilot,
+		QualifyingRounds:     cfg.QualifyingRounds,
+		QualifyingMetric:     cfg.QualifyingMetric,
+		QualifyingLineupMode: cfg.QualifyingLineupMode,
+		MaxPacksPerPilot:     cfg.MaxPacksPerPilot,
 		PointsRounds:        cfg.PointsRounds,
 		FinalsFormat:        cfg.FinalsFormat,
 		AceWinsRequired:     cfg.AceWinsRequired,
@@ -736,8 +753,8 @@ func (s StageSettings) Normalized(fallback RaceSetupConfig, format StageFormat) 
 	}
 	if s.QualifyingRounds < 1 {
 		s.QualifyingRounds = def.QualifyingRounds
-	} else if s.QualifyingRounds > 12 {
-		s.QualifyingRounds = 12
+	} else if s.QualifyingRounds > 20 {
+		s.QualifyingRounds = 20
 	}
 	if s.MaxPacksPerPilot < 0 {
 		s.MaxPacksPerPilot = 0
@@ -748,6 +765,11 @@ func (s StageSettings) Normalized(fallback RaceSetupConfig, format StageFormat) 
 	case QualMetricConsecutive3, QualMetricConsecutive2, QualMetricBestLap, QualMetricLapsInTime, QualMetricPoints:
 	default:
 		s.QualifyingMetric = def.QualifyingMetric
+	}
+	switch s.QualifyingLineupMode {
+	case QualLineupFixed, QualLineupBalanced:
+	default:
+		s.QualifyingLineupMode = def.QualifyingLineupMode
 	}
 	if s.PointsRounds < 1 {
 		s.PointsRounds = def.PointsRounds

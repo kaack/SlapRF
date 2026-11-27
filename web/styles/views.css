@@ -13152,6 +13152,37 @@ button.bkt-port.is-out-bottom.is-active .bkt-port-handle {
   min-width: 0;
 }
 
+.bkt-round-foot {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+}
+.bkt-add-qual-round-btn {
+  width: 100%;
+  justify-content: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.bkt-finals-scope-pill {
+  cursor: pointer;
+  border-color: rgba(56, 189, 248, 0.35);
+  color: var(--accent, #38bdf8);
+}
+.bkt-finals-scope-pill:hover {
+  background: rgba(56, 189, 248, 0.14);
+  border-color: rgba(56, 189, 248, 0.6);
+}
+.bkt-cta-spawn-note {
+  margin-top: 7px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-3);
+}
+
 /* ============================================================================
    Hover-Only Minimal Wire Action Pill (`[⚙ | ×]`) & Rule Popover
    At rest, wires are clean lines with zero floating pills or neon text.

@@ -396,6 +396,7 @@ export type QualifyingMetric =
   | "best_lap"
   | "laps_in_time"
   | "points";
+export type QualifyingLineupMode = "balanced" | "fixed";
 export type SeedingMethod = "roster_order" | "random";
 export type StartMode = "heads_up" | "staggered";
 export type FinalsFormat = "chase_the_ace" | "single_final" | "points_final";
@@ -416,8 +417,10 @@ export type PilotAttendance = "active" | "away" | "dq" | "dnc" | "forfeit";
 export interface RaceSetupConfig {
   eventName: string;
   structure: TournamentStructure;
+  hasQualifying?: boolean;
   qualifyingRounds: number;
   qualifyingMetric: QualifyingMetric;
+  qualifyingLineupMode?: QualifyingLineupMode;
   qualifyingTimeLimitSec: number;
   qualifyingTargetLaps: number;
   maxPacksPerPilot?: number;
@@ -668,6 +671,7 @@ export interface StageSettings {
   timeLimitSec: number;
   qualifyingRounds?: number;
   qualifyingMetric?: QualifyingMetric;
+  qualifyingLineupMode?: QualifyingLineupMode;
   maxPacksPerPilot?: number;
   pointsRounds?: number;
   finalsFormat?: FinalsFormat;
@@ -1122,6 +1126,8 @@ export interface BracketEditPayload {
     | "auto_seat_pilot"
     | "add_heat"
     | "delete_heat"
+    | "add_qualifying_round"
+    | "set_finals_structure"
     | "open_qual_enqueue"
     | "open_qual_dequeue"
     | "open_qual_enqueue_all";
@@ -1151,6 +1157,7 @@ export interface BracketEditPayload {
   timeLimitSec?: number;
   qualifyingRounds?: number;
   qualifyingMetric?: QualifyingMetric;
+  qualifyingLineupMode?: QualifyingLineupMode;
   maxPacksPerPilot?: number;
   forceImmediate?: boolean;
   stage2MaxSeeds?: number;

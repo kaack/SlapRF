@@ -1974,7 +1974,8 @@ function renderHeatCard(
   roundHeatCount: number,
   allStageHeats: RaceHeat[],
   activePilots: EventPilot[],
-  maxStageSeeds = 0
+  maxStageSeeds = 0,
+  aceWinsRequired = 2
 ): string {
   const badge = heatStateBadge(heat.state, heat.inOvertime, heat.note);
   const isSelected = heat.id === activeHeatId;
@@ -2159,6 +2160,15 @@ function renderHeatCard(
       ? `<button type="button" class="bkt-seat-btn is-del-heat" data-bkt-action="delete_heat" data-heat-id="${esc(heat.id)}" title="Remove heat ${esc(heat.shortLabel || heat.id)}">${icons.trash(12)}</button>`
       : "";
 
+  const isFirstChaseGame =
+    isChase &&
+    (heat.id === "CTA-1" || heat.id.endsWith("-CTA-1")) &&
+    !allStageHeats.some((oh) => oh.id !== heat.id && isChaseHeatId(oh.id));
+  const reqAceWins = Math.max(2, aceWinsRequired || 2);
+  const ctaSpawnNoteHtml = isFirstChaseGame
+    ? `<div class="bkt-cta-spawn-note" data-cta-spawn-note><span class="rc-lbl-full">Extra games (CTA-G2, CTA-G3...) spawn automatically after each confirmed heat until a contender reaches ${reqAceWins} wins.</span><span class="rc-lbl-short">CTA-G2+ auto-spawn (${reqAceWins}W)</span></div>`
+    : "";
+
   return `
     <div class="bkt-card ${isSelected ? "is-selected" : ""} ${heatEditable ? "is-editable-card" : ""} state-${heat.state}" ${interactive ? `data-select-heat="${esc(heat.id)}" role="button" tabindex="0"` : ""} data-heat-card="${esc(heat.id)}">
       <div class="bkt-card-head">
@@ -2173,6 +2183,7 @@ function renderHeatCard(
         </div>
       </div>
       <div class="bkt-seats" ${heatEditable ? "data-bkt-stop-select" : ""}>${rows}</div>
+      ${ctaSpawnNoteHtml}
     </div>`;
 }
 
@@ -3335,6 +3346,42 @@ function renderOpenQualRoundNode(
     </div>`;
 }
 
+function detectUnifiedFinalsStructure(
+  race: RaceTournamentState,
+  stageIdx: number
+): "qual_ladder_mains" | "qual_mains" | "qual_chase_the_ace" {
+  if (race.templateId === "qual_ladder_mains") {
+    return "qual_ladder_mains";
+  }
+  if (race.templateId === "qual_mains" || race.templateId === "cpq_mains") {
+    return "qual_mains";
+  }
+  if (race.templateId === "qual_chase_the_ace") {
+    return "qual_chase_the_ace";
+  }
+  const stageRounds = (race.rounds ?? []).filter((r) => (r.stageIndex || 1) === stageIdx);
+  const postQualRounds = stageRounds.filter(
+    (r) =>
+      r.stageFormat !== "qualifying" &&
+      r.stageFormat !== "open_qualifier" &&
+      r.bracketLane !== "pilots_in" &&
+      r.bracketLane !== "handoff_in" &&
+      r.bracketLane !== "handoff_out"
+  );
+  if (
+    postQualRounds.length >= 2 &&
+    (race.connections ?? []).some(
+      (c) => !c.invalid && (c.stageIndex || 1) === stageIdx && c.mode === "top_per_heat"
+    )
+  ) {
+    return "qual_ladder_mains";
+  }
+  if (postQualRounds.some((r) => r.stageFormat === "points_mains")) {
+    return "qual_mains";
+  }
+  return "qual_chase_the_ace";
+}
+
 function formatFinalsRuleBadge(round: RaceRound, heats: RaceHeat[], race: RaceTournamentState): string {
   const fmt =
     round.finalsFormat ||
@@ -3450,6 +3497,44 @@ function renderRoundNode(
   const isMenuOpen = editableActive && ui?.openNodeMenuId === round.id;
   const isFinalsLane = round.bracketLane === "finals";
   const finalsRuleLabel = isFinalsLane ? formatFinalsRuleBadge(round, heats, race) : "";
+  const stgIdx = round.stageIndex || 1;
+  const stgObj = race.stages?.find((s) => s.index === stgIdx);
+  const qualRoundsInStage = (race.rounds ?? []).filter(
+    (r) => (r.stageIndex || 1) === stgIdx && r.stageFormat === "qualifying"
+  );
+  const postQualStarted = allStageHeats.some(
+    (h) =>
+      h.stageFormat !== "qualifying" &&
+      h.stageFormat !== "open_qualifier" &&
+      !isHeatUnstarted(h.state)
+  );
+  const stageHasFinalsLane = (race.rounds ?? []).some(
+    (r) => (r.stageIndex || 1) === stgIdx && r.bracketLane === "finals"
+  );
+  const isTopChampionshipCard =
+    isFinalsLane ||
+    (!stageHasFinalsLane &&
+      round.stageFormat === "points_mains" &&
+      Math.max(1, round.round || 1) === 1);
+  const canSwitchFinalsScope =
+    editableActive && qualRoundsInStage.length > 0 && !postQualStarted && isTopChampionshipCard;
+  const curFinalsScope = canSwitchFinalsScope ? detectUnifiedFinalsStructure(race, stgIdx) : null;
+  const stagePph = stgObj?.settings?.pilotsPerHeat || race.config.pilotsPerHeat || 4;
+  const finalsScopeFull =
+    curFinalsScope === "qual_ladder_mains"
+      ? "All Pilots · Bump-Up Mains"
+      : curFinalsScope === "qual_mains"
+        ? "All Pilots · A/B/C Mains"
+        : `Top ${stagePph} Contenders`;
+  const finalsScopeShort =
+    curFinalsScope === "qual_ladder_mains"
+      ? "Bump-Ups"
+      : curFinalsScope === "qual_mains"
+        ? "A/B/C Mains"
+        : `Top ${stagePph}`;
+  const finalsScopePillHtml = canSwitchFinalsScope
+    ? `<button type="button" class="bkt-meta-pill bkt-finals-scope-pill" data-bkt-action="open_finals_structure_menu" data-stage-idx="${stgIdx}" data-bkt-stop-select title="Choose whether Finals include all pilots (Bump-Up Mains or A/B/C Divisions) or Top ${stagePph} qualifiers only">${icons.pilot(10)}<span class="rc-lbl-full">${esc(finalsScopeFull)}</span><span class="rc-lbl-short">${esc(finalsScopeShort)}</span></button>`
+    : "";
 
   const curLaps =
     round.targetLaps !== undefined ? round.targetLaps : heats[0]?.targetLaps ?? race.config.targetLaps ?? 3;
@@ -3632,15 +3717,11 @@ function renderRoundNode(
         </div>
         <div class="bkt-round-meta-pills">
           ${finalsRuleLabel ? `<span class="bkt-meta-pill">${icons.trophy(10)}<span>${esc(finalsRuleLabel)}</span></span>` : ""}
+          ${finalsScopePillHtml}
           <span class="bkt-meta-pill">${esc(fmtBadge)} · ${esc(lapsBadge)} · ${formatRaceClock(curTime).slice(0, 5)}</span>
           ${
             isTimed
               ? (() => {
-                  const stgIdx = round.stageIndex || 1;
-                  const stgObj = race.stages?.find((s) => s.index === stgIdx);
-                  const qualRoundsInStage = (race.rounds ?? []).filter(
-                    (r) => (r.stageIndex || 1) === stgIdx && r.stageFormat === "qualifying"
-                  );
                   const qTotal = Math.max(
                     qualRoundsInStage.length,
                     stgObj?.settings?.qualifyingRounds || race.config.qualifyingRounds || 1
@@ -3648,7 +3729,11 @@ function renderRoundNode(
                   const foundIdx = qualRoundsInStage.findIndex((r) => r.id === round.id);
                   const qIdx = foundIdx >= 0 ? foundIdx + 1 : Math.max(1, round.round || 1);
                   const heatWord = heats.length === 1 ? "heat" : "heats";
-                  return `<button type="button" class="bkt-meta-pill" data-bkt-action="open_qual_stage_settings" data-stage-idx="${stgIdx}" data-round-id="${esc(round.id)}" data-bkt-stop-select title="Configure qualifying rounds (1 heat per pilot per round)">${icons.sliders(10)}<span class="rc-lbl-full">Round ${qIdx} of ${qTotal} · ${heats.length} ${heatWord}</span><span class="rc-lbl-short">R${qIdx}/${qTotal} · ${heats.length}H</span></button>`;
+                  const lineupFixed =
+                    stgObj?.settings?.qualifyingLineupMode === "fixed" ||
+                    race.config.qualifyingLineupMode === "fixed";
+                  const lineupHint = lineupFixed ? " · Fixed heats" : "";
+                  return `<button type="button" class="bkt-meta-pill" data-bkt-action="open_qual_stage_settings" data-stage-idx="${stgIdx}" data-round-id="${esc(round.id)}" data-bkt-stop-select title="Configure qualifying rounds and heat lineup rotation">${icons.sliders(10)}<span class="rc-lbl-full">Round ${qIdx} of ${qTotal} · ${heats.length} ${heatWord}${lineupHint}</span><span class="rc-lbl-short">R${qIdx}/${qTotal} · ${heats.length}H</span></button>`;
                 })()
               : ""
           }
@@ -3685,7 +3770,28 @@ function renderRoundNode(
       </button>`
     : "";
 
+  const isLastQualRound =
+    isTimed &&
+    qualRoundsInStage.length > 0 &&
+    qualRoundsInStage[qualRoundsInStage.length - 1]?.id === round.id;
+  const roundFootHtml =
+    editableActive && isLastQualRound && !postQualStarted
+      ? `<div class="bkt-round-foot" data-bkt-stop-select>
+          <button
+            type="button"
+            class="btn btn-ghost btn-xs bkt-add-qual-round-btn"
+            data-bkt-action="add_qualifying_round"
+            data-stage-idx="${stgIdx}"
+            title="Append another Qualifying round for all active pilots"
+          >
+            ${icons.plus(12)}<span class="rc-lbl-full">Add Qualifying Round</span><span class="rc-lbl-short">+ Round</span>
+          </button>
+        </div>`
+      : "";
+
   const posAttrs = renderNodePosAttrs(canvasMode, pos, RC_NODE_WIDTH);
+  const roundAceWins =
+    round.aceWinsRequired || stgObj?.settings?.aceWinsRequired || race.config.aceWinsRequired || 2;
 
   return `
     <div
@@ -3713,11 +3819,13 @@ function renderRoundNode(
               heats.length,
               allStageHeats,
               activePilots,
-              maxStageSeeds
+              maxStageSeeds,
+              roundAceWins
             )
           )
           .join("")}
       </div>
+      ${roundFootHtml}
     </div>`;
 }
 
@@ -4546,6 +4654,63 @@ export function handleBracketEditEvent(
         getRace,
         api,
         onError: reportErr,
+      });
+      return true;
+    }
+    case "add_qualifying_round": {
+      const stageIdx = Number(actionBtn.dataset.stageIdx) || resolveEventStage();
+      const curRace = getRace();
+      const positions = collectStageRoundPositions(target, curRace, stageIdx, ui);
+      if (ui) ui.openNodeMenuId = "";
+      void api
+        .bracketEdit({ action: "add_qualifying_round", stageIndex: stageIdx, positions })
+        .catch(reportErr);
+      return true;
+    }
+    case "open_finals_structure_menu": {
+      const stageIdx = Number(actionBtn.dataset.stageIdx) || resolveEventStage();
+      const curRace = getRace();
+      const stgObj = curRace.stages?.find((s) => s.index === stageIdx);
+      const pph = stgObj?.settings?.pilotsPerHeat || curRace.config.pilotsPerHeat || 4;
+      const curStruct = detectUnifiedFinalsStructure(curRace, stageIdx);
+      const vp =
+        target.closest<HTMLElement>("[data-rc-viewport]") ??
+        target.closest<HTMLElement>("[data-bkt-graph]") ??
+        document.body;
+      const rect = actionBtn.getBoundingClientRect();
+      openWireDropMenu({
+        viewport: vp,
+        clientX: rect.left,
+        clientY: rect.bottom + 6,
+        ariaLabel: "Choose Finals participation",
+        options: [
+          {
+            id: "qual_ladder_mains",
+            label: `${curStruct === "qual_ladder_mains" ? "✓ " : ""}All Pilots · Bump-Up Mains (C → B → A)`,
+            iconHtml: icons.trophy(15),
+            title: "Every pilot races a Main; top finishers bump up into the next Main up to A-Main",
+          },
+          {
+            id: "qual_mains",
+            label: `${curStruct === "qual_mains" ? "✓ " : ""}All Pilots · A / B / C Division Mains`,
+            iconHtml: icons.layers(15),
+            title: "Split all qualified pilots into A-Main, B-Main, C-Main divisions",
+          },
+          {
+            id: "qual_chase_the_ace",
+            label: `${curStruct === "qual_chase_the_ace" ? "✓ " : ""}Top ${pph} Qualifiers Only (Chase the Ace)`,
+            iconHtml: icons.flag(15),
+            title: `Only the top ${pph} qualifiers advance directly to Championship Finals`,
+          },
+        ],
+        onSelect: (optId) => {
+          void api
+            .bracketEdit({
+              action: "set_finals_structure",
+              templateId: optId,
+            })
+            .catch(reportErr);
+        },
       });
       return true;
     }

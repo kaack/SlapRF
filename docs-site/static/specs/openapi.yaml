@@ -3234,7 +3234,9 @@ paths:
           type: string
     post:
       tags: [Race Sessions]
-      summary: Mutate rounds, heats, seats, channels, stage DAG connections, or Open Qualifier flight line
+      summary: Mutate rounds, heats, seats, channels, stage DAG connections, qualifying rounds, finals structure, or Open Qualifier flight line
+      description: |
+        Applies bracket and schedule mutations (`apply_template`, `update_stage_settings` including `qualifyingLineupMode` `"balanced"` or `"fixed"`, `add_qualifying_round`, `set_finals_structure` across `"qual_ladder_mains"`, `"qual_mains"`, or `"qual_chase_the_ace"`, `add_heat`, `delete_heat`, `move_or_swap_seat`, `set_seat_channel`, and Open Qualifier queue actions).
       operationId: editRaceBracket
       requestBody:
         required: true

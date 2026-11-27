@@ -233,6 +233,29 @@ func ResolveTournamentWithAttendance(
 				filledPilots := 0
 				inSeeds := stageIncomingSeeds[sIdx]
 				seedsReady := stageSeedsReady[sIdx]
+				stageStarted := false
+				nonQualStarted := false
+				for i := range st.Heats {
+					oh := &st.Heats[i]
+					if oh.StageIndex != sIdx || oh.Note == "Auto-advance (bye)" {
+						continue
+					}
+					if oh.State == domain.HeatCountdown || oh.State == domain.HeatRunning || oh.State == domain.HeatPaused || oh.State == domain.HeatFinished || oh.State == domain.HeatConfirmed || oh.State == domain.HeatAborted {
+						stageStarted = true
+						if oh.StageFormat != domain.FormatQualifying && oh.StageFormat != domain.FormatOpenQualifier {
+							nonQualStarted = true
+						}
+					}
+				}
+				if !stageStarted && attendance != nil && len(inSeeds) > 0 {
+					availSeeds := make([]domain.TournamentStanding, 0, len(inSeeds))
+					for _, row := range inSeeds {
+						if !attendance[row.PilotSlotIndex].IsAbsent() {
+							availSeeds = append(availSeeds, row)
+						}
+					}
+					inSeeds = availSeeds
+				}
 
 				for si := range h.Seats {
 					s := &h.Seats[si]
@@ -309,6 +332,15 @@ func ResolveTournamentWithAttendance(
 							continue
 						}
 						ranked := ComputeStandingsForFeeder(st, effectiveRoster, h.StageIndex, *s.Feeder)
+						if !nonQualStarted && attendance != nil && len(ranked) > 0 {
+							availRanked := make([]domain.TournamentStanding, 0, len(ranked))
+							for _, row := range ranked {
+								if !attendance[row.PilotSlotIndex].IsAbsent() {
+									availRanked = append(availRanked, row)
+								}
+							}
+							ranked = availRanked
+						}
 						if s.Feeder.FromStandingsRank > len(ranked) {
 							s.Feeder.IsBye = true
 							if s.PilotSlotIndex != 0 {

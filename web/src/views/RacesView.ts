@@ -3100,7 +3100,7 @@ export class RacesView extends Component {
     const stagesSig = (race.stages ?? [])
       .map(
         (s) =>
-          `${s.id}:${s.index}:${s.title}:${s.format}:${s.status}:${s.dangling ? 1 : 0}:${s.prerequisitesMet ? 1 : 0}:${s.completedEarly ? 1 : 0}:${s.pausedByUser ? 1 : 0}:${s.hasPos ? `${(s.posX ?? 0).toFixed(1)},${(s.posY ?? 0).toFixed(1)}` : "auto"}:${s.pilotsNodeHasPos ? `${(s.pilotsNodePosX ?? 0).toFixed(1)},${(s.pilotsNodePosY ?? 0).toFixed(1)}` : "pauto"}:${s.settings ? `${s.settings.pilotsPerHeat}.${(Array.isArray(s.settings.seatChannels) ? s.settings.seatChannels : []).join("-")}.${s.settings.targetLaps}.${s.settings.timeLimitSec}.${s.settings.qualifyingMetric}.${s.settings.maxPacksPerPilot ?? 0}.${s.settings.finalsFormat}` : ""}`
+          `${s.id}:${s.index}:${s.title}:${s.format}:${s.status}:${s.dangling ? 1 : 0}:${s.prerequisitesMet ? 1 : 0}:${s.completedEarly ? 1 : 0}:${s.pausedByUser ? 1 : 0}:${s.hasPos ? `${(s.posX ?? 0).toFixed(1)},${(s.posY ?? 0).toFixed(1)}` : "auto"}:${s.pilotsNodeHasPos ? `${(s.pilotsNodePosX ?? 0).toFixed(1)},${(s.pilotsNodePosY ?? 0).toFixed(1)}` : "pauto"}:${s.settings ? `${s.settings.pilotsPerHeat}.${(Array.isArray(s.settings.seatChannels) ? s.settings.seatChannels : []).join("-")}.${s.settings.targetLaps}.${s.settings.timeLimitSec}.${s.settings.qualifyingRounds ?? 0}.${s.settings.qualifyingLineupMode ?? ""}.${s.settings.qualifyingMetric}.${s.settings.maxPacksPerPilot ?? 0}.${s.settings.finalsFormat}` : ""}`
       )
       .join("|");
 
@@ -6014,6 +6014,28 @@ export class RacesView extends Component {
           this.fabOpen = false;
           this.createRaceInline();
           return;
+        case "add-qualifying-round": {
+          const stageIndex = Number(actBtn.dataset.stageIdx) || 1;
+          void this.api
+            .bracketEdit({ action: "add_qualifying_round", stageIndex })
+            .then((nextState) => {
+              if (this.disposed) return;
+              const nextQualReady =
+                nextState.heats.find(
+                  (h) =>
+                    (h.stageIndex || 1) === stageIndex &&
+                    h.stageFormat === "qualifying" &&
+                    (h.state === "ready" || h.state === "staged")
+                ) ?? nextState.heats.find((h) => h.id === nextState.nextReadyHeatId);
+              if (nextQualReady) {
+                void this.api
+                  .heatControl(nextQualReady.id, "select", nextState.raceId)
+                  .catch(this.reportErr);
+              }
+            })
+            .catch(this.reportErr);
+          return;
+        }
         case "import-multigp":
           this.fabOpen = false;
           this.refreshFabMenuDom();
@@ -10568,6 +10590,30 @@ export class RacesView extends Component {
         buttons.push(
           `<button type="button" class="btn btn-ghost race-btn-primary-slot" disabled>
             ${icons.check(16)}<span>Confirmed</span>
+          </button>`
+        );
+      }
+    }
+
+    if (!stageClosed && !raceBlocked) {
+      const stgIdx = heat.stageIndex || 1;
+      const qualHeatsInStage = race.heats.filter(
+        (h) => (h.stageIndex || 1) === stgIdx && h.stageFormat === "qualifying" && h.state !== "aborted"
+      );
+      const postQualHeatsInStage = race.heats.filter(
+        (h) =>
+          (h.stageIndex || 1) === stgIdx &&
+          h.stageFormat !== "qualifying" &&
+          h.stageFormat !== "open_qualifier"
+      );
+      if (
+        qualHeatsInStage.length > 0 &&
+        qualHeatsInStage.every((h) => h.state === "confirmed") &&
+        postQualHeatsInStage.every((h) => isHeatUnstarted(h.state))
+      ) {
+        buttons.push(
+          `<button type="button" class="btn btn-ghost" data-race-act="add-qualifying-round" data-stage-idx="${stgIdx}" title="Append another Qualifying round before starting Finals">
+            ${icons.plus(16)}<span class="rc-lbl-full">Add Qualifying Round</span><span class="rc-lbl-short">+ Round</span>
           </button>`
         );
       }
