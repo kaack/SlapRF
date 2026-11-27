@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- SlapRF circular raised-edge medallion icon -->
+  <circle cx="256" cy="260" r="238" fill="#07090e" fill-opacity="0.88"/>
+  <circle cx="256" cy="256" r="234" fill="#263042"/>
+  <path d="M57 133 A234 234 0 0 1 455 133" fill="none" stroke="#475878" stroke-width="10" stroke-linecap="round"/>
+  <circle cx="256" cy="256" r="217" fill="#10141d"/>
+  <circle cx="256" cy="256" r="209" fill="none" stroke="#1e2636" stroke-width="5.5"/>
+  <g transform="translate(92 76) scale(13.7)" fill="none" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round">
+    <path stroke="#eef2f7" d="M18.21 16.30A8.2 8.2 0 1 1 13.30 5.79"/>
+    <circle fill="#eef2f7" stroke="none" cx="10.5" cy="13.5" r="1.95"/>
+    <path stroke="#eef2f7" d="M10.5 13.5L15.2 9.8"/>
+    <path stroke="#d4ff3a" d="M15.77 7.22A8.2 8.2 0 0 1 18.70 13.50"/>
+    <path stroke="#d4ff3a" stroke-opacity="0.78" d="M17.64 4.36A11.6 11.6 0 0 1 22.09 13.90"/>
+  </g>
+</svg>

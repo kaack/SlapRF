@@ -1,0 +1,8 @@
+{
+  "name": "SlapRF",
+  "short_name": "SlapRF",
+  "description": "5.8 GHz multi-gate FPV lap and sector timer.",
+  "display": "browser",
+  "background_color": "#0b0c0f",
+  "theme_color": "#0b0c0f"
+}
