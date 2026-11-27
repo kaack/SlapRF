@@ -21,12 +21,12 @@
       "category": "utilities",
       "versions": [
         {
-          "version": "0.0.20",
-          "buildVersion": "20",
-          "date": "2026-11-26T23:18:13Z",
-          "localizedDescription": "SlapRF v0.0.20 native iOS and iPadOS release.",
-          "downloadURL": "https://github.com/kaack/SlapRF/releases/download/v0.0.20/slaprf-ios-arm64.ipa",
-          "size": 6404708,
+          "version": "0.0.21",
+          "buildVersion": "21",
+          "date": "2026-11-27T13:26:27-08:00",
+          "localizedDescription": "SlapRF v0.0.21 native iOS and iPadOS release.",
+          "downloadURL": "https://github.com/kaack/SlapRF/releases/download/v0.0.21/slaprf-ios-arm64.ipa",
+          "size": 12582912,
           "minOSVersion": "16.0"
         }
       ],
