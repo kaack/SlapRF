@@ -474,7 +474,8 @@ export class Sidebar extends Component {
     });
 
     this.el.querySelectorAll<HTMLAnchorElement>("a[data-route]").forEach((a) => {
-      const disabled = lockedOut && a.dataset.route !== "setup";
+      const disabled =
+        lockedOut && a.dataset.route !== "setup" && a.dataset.route !== "tutorials";
       a.classList.toggle("is-disabled", disabled);
       if (disabled) {
         a.setAttribute("aria-disabled", "true");

@@ -34,6 +34,8 @@ export const icons = {
     svg(`<path d="M12.4 6.8 13 2l-2.4 3.2"/><path d="M18.6 12.9 20 11h-5.3"/><path d="M8 8.7 4 14h7l-1 8 5-6.7"/><path d="m2 2 20 20"/>`, s),
   reset: (s?: number) => svg(`<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>`, s),
   play: (s?: number) => svg(`<path d="M7 4l13 8-13 8z"/>`, s),
+  video: (s?: number) =>
+    svg(`<rect x="2" y="4" width="20" height="16" rx="3"/><polygon points="10,8.5 16,12 10,15.5"/>`, s),
   pause: (s?: number) => svg(`<path d="M9 5v14M15 5v14"/>`, s),
   splitBreak: (s?: number) =>
     svg(

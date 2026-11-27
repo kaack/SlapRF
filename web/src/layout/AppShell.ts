@@ -41,6 +41,7 @@ import { NetworkView } from "../views/NetworkView";
 import { PoeBridgeView } from "../views/PoeBridgeView";
 import { SetupView } from "../views/SetupView";
 import { SimView } from "../views/SimView";
+import { TutorialsView } from "../views/TutorialsView";
 import { AboutView, preloadAboutVersion } from "../views/AboutView";
 import { preloadSettingsStatuses } from "../widgets/DataSourceCard";
 import { Sidebar } from "./Sidebar";
@@ -1248,6 +1249,8 @@ export class AppShell extends Component {
         return new FlasherView(host, this.store, this.api);
       case "debug":
         return new DebugView(host, this.api, this.store);
+      case "tutorials":
+        return new TutorialsView(host);
       case "about":
         return new AboutView(host, this.store, this.api);
     }

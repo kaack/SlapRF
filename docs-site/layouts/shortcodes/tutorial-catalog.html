@@ -1,0 +1,99 @@
+{{- with hugo.Data.tutorials -}}
+{{- $cat := . -}}
+{{- $usedCats := dict "all" true -}}
+{{- range $v := $cat.videos -}}
+  {{- $usedCats = merge $usedCats (dict $v.category true) -}}
+{{- end -}}
+<div class="slaprf-docs-tutorials" id="slaprf-docs-tutorials">
+  <style>
+    .slaprf-docs-tutorials { margin-top: 1.25rem; display: flex; flex-direction: column; gap: 1.25rem; }
+    .sdt-filter-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem; }
+    .sdt-pills { display: flex; flex-wrap: wrap; gap: 0.45rem; }
+    .sdt-pill { padding: 0.35rem 0.8rem; border-radius: 999px; border: 1px solid rgba(148,163,184,0.35); background: transparent; color: inherit; font-size: 0.85rem; font-weight: 600; cursor: pointer; }
+    .sdt-pill.is-active { background: #0284c7; border-color: #0284c7; color: #ffffff; }
+    .sdt-yt-link { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0.8rem; border-radius: 0.5rem; border: 1px solid rgba(148,163,184,0.35); font-size: 0.85rem; font-weight: 600; text-decoration: none; }
+    .sdt-card { border-radius: 0.75rem; border: 1px solid rgba(148,163,184,0.28); padding: 1.15rem 1.25rem; display: flex; flex-direction: column; gap: 0.9rem; background: rgba(15,23,42,0.03); }
+    .dark .sdt-card { background: rgba(15,23,42,0.45); border-color: rgba(148,163,184,0.2); }
+    .sdt-meta { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; font-size: 0.78rem; font-weight: 600; }
+    .sdt-tag { padding: 0.15rem 0.55rem; border-radius: 999px; background: rgba(2,132,199,0.14); color: #0284c7; }
+    .dark .sdt-tag { color: #38bdf8; background: rgba(56,189,248,0.15); }
+    .sdt-dur { padding: 0.15rem 0.55rem; border-radius: 999px; border: 1px solid rgba(148,163,184,0.3); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .sdt-card h3 { margin: 0; font-size: 1.2rem; }
+    .sdt-card p.sdt-summary { margin: 0; font-size: 0.92rem; opacity: 0.86; }
+    .sdt-frame { position: relative; width: 100%; aspect-ratio: 16 / 9; border-radius: 0.6rem; overflow: hidden; border: 1px solid rgba(148,163,184,0.25); background: #0b0f17; }
+    .sdt-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+    .sdt-steps { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.25rem; }
+    .sdt-step { display: flex; align-items: flex-start; gap: 0.65rem; padding: 0.55rem 0.75rem; border-radius: 0.5rem; border: 1px solid rgba(148,163,184,0.2); font-size: 0.88rem; }
+    .sdt-step-num { width: 1.4rem; height: 1.4rem; border-radius: 50%; background: rgba(2,132,199,0.15); color: #0284c7; display: inline-flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 700; flex-shrink: 0; margin-top: 0.1rem; }
+    .dark .sdt-step-num { color: #38bdf8; }
+    .sdt-step-body { flex: 1; }
+    .sdt-step-body strong { display: block; margin-bottom: 0.15rem; }
+  </style>
+
+  <div class="sdt-filter-bar">
+    <div class="sdt-pills" role="tablist" aria-label="Filter tutorials">
+      {{- range $idx, $c := $cat.categories }}
+        {{- if index $usedCats $c.id }}
+        <button type="button" class="sdt-pill{{ if eq $c.id "all" }} is-active{{ end }}" data-sdt-cat="{{ $c.id }}">{{ $c.label }}</button>
+        {{- end }}
+      {{- end }}
+    </div>
+    <a class="sdt-yt-link" href="{{ $cat.channel.url }}" target="_blank" rel="noopener noreferrer">
+      YouTube Channel ({{ $cat.channel.handle }})
+    </a>
+  </div>
+
+  {{- range $v := $cat.videos }}
+  <article class="sdt-card" id="{{ $v.id }}" data-sdt-video-cat="{{ $v.category }}">
+    <div class="sdt-meta">
+      <span class="sdt-tag">{{ $v.categoryLabel }}</span>
+      <span class="sdt-dur">{{ $v.durationLabel }} &middot; &lt; 5 min</span>
+    </div>
+    <h3>{{ $v.title }}</h3>
+    <p class="sdt-summary">{{ $v.summary }}</p>
+    {{- if $v.youtubeVideoId }}
+    <div class="sdt-frame">
+      <iframe
+        src="https://www.youtube-nocookie.com/embed/{{ $v.youtubeVideoId }}?rel=0&modestbranding=1"
+        title="{{ $v.title }}"
+        loading="lazy"
+        referrerpolicy="strict-origin-when-cross-origin"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+        allowfullscreen
+      ></iframe>
+    </div>
+    {{- end }}
+    <div class="sdt-steps">
+      {{- range $i, $s := $v.steps }}
+      <div class="sdt-step">
+        <span class="sdt-step-num">{{ add $i 1 }}</span>
+        <div class="sdt-step-body">
+          <strong>{{ $s.caption }}</strong>
+          <span>{{ $s.narration }}</span>
+        </div>
+      </div>
+      {{- end }}
+    </div>
+  </article>
+  {{- end }}
+
+  <script>
+    (function () {
+      var root = document.getElementById("slaprf-docs-tutorials");
+      if (!root) return;
+      root.addEventListener("click", function (ev) {
+        var btn = ev.target && ev.target.closest("[data-sdt-cat]");
+        if (!btn) return;
+        var cat = btn.getAttribute("data-sdt-cat") || "all";
+        root.querySelectorAll("[data-sdt-cat]").forEach(function (b) {
+          b.classList.toggle("is-active", b === btn);
+        });
+        root.querySelectorAll("[data-sdt-video-cat]").forEach(function (card) {
+          var match = cat === "all" || card.getAttribute("data-sdt-video-cat") === cat;
+          card.style.display = match ? "" : "none";
+        });
+      });
+    })();
+  </script>
+</div>
+{{- end -}}

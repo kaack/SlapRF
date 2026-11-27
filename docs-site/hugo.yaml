@@ -58,10 +58,14 @@ menu:
       name: "Join Discord"
       url: "https://discord.gg/zNrV3auRss"
       weight: 102
+    - identifier: youtube
+      name: "YouTube Tutorials"
+      url: "https://www.youtube.com/@SlapRF"
+      weight: 103
     - identifier: demo
       name: "Browser Demo"
       url: "https://slaprf.app"
-      weight: 103
+      weight: 104
 
 params:
   description: "Documentation for the SlapRF FPV timing application and DIY XIAO ESP32-C5 5.8 GHz gate hardware."

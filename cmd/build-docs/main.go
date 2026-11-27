@@ -28,11 +28,19 @@ func main() {
 
 	jsDir := filepath.Join(*docsDir, "static", "js")
 	fwDir := filepath.Join(*docsDir, "static", "firmware")
+	dataDir := filepath.Join(*docsDir, "data")
 	if err := os.MkdirAll(jsDir, 0o755); err != nil {
 		log.Fatalf("[build-docs] mkdir %s: %v", jsDir, err)
 	}
 	if err := os.MkdirAll(fwDir, 0o755); err != nil {
 		log.Fatalf("[build-docs] mkdir %s: %v", fwDir, err)
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		log.Fatalf("[build-docs] mkdir %s: %v", dataDir, err)
+	}
+	tutorialsSrc := filepath.Join(*webDir, "src", "data", "tutorials.json")
+	if _, err := os.Stat(tutorialsSrc); err == nil {
+		mustCopy(tutorialsSrc, filepath.Join(dataDir, "tutorials.json"))
 	}
 
 	flasherJS, err := devbundle.BundleDocsFlasher(*webDir)

@@ -13,6 +13,7 @@ export type RouteId =
   | "setup"
   | "flasher"
   | "debug"
+  | "tutorials"
   | "about";
 
 export type RacesViewTab =
@@ -447,6 +448,13 @@ export const ROUTES: RouteMeta[] = [
     title: "Settings",
     subtitle: "Timing rules, announcer, LapRF emulator, data source, and persistence",
     icon: () => icons.sliders(20),
+  },
+  {
+    id: "tutorials",
+    label: "Tutorials",
+    title: "Tutorials",
+    subtitle: "Short under-5-minute video guides for learning how to use SlapRF",
+    icon: () => icons.video(20),
   },
   {
     id: "about",

@@ -16,6 +16,8 @@ import { LapRFEmulatorView } from "../views/LapRFEmulatorView";
 import { NetworkView } from "../views/NetworkView";
 import { SetupView } from "../views/SetupView";
 import { SimView } from "../views/SimView";
+import { TutorialsView } from "../views/TutorialsView";
+import rawTutorialsCatalog from "../data/tutorials.json";
 import { PilotSlotsEditor } from "../widgets/PilotSlotsEditor";
 import { TrackEditor } from "../widgets/TrackEditor";
 import {
@@ -693,7 +695,7 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LapRFEmulatorView,
         );
         expect(router.route).toBe("network");
 
-        // Swiping left from Network (#/network) continues into More items in menu order (Flasher -> Debug -> Settings -> About when Simulator is off)
+        // Swiping left from Network (#/network) continues into More items in menu order (Flasher -> Debug -> Settings -> Tutorials -> About when Simulator is off)
 
         outletEl.dispatchEvent(
           new PointerEvent("pointerdown", { bubbles: true, pointerId: 43, pointerType: "touch", clientX: 300, clientY: 200 })
@@ -737,9 +739,20 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LapRFEmulatorView,
         window.dispatchEvent(
           new PointerEvent("pointerup", { bubbles: true, pointerId: 46, pointerType: "touch", clientX: 170, clientY: 202 })
         );
+        expect(router.route).toBe("tutorials");
+
+        outletEl.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, pointerId: 465, pointerType: "touch", clientX: 300, clientY: 200 })
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, pointerId: 465, pointerType: "touch", clientX: 180, clientY: 202 })
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, pointerId: 465, pointerType: "touch", clientX: 170, clientY: 202 })
+        );
         expect(router.route).toBe("about");
 
-        // Swiping right from About (#/about) steps back to Settings (#/setup)
+        // Swiping right from About (#/about) steps back to Tutorials (#/tutorials)
         outletEl.dispatchEvent(
           new PointerEvent("pointerdown", { bubbles: true, pointerId: 47, pointerType: "touch", clientX: 80, clientY: 200 })
         );
@@ -749,7 +762,7 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LapRFEmulatorView,
         window.dispatchEvent(
           new PointerEvent("pointerup", { bubbles: true, pointerId: 47, pointerType: "touch", clientX: 215, clientY: 202 })
         );
-        expect(router.route).toBe("setup");
+        expect(router.route).toBe("tutorials");
 
         // Regression guard: DebugView Auto X keeps a steady 15s window without jumping on sample arrival jitter,
         // and onDeactivate() halts background view work until onActivate() resumes it.
@@ -923,6 +936,66 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LapRFEmulatorView,
       router.clearListeners();
       pracHost.remove();
       raceHost.remove();
+      pushAppHash("#/practice");
+    }
+  });
+});
+
+describe("views/TutorialsView — General-Purpose Video Catalog & YouTube Embeds", () => {
+  it("renders populated categories, filters by category and search, embeds YouTube video IDs, and seeks chapters", () => {
+    const host = mountHtml(`<div data-tutorials-host></div>`);
+    const origFirstId = rawTutorialsCatalog.videos[0].youtubeVideoId;
+    let view: TutorialsView | null = null;
+    try {
+      rawTutorialsCatalog.videos[0].youtubeVideoId = "dQw4w9WgXcQ";
+      pushAppHash("#/tutorials");
+      view = new TutorialsView(host);
+
+      const catBtns = Array.from(host.querySelectorAll<HTMLButtonElement>("[data-tut-cat]"));
+      const catLabels = catBtns.map((b) => b.textContent?.trim());
+      expect(catLabels).toContain("All Tutorials");
+      expect(catLabels).toContain("Qualifying");
+      expect(catLabels).toContain("Race Setup & Finals");
+
+      // Every catalog video must enforce < 5 minutes
+      for (const vid of rawTutorialsCatalog.videos) {
+        expect(vid.durationSec).toBeLessThan(300);
+      }
+
+      // First video renders youtube-nocookie iframe and interactive timestamp buttons
+      const iframe = host.querySelector<HTMLIFrameElement>("iframe[data-tut-iframe]");
+      expect(iframe).not.toBeNull();
+      expect(iframe?.src).toContain("https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ");
+
+      const seekBtns = host.querySelectorAll<HTMLButtonElement>("[data-tut-seek]");
+      expect(seekBtns.length).toBeGreaterThan(1);
+      seekBtns[1].click();
+      const soughtIframe = host.querySelector<HTMLIFrameElement>("iframe[data-tut-iframe]");
+      expect(soughtIframe?.src).toContain("autoplay=1");
+      expect(soughtIframe?.src).toContain("start=");
+
+      // Filter by Race Setup & Finals category
+      const raceSetupPill = host.querySelector<HTMLButtonElement>('[data-tut-cat="race-setup"]');
+      expect(raceSetupPill).not.toBeNull();
+      raceSetupPill!.click();
+      expect(host.querySelectorAll("[data-tut-select]").length).toBe(1);
+      expect(host.textContent).toContain("Bump-Up Mains");
+
+      // Search filtering across step captions/narration
+      const allPill = host.querySelector<HTMLButtonElement>('[data-tut-cat="all"]')!;
+      allPill.click();
+      const searchInput = host.querySelector<HTMLInputElement>("[data-tut-search]")!;
+      searchInput.value = "Flight Queue";
+      searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(host.querySelectorAll("[data-tut-select]").length).toBe(1);
+      expect(host.textContent).toContain("Open Qualifier & Finals Flow");
+
+      // Router recognizes #/tutorials
+      expect(parseHashState("#/tutorials/managed-qualifier").route).toBe("tutorials");
+    } finally {
+      rawTutorialsCatalog.videos[0].youtubeVideoId = origFirstId;
+      view?.destroy();
+      host.remove();
       pushAppHash("#/practice");
     }
   });

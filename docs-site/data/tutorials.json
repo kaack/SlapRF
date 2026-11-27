@@ -1,0 +1,239 @@
+{
+  "channel": {
+    "name": "SlapRF",
+    "handle": "@SlapRF",
+    "url": "https://www.youtube.com/@SlapRF",
+    "tagline": "5.8 GHz FPV drone lap timing, section splits, and race control."
+  },
+  "categories": [
+    { "id": "all", "label": "All Tutorials" },
+    { "id": "getting-started", "label": "Getting Started" },
+    { "id": "practice", "label": "Practice & Splits" },
+    { "id": "qualifying", "label": "Qualifying" },
+    { "id": "race-setup", "label": "Race Setup & Finals" },
+    { "id": "hardware", "label": "Hardware & Flashing" }
+  ],
+  "videos": [
+    {
+      "id": "open-qualifier",
+      "title": "Open Qualifier & Finals Flow",
+      "category": "qualifying",
+      "categoryLabel": "Qualifying",
+      "tryHash": "#/races",
+      "tryLabel": "Open Race Workspace",
+      "summary": "Create a race, mark active and away pilots, queue walk-up packs in an Open Qualifier, and seed the top qualifiers into Finals.",
+      "youtubeVideoId": "",
+      "outputFile": "open-qualifier-tutorial.mp4",
+      "durationSec": 62,
+      "durationLabel": "1:02",
+      "maxDurationSec": 300,
+      "voice": "en-US-AndrewNeural",
+      "voiceRate": "+4%",
+      "simSpeedMultiplier": 14,
+      "steps": [
+        {
+          "id": "create-race",
+          "startSec": 0,
+          "badge": "STEP 1 · CREATE RACE",
+          "caption": "Enter an event name in Race and create a new session",
+          "narration": "Open the Race tab, enter a name for your event, and click Add to create a new race.",
+          "actions": [
+            { "type": "goto", "url": "/#/races" },
+            { "type": "fill", "selector": "[data-race-dir-search]", "value": "Friday Open Qualifier" },
+            { "type": "click", "selector": "[data-race-act=\"create-race-inline\"]", "pauseBeforeMs": 350, "pauseAfterMs": 600 },
+            { "type": "clickIfVisible", "selector": ".slaprf-modal-backdrop [data-rc-modal-close]", "pauseAfterMs": 350 }
+          ]
+        },
+        {
+          "id": "mark-pilots",
+          "startSec": 8,
+          "badge": "STEP 2 · MARK PILOTS",
+          "caption": "Verify checked-in pilots and mark absent pilots Away",
+          "narration": "Open Pilots from the Run checklist to check attendance. Mark any absent pilot Away so only ready pilots enter the queue.",
+          "actions": [
+            { "type": "click", "selector": "[data-mobile-ctrl-nav=\"live\"]", "pauseBeforeMs": 250, "pauseAfterMs": 650 },
+            { "type": "click", "selector": "[data-race-setup-checklist] [data-race-tab=\"pilots\"]", "pauseBeforeMs": 350, "pauseAfterMs": 650 },
+            { "type": "clickIfVisible", "selector": "[data-att-status=\"away\"][data-slot-index=\"8\"]", "pauseAfterMs": 600 }
+          ]
+        },
+        {
+          "id": "select-open-qualifier",
+          "startSec": 17,
+          "badge": "STEP 3 · OPEN QUALIFIER",
+          "caption": "Pick Open Qualifier in Setup and note the Graph / Table switcher",
+          "narration": "Go to Setup, select Open Qualifier, and click Continue. A first-time tip highlights the Graph and Table switcher on the right.",
+          "actions": [
+            { "type": "click", "selector": ".rc-topleft-seg [data-race-tab=\"edit\"]", "pauseBeforeMs": 300, "pauseAfterMs": 550 },
+            { "type": "clickIfVisible", "selector": "[data-rc-ui=\"open-templates\"], [data-dte-open-templates]", "pauseAfterMs": 450 },
+            { "type": "click", "selector": "[data-modal-pick-tpl=\"open_qualifier\"]", "pauseBeforeMs": 300, "pauseAfterMs": 400 },
+            { "type": "click", "selector": "[data-tpl-confirm]", "pauseBeforeMs": 250, "pauseAfterMs": 950 },
+            { "type": "clickIfVisible", "selector": "[data-setup-intro-act=\"dismiss\"]", "pauseAfterMs": 350 }
+          ]
+        },
+        {
+          "id": "connect-finals",
+          "startSec": 27,
+          "badge": "STEP 4 · CONNECT FINALS",
+          "caption": "Drag from the Open Qualifier output port to attach a Finals round",
+          "narration": "Drag out from the Open Qualifier right port and select Finals so top qualifiers advance to a championship round.",
+          "actions": [
+            { "type": "clickIfVisible", "selector": "[data-rc-cam=\"fit\"]", "pauseAfterMs": 400 },
+            {
+              "type": "wireDrop",
+              "fromSelector": "[data-round-node]:not(.is-pilots-node) button.bkt-port.is-out[data-round-out]",
+              "optionId": "finals",
+              "dx": 90,
+              "dy": -140
+            },
+            { "type": "clickIfVisible", "selector": "[data-rc-cam=\"fit\"]", "pauseAfterMs": 600 }
+          ]
+        },
+        {
+          "id": "queue-pilots",
+          "startSec": 36,
+          "badge": "STEP 5 · QUEUE PILOTS",
+          "caption": "Queue individual walk-up pilots or click Queue All Ready",
+          "narration": "Open Run to manage the Flight Queue. Queue individual pilots as they step up, or click Queue All Ready to fill heats on sticky VTX channels.",
+          "actions": [
+            { "type": "click", "selector": "[data-mobile-ctrl-nav=\"live\"]", "pauseBeforeMs": 300, "pauseAfterMs": 650 },
+            { "type": "click", "selector": "[data-oq-act=\"enqueue\"][data-pilot-slot=\"1\"]", "pauseBeforeMs": 300, "pauseAfterMs": 450 },
+            { "type": "click", "selector": "[data-oq-act=\"enqueue_all\"]", "pauseBeforeMs": 300, "pauseAfterMs": 650 }
+          ]
+        },
+        {
+          "id": "run-qualifier-heats",
+          "startSec": 45,
+          "badge": "STEP 6 · RUN QUALIFIER HEATS",
+          "caption": "Start, finish, and confirm Open Qualifier heats OQ-H1 and OQ-H2",
+          "narration": "Start Open Qualifier Heat 1, then finish and confirm each heat as pilots complete their packs.",
+          "actions": [
+            { "type": "runHeatFast", "minElapsedMs": 2200, "confirm": true },
+            { "type": "clickIfVisible", "selector": "[data-load-next-ready=\"1\"]", "pauseAfterMs": 450 },
+            { "type": "runHeatFast", "minElapsedMs": 2000, "confirm": true }
+          ]
+        },
+        {
+          "id": "seed-and-run-finals",
+          "startSec": 54,
+          "badge": "STEP 7 · SEED & RUN FINALS",
+          "caption": "Seed Finals from Open Qualifier standings and run the Finals heat",
+          "narration": "When qualifying ends, open Setup in Table view, click Seed Finals Now, and return to Run to race the Finals heat.",
+          "actions": [
+            { "type": "click", "selector": ".rc-topleft-seg [data-race-tab=\"edit\"]", "pauseBeforeMs": 300, "pauseAfterMs": 450 },
+            { "type": "click", "selector": "[data-setup-view=\"table\"]", "pauseBeforeMs": 250, "pauseAfterMs": 550 },
+            { "type": "click", "selector": "[data-dte-seed-now]", "pauseBeforeMs": 300, "pauseAfterMs": 450 },
+            { "type": "click", "selector": "[data-dte-confirm-seed-now]", "pauseBeforeMs": 300, "pauseAfterMs": 600 },
+            { "type": "click", "selector": "[data-setup-view=\"graph\"]", "pauseBeforeMs": 200, "pauseAfterMs": 300 },
+            { "type": "click", "selector": "[data-mobile-ctrl-nav=\"live\"]", "pauseBeforeMs": 250, "pauseAfterMs": 550 },
+            { "type": "clickIfVisible", "selector": "[data-canvas-panel=\"schedule\"] [data-select-heat=\"GF-1\"], [data-canvas-panel=\"schedule\"] [data-select-heat=\"CTA-1\"]", "pauseAfterMs": 450 },
+            { "type": "runHeatFast", "minElapsedMs": 2200, "confirm": true }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "managed-qualifier",
+      "title": "Managed Qualifying, Heats & Bump-Up Mains",
+      "category": "race-setup",
+      "categoryLabel": "Race Setup & Finals",
+      "tryHash": "#/races",
+      "tryLabel": "Open Race Workspace",
+      "summary": "Set up a single-timer track, configure scheduled Qualifying rounds, add heats or extra rounds, and switch Finals to Bump-Up Mains for all pilots.",
+      "youtubeVideoId": "",
+      "outputFile": "managed-qualifier-tutorial.mp4",
+      "durationSec": 58,
+      "durationLabel": "0:58",
+      "maxDurationSec": 300,
+      "voice": "en-US-AndrewNeural",
+      "voiceRate": "+4%",
+      "simSpeedMultiplier": 14,
+      "steps": [
+        {
+          "id": "create-and-single-timer-track",
+          "startSec": 0,
+          "badge": "STEP 1 · SINGLE-TIMER TRACK",
+          "caption": "Create a club race and verify Single Timer Start / Finish on Hub H1",
+          "narration": "Create a new club race and open Track. Single Timer mode automatically assigns Hub H1 as your Start and Finish gate.",
+          "actions": [
+            { "type": "goto", "url": "/#/races" },
+            { "type": "fill", "selector": "[data-race-dir-search]", "value": "Saturday Club Race" },
+            { "type": "click", "selector": "[data-race-act=\"create-race-inline\"]", "pauseBeforeMs": 350, "pauseAfterMs": 600 },
+            { "type": "clickIfVisible", "selector": ".slaprf-modal-backdrop [data-rc-modal-close]", "pauseAfterMs": 350 },
+            { "type": "click", "selector": ".rc-topleft-seg [data-race-tab=\"track\"]", "pauseBeforeMs": 300, "pauseAfterMs": 900 }
+          ]
+        },
+        {
+          "id": "template-and-graph-table-switcher",
+          "startSec": 10,
+          "badge": "STEP 2 · GRAPH VS TABLE SETUP",
+          "caption": "Choose Qualifying + Chase the Ace and preview Graph and Table views",
+          "narration": "Open Setup and choose Qualifying plus Chase the Ace. Use the Graph and Table switcher on the right to edit visual cards or side-by-side round columns.",
+          "actions": [
+            { "type": "click", "selector": ".rc-topleft-seg [data-race-tab=\"edit\"]", "pauseBeforeMs": 300, "pauseAfterMs": 500 },
+            { "type": "clickIfVisible", "selector": "[data-rc-ui=\"open-templates\"], [data-dte-open-templates]", "pauseAfterMs": 450 },
+            { "type": "click", "selector": "[data-modal-pick-tpl=\"qual_chase_the_ace\"]", "pauseBeforeMs": 300, "pauseAfterMs": 400 },
+            { "type": "click", "selector": "[data-tpl-confirm]", "pauseBeforeMs": 250, "pauseAfterMs": 950 },
+            { "type": "clickIfVisible", "selector": "[data-setup-intro-act=\"switch-other\"]", "pauseAfterMs": 850 },
+            { "type": "click", "selector": "[data-setup-view=\"graph\"]", "pauseBeforeMs": 300, "pauseAfterMs": 500 },
+            { "type": "clickIfVisible", "selector": "[data-rc-cam=\"fit\"]", "pauseAfterMs": 550 }
+          ]
+        },
+        {
+          "id": "add-heats-and-qualifying-rounds",
+          "startSec": 21,
+          "badge": "STEP 3 · + HEAT & + ROUND",
+          "caption": "Add heats with the [+] button on round cards or append a Qualifying round",
+          "narration": "Click the plus button on any round card header to add an extra heat, or click Add Qualifying Round at the bottom of the last qualifier.",
+          "actions": [
+            { "type": "click", "selector": ".bkt-node-add-heat-btn", "pauseBeforeMs": 350, "pauseAfterMs": 750 },
+            { "type": "click", "selector": ".bkt-seat-btn.is-del-heat", "pauseBeforeMs": 300, "pauseAfterMs": 550 },
+            { "type": "click", "selector": "[data-bkt-action=\"add_qualifying_round\"]", "pauseBeforeMs": 350, "pauseAfterMs": 750 },
+            { "type": "clickIfVisible", "selector": "[data-rc-cam=\"fit\"]", "pauseAfterMs": 550 }
+          ]
+        },
+        {
+          "id": "fixed-heats-and-bump-up-mains",
+          "startSec": 32,
+          "badge": "STEP 4 · BUMP-UP MAINS",
+          "caption": "Configure fixed VTX heat lineups and switch Finals to Bump-Up Mains",
+          "narration": "Open Qualifying settings to keep identical heats and VTX channels across rounds, then click the Finals pill to place every pilot into Bump-Up Mains.",
+          "actions": [
+            { "type": "click", "selector": "[data-bkt-action=\"open_qual_stage_settings\"]", "pauseBeforeMs": 350, "pauseAfterMs": 850 },
+            { "type": "click", "selector": "[data-rc-modal-close]", "pauseBeforeMs": 250, "pauseAfterMs": 400 },
+            { "type": "click", "selector": "[data-bkt-action=\"open_finals_structure_menu\"]", "pauseBeforeMs": 350, "pauseAfterMs": 650 },
+            { "type": "click", "selector": "[data-wire-drop-opt=\"qual_ladder_mains\"]", "pauseBeforeMs": 350, "pauseAfterMs": 750 },
+            { "type": "clickIfVisible", "selector": "[data-rc-cam=\"fit\"]", "pauseAfterMs": 600 }
+          ]
+        },
+        {
+          "id": "run-heat-and-live-jump",
+          "startSec": 43,
+          "badge": "STEP 5 · RUN & LIVE BANNER",
+          "caption": "Start Q1-H1 in Run and jump back from any tab via the Live banner",
+          "narration": "Open Run and start Qualifying Round 1, Heat 1. Whenever you check Setup during a live heat, click the Live banner at the top to return to Run in one click.",
+          "actions": [
+            { "type": "click", "selector": "[data-mobile-ctrl-nav=\"live\"]", "pauseBeforeMs": 300, "pauseAfterMs": 550 },
+            { "type": "clickIfVisible", "selector": "[data-ctrl=\"stage\"]", "pauseAfterMs": 400 },
+            { "type": "click", "selector": "[data-ctrl=\"start\"]", "pauseBeforeMs": 250, "pauseAfterMs": 400 },
+            { "type": "clickIfVisible", "selector": ".slaprf-modal-backdrop [data-modal-confirm]", "pauseAfterMs": 400 },
+            { "type": "wait", "ms": 1100 },
+            { "type": "click", "selector": ".rc-topleft-seg [data-race-tab=\"edit\"]", "pauseBeforeMs": 300, "pauseAfterMs": 1000 },
+            { "type": "click", "selector": "[data-ws-live-jump=\"race\"]", "pauseBeforeMs": 350, "pauseAfterMs": 700 },
+            { "type": "clickIfVisible", "selector": "[data-ctrl=\"stop\"]", "pauseAfterMs": 450 },
+            { "type": "clickIfVisible", "selector": "[data-ctrl=\"confirm\"]", "pauseAfterMs": 500 }
+          ]
+        },
+        {
+          "id": "review-results",
+          "startSec": 53,
+          "badge": "STEP 6 · REVIEW HEATS",
+          "caption": "Inspect confirmed heat placements and RSSI lap crossings in Review",
+          "narration": "Open Review at any point to inspect confirmed heat results and lap splits.",
+          "actions": [
+            { "type": "click", "selector": ".rc-topleft-seg [data-race-tab=\"review\"]", "pauseBeforeMs": 300, "pauseAfterMs": 950 }
+          ]
+        }
+      ]
+    }
+  ]
+}
