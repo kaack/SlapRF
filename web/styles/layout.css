@@ -1859,11 +1859,37 @@ html[data-theme="light"] .topbar-ws-live-pill {
   }
 }
 
+.topbar-ws-live-pill.is-jump-btn {
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.14s ease, border-color 0.14s ease, transform 0.12s ease;
+}
+
+.topbar-ws-live-pill.is-jump-btn:hover {
+  background: rgba(52, 211, 153, 0.22);
+  border-color: rgba(52, 211, 153, 0.58);
+}
+
+html[data-theme="light"] .topbar-ws-live-pill.is-jump-btn:hover {
+  background: rgba(16, 185, 129, 0.2);
+  border-color: rgba(5, 150, 105, 0.52);
+}
+
+.topbar-live-short {
+  display: none;
+}
+
 .topbar-mobile-subpage-ctx {
   display: none;
 }
 
 @media (max-width: 860px) {
+  .topbar-live-full {
+    display: none;
+  }
+  .topbar-live-short {
+    display: inline;
+  }
   .topbar-mobile-subpage-ctx {
     display: inline-flex;
     align-items: center;

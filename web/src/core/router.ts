@@ -49,6 +49,8 @@ export interface RacesTopBarContext {
   totalStages: number;
   stageTitle: string;
   live?: boolean;
+  inRun?: boolean;
+  liveHeatLabel?: string;
 }
 
 export interface PracticeTopBarContext {
@@ -56,6 +58,7 @@ export interface PracticeTopBarContext {
   sessionId?: string;
   sessionName: string;
   active: boolean;
+  pane?: string;
 }
 
 export interface RacesRouteTarget {
@@ -81,13 +84,16 @@ export interface ParsedHashState {
 
 export type RacesTopBarCommand =
   | { type: "set-tab"; tab: RacesViewTab; raceKey?: string; stage?: number }
-  | { type: "set-stage"; stage: number };
+  | { type: "set-stage"; stage: number }
+  | { type: "go-run" };
 
-export type PracticeTopBarCommand = {
-  type: "set-tab";
-  tab: PracticeViewTab;
-  sessionId?: string;
-};
+export type PracticeTopBarCommand =
+  | {
+      type: "set-tab";
+      tab: PracticeViewTab;
+      sessionId?: string;
+    }
+  | { type: "go-run" };
 
 let pendingRacesTab: RacesViewTab | null = null;
 let pendingRacesStage: number | null = null;
@@ -121,7 +127,8 @@ export function setPracticeTopBarContext(next: PracticeTopBarContext): void {
     currentPracticeContext.tab === next.tab &&
     (currentPracticeContext.sessionId ?? "") === (next.sessionId ?? "") &&
     currentPracticeContext.sessionName === next.sessionName &&
-    currentPracticeContext.active === next.active
+    currentPracticeContext.active === next.active &&
+    (currentPracticeContext.pane ?? "") === (next.pane ?? "")
   ) {
     return;
   }
@@ -172,7 +179,9 @@ export function setRacesTopBarContext(next: RacesTopBarContext): void {
     currentRacesContext.activeStage === next.activeStage &&
     currentRacesContext.totalStages === next.totalStages &&
     currentRacesContext.stageTitle === next.stageTitle &&
-    Boolean(currentRacesContext.live) === Boolean(next.live)
+    Boolean(currentRacesContext.live) === Boolean(next.live) &&
+    Boolean(currentRacesContext.inRun) === Boolean(next.inRun) &&
+    (currentRacesContext.liveHeatLabel ?? "") === (next.liveHeatLabel ?? "")
   ) {
     return;
   }
@@ -560,7 +569,7 @@ export function parseHashState(hash: string): ParsedHashState | null {
     if (p1 === "track") {
       return { route: "races", races: { tab: "track" } };
     }
-    if (p1 === "control") {
+    if (p1 === "control" || p1 === "run") {
       return { route: "races", races: { tab: "control" } };
     }
     if (p1 === "review") {
@@ -598,7 +607,7 @@ export function parseHashState(hash: string): ParsedHashState | null {
     if (p2 === "track") {
       return { route: "races", races: { tab: "track", raceKey } };
     }
-    if (p2 === "control") {
+    if (p2 === "control" || p2 === "run") {
       return { route: "races", races: { tab: "control", raceKey } };
     }
     if (p2 === "review") {

@@ -303,6 +303,15 @@ export class TopBar extends Component {
         e.preventDefault();
         dispatchPracticeTopBarCommand({ type: "set-tab", tab: "directory" });
         break;
+      case "ws-go-run":
+        e.preventDefault();
+        e.stopPropagation();
+        if (this.router.route === "races") {
+          dispatchRacesTopBarCommand({ type: "go-run" });
+        } else if (this.router.route === "practice") {
+          dispatchPracticeTopBarCommand({ type: "go-run" });
+        }
+        break;
       case "analytics-chooser":
         e.preventDefault();
         this.scopeMenuOpen = false;
@@ -430,7 +439,7 @@ export class TopBar extends Component {
     const isBleMode = hwMode === "slaprf_ble";
     const isNetMode = hwMode === "slaprf_net";
     const pairedBleHub = isBleMode ? getPairedBluetoothHub() : null;
-    const sig = `${meta.id}:${appTheme}:${hwMode}:${sim ? 1 : 0}:${caps.demoMode ? 1 : 0}:${caps.portable ? 1 : 0}:${lockedOut ? 1 : 0}:${caps.remoteBackend ? 1 : 0}:${caps.backendBaseUrl}:${caps.localDetectedUrl ?? ""}:${emulEnabled ? 1 : 0}:${voiceOn ? 1 : 0}:${emulConnected ? 1 : 0}:${this.scopeMenuOpen ? 1 : 0}:${this.crumbMenuOpen ? 1 : 0}:${usbOn ? 1 : 0}:${activeLabel}:${usbFp}:${usbBusy}:${pairedBleHub?.fp ?? ""}:${led.color}:${led.shortLabel}:${led.detail}:${sbCollapsed ? 1 : 0}:${rCtx.tab}:${rCtx.raceId ?? ""}:${rCtx.raceName}:${rCtx.activeStage}:${rCtx.totalStages}:${rCtx.stageTitle}:${rCtx.live ? 1 : 0}:${pCtx.tab}:${pCtx.sessionId ?? ""}:${pCtx.sessionName}:${pCtx.active ? 1 : 0}:${aTopCtx.mode}:${aScope ? `${aScope.kind}:${aScope.id}:${aScope.name}:${aScope.live ? 1 : 0}` : ""}:${scopePopoverCounts}`;
+    const sig = `${meta.id}:${appTheme}:${hwMode}:${sim ? 1 : 0}:${caps.demoMode ? 1 : 0}:${caps.portable ? 1 : 0}:${lockedOut ? 1 : 0}:${caps.remoteBackend ? 1 : 0}:${caps.backendBaseUrl}:${caps.localDetectedUrl ?? ""}:${emulEnabled ? 1 : 0}:${voiceOn ? 1 : 0}:${emulConnected ? 1 : 0}:${this.scopeMenuOpen ? 1 : 0}:${this.crumbMenuOpen ? 1 : 0}:${usbOn ? 1 : 0}:${activeLabel}:${usbFp}:${usbBusy}:${pairedBleHub?.fp ?? ""}:${led.color}:${led.shortLabel}:${led.detail}:${sbCollapsed ? 1 : 0}:${rCtx.tab}:${rCtx.raceId ?? ""}:${rCtx.raceName}:${rCtx.activeStage}:${rCtx.totalStages}:${rCtx.stageTitle}:${rCtx.live ? 1 : 0}:${rCtx.inRun ? 1 : 0}:${rCtx.liveHeatLabel ?? ""}:${pCtx.tab}:${pCtx.sessionId ?? ""}:${pCtx.sessionName}:${pCtx.active ? 1 : 0}:${pCtx.pane ?? ""}:${aTopCtx.mode}:${aScope ? `${aScope.kind}:${aScope.id}:${aScope.name}:${aScope.live ? 1 : 0}` : ""}:${scopePopoverCounts}`;
     this.el.classList.toggle("has-subpage-back", isSubPage);
     this.el.closest(".app")?.classList.toggle("is-mobile-subpage", isSubPage);
     if (sig === this.lastSig) return;
@@ -539,9 +548,17 @@ export class TopBar extends Component {
     const practiceSessionHref = buildPracticeHash("session", practiceSlug);
 
     const wsIsLive = Boolean((inRaceWorkspace && rCtx.live) || (inPracticeWorkspace && pCtx.active));
-    const wsLivePillHtml = wsIsLive
-      ? `<span class="topbar-ws-live-pill" data-ws-live-pill title="Live RF timing active"><span class="topbar-ws-live-dot" aria-hidden="true"></span><span>LIVE</span></span>`
-      : "";
+    const canJumpToRun = Boolean(
+      wsIsLive &&
+        ((inRaceWorkspace && !rCtx.inRun) ||
+          (inPracticeWorkspace && pCtx.pane && pCtx.pane !== "overview"))
+    );
+    const liveHeatBit = inRaceWorkspace && rCtx.liveHeatLabel ? ` · ${esc(rCtx.liveHeatLabel)}` : "";
+    const wsLivePillHtml = !wsIsLive
+      ? ""
+      : canJumpToRun
+        ? `<button type="button" class="topbar-ws-live-pill is-jump-btn" data-ws-live-pill data-action="ws-go-run" title="Jump to live Run tab"><span class="topbar-ws-live-dot" aria-hidden="true"></span><span class="topbar-live-full">LIVE${liveHeatBit} · Go to Run →</span><span class="topbar-live-short">LIVE${liveHeatBit} · Run</span></button>`
+        : `<span class="topbar-ws-live-pill" data-ws-live-pill title="Live RF timing active"><span class="topbar-ws-live-dot" aria-hidden="true"></span><span>LIVE</span></span>`;
 
     const raceCrumbs: Array<{
       label: string;

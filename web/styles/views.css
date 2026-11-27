@@ -15444,6 +15444,7 @@ html[data-theme="light"] .rc-review-exec-row.is-selected-row .rc-exec-sel-strip 
   color: var(--text-2);
 }
 
+.bkt-node-add-heat-btn,
 .bkt-node-delete-btn,
 .bkt-node-hamburger {
   display: inline-flex;
@@ -15464,6 +15465,15 @@ html[data-theme="light"] .rc-review-exec-row.is-selected-row .rc-exec-sel-strip 
   background: var(--surface-2);
   border-color: var(--border-strong);
   color: var(--text);
+}
+.bkt-node-add-heat-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  color: var(--accent, var(--text));
+}
+.bkt-node-add-heat-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 .bkt-node-delete-btn {
   color: var(--text-3);
@@ -27656,10 +27666,173 @@ html[data-theme="light"] .custom-select-wrap:has(> .dte-seat-pilot-select) .cust
 }
 
 .ws-standby-host,
-.races-page-topbar > .ws-standby-bar {
+.races-page-topbar > .ws-standby-bar,
+.races-page-topbar > .ws-live-jump-bar {
   grid-column: 1 / -1;
   width: 100%;
   box-sizing: border-box;
+}
+
+.ws-live-jump-bar {
+  width: 100%;
+  min-height: 33px;
+  padding: 4px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  box-sizing: border-box;
+  border: 0;
+  border-top: 1px solid rgba(52, 211, 153, 0.34);
+  background: color-mix(in srgb, #10b981 12%, var(--bg));
+  color: var(--text);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+
+.ws-live-jump-bar:hover {
+  background: color-mix(in srgb, #10b981 18%, var(--bg));
+  border-top-color: rgba(52, 211, 153, 0.52);
+}
+
+html[data-theme="light"] .ws-live-jump-bar {
+  background: color-mix(in srgb, #10b981 10%, var(--surface));
+  border-top-color: rgba(5, 150, 105, 0.3);
+}
+
+html[data-theme="light"] .ws-live-jump-bar:hover {
+  background: color-mix(in srgb, #10b981 16%, var(--surface));
+  border-top-color: rgba(5, 150, 105, 0.48);
+}
+
+.ws-live-jump-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 19px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  flex-shrink: 0;
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.15);
+  border: 1px solid rgba(52, 211, 153, 0.38);
+}
+
+html[data-theme="light"] .ws-live-jump-pill {
+  color: #047857;
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(5, 150, 105, 0.34);
+}
+
+.ws-live-jump-text {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.rc-pilots-checkin-hint {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+
+.race-run-onboarding {
+  max-width: 560px;
+  margin: 8px auto;
+  padding: 16px 18px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.race-run-onboarding-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.race-run-onboarding-head > strong {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.race-run-onboarding-head > span {
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.race-run-onboarding-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.race-run-step-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.race-run-step-row.is-primary {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+}
+
+.race-run-step-copy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.race-run-step-copy > div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.race-run-step-copy strong {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.race-run-step-copy span {
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.race-run-step-num {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text);
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  flex-shrink: 0;
 }
 
 .ws-standby-bar {
@@ -27782,10 +27955,15 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
     gap: 0;
   }
 
-  .ws-standby-bar {
+  .ws-standby-bar,
+  .ws-live-jump-bar {
     padding: 4px 14px;
     border-top: 0;
     border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  }
+
+  .ws-live-jump-bar {
+    border-bottom-color: rgba(52, 211, 153, 0.36);
   }
 
   .ws-standby-bar.is-paused {

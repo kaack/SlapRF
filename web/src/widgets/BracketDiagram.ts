@@ -2176,13 +2176,11 @@ function renderHeatCard(
     </div>`;
 }
 
-function renderNodeHamburgerMenu(
+function computeAddHeatDisabledReason(
   race: RaceTournamentState,
   round: RaceRound,
   heats: RaceHeat[],
   incomingCount: number,
-  _outgoingCount: number,
-  allUnstarted: boolean,
   activePilots: EventPilot[]
 ): string {
   const isFinals = round.bracketLane === "finals";
@@ -2204,7 +2202,6 @@ function renderNodeHamburgerMenu(
     }
   }
   const isAutoFed = incomingCount > 0 || isSeeded;
-  let addHeatReason = "";
   if (isAutoFed && outAdv >= 1) {
     let startedCount = 0;
     let unstartedEntrants = 0;
@@ -2233,10 +2230,34 @@ function renderNodeHamburgerMenu(
       const maxUnstartedHeats = Math.max(minHeats, Math.floor(poolN / (outAdv + 1)));
       const maxTotalHeats = startedCount + maxUnstartedHeats;
       if (heats.length >= maxTotalHeats) {
-        addHeatReason = `Cannot add another heat: advancing Top ${outAdv} per heat requires at least ${outAdv + 1} pilots per heat so at least 1 pilot is eliminated (${totalEntrants} pilots in this round, max ${maxTotalHeats} ${maxTotalHeats === 1 ? "heat" : "heats"}).`;
+        return `Cannot add another heat: advancing Top ${outAdv} per heat requires at least ${outAdv + 1} pilots per heat so at least 1 pilot is eliminated (${totalEntrants} pilots in this round, max ${maxTotalHeats} ${maxTotalHeats === 1 ? "heat" : "heats"}).`;
       }
     }
   }
+  return "";
+}
+
+function renderNodeHamburgerMenu(
+  race: RaceTournamentState,
+  round: RaceRound,
+  heats: RaceHeat[],
+  incomingCount: number,
+  _outgoingCount: number,
+  allUnstarted: boolean,
+  activePilots: EventPilot[]
+): string {
+  const isFinals = round.bracketLane === "finals";
+  const isSeeded =
+    incomingCount === 0 &&
+    (round.seedSource === "all_active_pilots" ||
+      (round.column === 1 && round.seedSource !== "empty"));
+  const addHeatReason = computeAddHeatDisabledReason(
+    race,
+    round,
+    heats,
+    incomingCount,
+    activePilots
+  );
 
   const seedItem =
     incomingCount === 0 && allUnstarted
@@ -3542,6 +3563,29 @@ function renderRoundNode(
       : ""
     : "";
 
+  const addHeatHeaderReason =
+    editableActive && !isFinalsLane
+      ? computeAddHeatDisabledReason(race, round, heats, incomingCount, activePilots)
+      : "";
+  const addHeatHeaderBtn =
+    editableActive && !isFinalsLane
+      ? `<button
+          type="button"
+          class="bkt-node-add-heat-btn"
+          data-bkt-action="add_heat"
+          data-round-id="${esc(round.id)}"
+          data-bkt-col="${round.column}"
+          data-bkt-lane="${esc(round.bracketLane)}"
+          data-bkt-round="${round.round}"
+          data-bkt-stop-select
+          ${addHeatHeaderReason ? "disabled" : ""}
+          aria-label="Add heat to ${esc(round.title)}"
+          title="${esc(addHeatHeaderReason || `Add heat to ${round.title}`)}"
+        >
+          ${icons.plus(13)}
+        </button>`
+      : "";
+
   const headerHtml = editableActive
     ? `<div class="bkt-round-head is-draggable-head" data-round-drag-handle="${esc(round.id)}" data-bkt-stop-select title="Drag anywhere on card to move · Double-click header to customize">
         <div class="bkt-round-head-top">
@@ -3550,6 +3594,7 @@ function renderRoundNode(
             <strong class="bkt-round-title-static">${esc(round.title)}</strong>
           </div>
           <div class="bkt-round-head-btns">
+            ${addHeatHeaderBtn}
             <button
               type="button"
               class="bkt-node-delete-btn"

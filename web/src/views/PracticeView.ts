@@ -257,14 +257,14 @@ export class PracticeView extends Component {
             <div class="sched-lineup-wrap rc-topleft-scroll-wrap">
               <button type="button" class="sched-lineup-cue is-left" data-lineup-scroll="-1" aria-label="Scroll tabs left" title="Scroll left" hidden>${icons.chevronLeft(14)}</button>
               <div class="rc-topleft-seg sched-lineup" role="tablist" aria-label="Practice workspace mode" data-fit-lineup>
+                <button type="button" role="tab" aria-selected="true" class="rc-topleft-btn rc-mode-btn is-active" data-practice-mobile-tab="overview">
+                  ${icons.flag(15)}<span>Run</span>
+                </button>
                 <button type="button" role="tab" aria-selected="false" class="rc-topleft-btn rc-mode-btn" data-practice-mobile-tab="pilots">
                   ${icons.pilot(15)}<span>Pilots</span>
                 </button>
                 <button type="button" role="tab" aria-selected="false" class="rc-topleft-btn rc-mode-btn" data-practice-mobile-tab="track">
                   ${icons.gate(15)}<span>Track</span>
-                </button>
-                <button type="button" role="tab" aria-selected="true" class="rc-topleft-btn rc-mode-btn is-active" data-practice-mobile-tab="overview">
-                  ${icons.flag(15)}<span>Overview</span>
                 </button>
                 <button type="button" role="tab" aria-selected="false" class="rc-topleft-btn rc-mode-btn" data-practice-mobile-tab="laps">
                   ${icons.timer(15)}<span>Laps</span>
@@ -421,6 +421,10 @@ export class PracticeView extends Component {
         if (cmd.type === "set-tab") {
           this.pendingRouteTarget = null;
           this.setTab(cmd.tab, true);
+        } else if (cmd.type === "go-run") {
+          if (this.activeTab === "session") {
+            this.setMobilePracticeTab("overview", null, false);
+          }
         }
       })
     );
@@ -512,7 +516,8 @@ export class PracticeView extends Component {
       return;
     }
 
-    const requestedPane = (target.pane || "").trim().toLowerCase() as MobilePracticeTab;
+    const rawPane = (target.pane || "").trim().toLowerCase();
+    const requestedPane = (rawPane === "run" ? "overview" : rawPane) as MobilePracticeTab;
     this.pendingRouteTarget = null;
     this.resolvingSessionId = "";
     this.setTab("session", false);
@@ -578,6 +583,7 @@ export class PracticeView extends Component {
         sessionId: sess?.sessionId ?? "",
         sessionName: sess?.name ?? "",
         active: Boolean(sess?.active && !sess?.paused && this.store.raceArmed),
+        pane: this.mobilePracticeTab,
       });
     }
 

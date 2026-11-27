@@ -1057,6 +1057,14 @@ export class RacesView extends Component {
         }
       } else if (cmd.type === "set-stage") {
         this.switchBracketStage(cmd.stage, true);
+      } else if (cmd.type === "go-run") {
+        this.mobileControlView = "live";
+        if (this.activeTab !== "control") {
+          this.switchWorkspaceTab("control", true);
+        } else {
+          this.lastSig = "";
+          this.render();
+        }
       }
     });
 
@@ -3254,10 +3262,80 @@ export class RacesView extends Component {
     this.render();
   }
 
+  private getLiveJumpBannerHeat(race: RaceTournamentState): RaceHeat | undefined {
+    if (race.emergencyStopped || race.lifecycle === "paused" || race.lifecycle === "completed" || race.lifecycle === "scrapped" || race.isComplete) {
+      return undefined;
+    }
+    const running = race.heats.find((h) => h.state === "running");
+    if (running) return running;
+    const countdown = race.heats.find((h) => h.state === "countdown");
+    if (countdown) return countdown;
+    if (this.isRaceActivelyTiming(race)) {
+      const finished = race.heats.find((h) => h.state === "finished");
+      if (finished) return finished;
+    }
+    return undefined;
+  }
+
+  private computeLiveHeatClockText(race: RaceTournamentState, heat: RaceHeat): string {
+    const serverNowUs = this.store.liveServerTimestampUs;
+    if (heat.state === "countdown") {
+      const nomSec = Math.max(1, heat.countdownDurationSec || race.config.countdownSec || 5);
+      let liveRem = Math.max(0, Math.min(nomSec, Number(heat.countdownRemainingSec ?? nomSec)));
+      if (heat.countdownStartUs && heat.countdownStartUs > 0 && serverNowUs > 0) {
+        if (serverNowUs < heat.countdownStartUs) {
+          liveRem = nomSec;
+        } else {
+          liveRem = Math.max(0, nomSec - Math.max(0, (serverNowUs - heat.countdownStartUs) / 1e6));
+        }
+      } else if (this.store.lastRaceSyncPerfMs > 0) {
+        const speedMult = this.store.simulatorRunning
+          ? Math.max(1, this.store.simState?.speedMultiplier || 1)
+          : 1;
+        const dtSec =
+          Math.max(0, (performance.now() - this.store.lastRaceSyncPerfMs) / 1000) * speedMult;
+        const armRemBase = Number(heat.countdownArmRemainingSec ?? 0);
+        if (armRemBase > 0) {
+          liveRem = dtSec < armRemBase ? nomSec : Math.max(0, nomSec - (dtSec - armRemBase));
+        } else {
+          liveRem = Math.max(0, Math.min(nomSec, Number(heat.countdownRemainingSec ?? nomSec) - dtSec));
+        }
+      }
+      return formatRaceClock(liveRem);
+    }
+    if (heat.state === "running") {
+      const baseElapsed = Math.max(0, Number(heat.elapsedSec) || 0);
+      let liveElapsed = baseElapsed;
+      if (heat.startToneUs && heat.startToneUs > 0 && serverNowUs >= heat.startToneUs) {
+        liveElapsed = Math.max(baseElapsed, (serverNowUs - heat.startToneUs) / 1e6);
+      } else if (this.store.lastRaceSyncPerfMs > 0) {
+        const speedMult = this.store.simulatorRunning
+          ? Math.max(1, this.store.simState?.speedMultiplier || 1)
+          : 1;
+        const dtSec =
+          Math.max(0, (performance.now() - this.store.lastRaceSyncPerfMs) / 1000) * speedMult;
+        liveElapsed = baseElapsed + dtSec;
+      }
+      return formatHeatClockDisplay({ ...heat, elapsedSec: liveElapsed });
+    }
+    return "";
+  }
+
   private updateLiveClockDom(): void {
-    if (this.showDirectory || this.activeTab !== "control") return;
-    if (this.isMobileViewport() && this.mobileControlView === "signals") return;
+    if (this.showDirectory) return;
     const race = this.currentRace;
+    const jumpClockEl = this.el.querySelector<HTMLElement>("[data-live-jump-clock]");
+    if (jumpClockEl) {
+      const jumpHeat = this.getLiveJumpBannerHeat(race);
+      if (jumpHeat && (jumpHeat.state === "running" || jumpHeat.state === "countdown")) {
+        const nextTxt = `(${this.computeLiveHeatClockText(race, jumpHeat)})`;
+        if (jumpClockEl.textContent !== nextTxt) {
+          jumpClockEl.textContent = nextTxt;
+        }
+      }
+    }
+    if (this.activeTab !== "control") return;
+    if (this.isMobileViewport() && this.mobileControlView === "signals") return;
     const heat = this.getControlStageHeat(race);
     if (!heat) return;
     const clockEl = this.el.querySelector<HTMLElement>("[data-race-clock]");
@@ -7230,6 +7308,16 @@ export class RacesView extends Component {
           <div class="rc-topleft-seg sched-lineup" role="navigation" aria-label="Race Workspace" data-fit-lineup data-rc-topleft-track>
             <button
               type="button"
+              class="rc-topleft-btn rc-mode-btn ${mode === "control" && activeMobileView === "live" ? "is-active" : ""}"
+              data-mobile-ctrl-nav="live"
+              aria-selected="${mode === "control" && activeMobileView === "live" ? "true" : "false"}"
+              title="Run live heats, countdowns, and flight line"
+            >
+              ${icons.flag(13)}<span>Run</span>
+            </button>
+
+            <button
+              type="button"
               class="rc-topleft-btn rc-mode-btn ${mode === "pilots" ? "is-active" : ""}"
               data-race-tab="pilots"
               aria-selected="${mode === "pilots" ? "true" : "false"}"
@@ -7256,17 +7344,6 @@ export class RacesView extends Component {
               title="Set up rounds, seeding, and heats"
             >
               ${icons.settings(13)}<span>Setup</span>
-            </button>
-
-            <button
-              type="button"
-              class="rc-topleft-btn rc-mode-btn ${mode === "control" && activeMobileView === "live" ? "is-active" : ""}"
-              data-mobile-ctrl-nav="live"
-              aria-selected="${mode === "control" && activeMobileView === "live" ? "true" : "false"}"
-              ${!configured ? "disabled" : ""}
-              title="${!configured ? "Set up tournament format first" : "Marshal live heats &amp; flight line"}"
-            >
-              ${icons.marshal(13)}<span>Marshal</span>
             </button>
             ${
               isOpenQual
@@ -7302,16 +7379,6 @@ export class RacesView extends Component {
             >
               ${icons.trophy(13)}<span>Standings</span>
             </button>
-            <button
-              type="button"
-              class="rc-topleft-btn rc-mode-btn ${mode === "control" && activeMobileView === "signals" ? "is-active" : ""}"
-              data-mobile-ctrl-nav="signals"
-              aria-selected="${mode === "control" && activeMobileView === "signals" ? "true" : "false"}"
-              ${!configured ? "disabled" : ""}
-              title="Live RSSI signals"
-            >
-              ${icons.signal(13)}<span>Signals</span>
-            </button>
 
             <button
               type="button"
@@ -7321,6 +7388,17 @@ export class RacesView extends Component {
               title="${!configured ? "Set up tournament format first" : "Review executed heats, inspect RSSI crossings, and adjust placements"}"
             >
               ${icons.reviewCheck(13)}<span>Review</span>
+            </button>
+
+            <button
+              type="button"
+              class="rc-topleft-btn rc-mode-btn ${mode === "control" && activeMobileView === "signals" ? "is-active" : ""}"
+              data-mobile-ctrl-nav="signals"
+              aria-selected="${mode === "control" && activeMobileView === "signals" ? "true" : "false"}"
+              ${!configured ? "disabled" : ""}
+              title="Live RSSI signals"
+            >
+              ${icons.signal(13)}<span>Signals</span>
             </button>
 
             <button
@@ -7348,8 +7426,44 @@ export class RacesView extends Component {
   }
 
   private renderRaceStandbyStripHtml(
-    race: RaceTournamentState
+    race: RaceTournamentState,
+    mode: WorkspaceTab
   ): { barCls: string; standbyHtml: string } {
+    const isOpenQual = hasOpenQualifierRound(race);
+    const activeMobileView =
+      this.mobileControlView === "queue" && !isOpenQual ? "live" : this.mobileControlView;
+    const inRunView = mode === "control" && activeMobileView === "live";
+
+    if (!inRunView) {
+      const jumpHeat = this.getLiveJumpBannerHeat(race);
+      if (jumpHeat) {
+        const hLabel = jumpHeat.shortLabel || jumpHeat.title;
+        const clockTxt =
+          jumpHeat.state === "running" || jumpHeat.state === "countdown"
+            ? this.computeLiveHeatClockText(race, jumpHeat)
+            : "";
+        const pillText =
+          jumpHeat.state === "countdown"
+            ? "Starting"
+            : jumpHeat.state === "finished"
+              ? "Review"
+              : "Live";
+        const fullBody =
+          jumpHeat.state === "finished"
+            ? `<strong>${esc(hLabel)}</strong> finished · Confirm in Run →`
+            : `<strong>${esc(hLabel)}</strong> <span class="mono" data-live-jump-clock>(${esc(clockTxt)})</span> · Go to Run →`;
+        const shortBody = `<strong>${esc(hLabel)}</strong> · Run →`;
+        return {
+          barCls: "is-ws-live",
+          standbyHtml: `
+            <button type="button" class="ws-live-jump-bar" data-ws-live-jump="race" data-mobile-ctrl-nav="live" title="Jump back to ${esc(hLabel)} in Run">
+              <span class="ws-live-jump-pill"><span class="topbar-ws-live-dot" aria-hidden="true"></span><span>${pillText}</span></span>
+              <span class="ws-live-jump-text"><span class="rc-lbl-full">${fullBody}</span><span class="rc-lbl-short">${shortBody}</span></span>
+            </button>`,
+        };
+      }
+    }
+
     if (this.isRaceActivelyTiming(race)) {
       return { barCls: "is-ws-live", standbyHtml: "" };
     }
@@ -7396,7 +7510,7 @@ export class RacesView extends Component {
     rightHtml = "",
     extraCls = ""
   ): string {
-    const { barCls, standbyHtml } = this.renderRaceStandbyStripHtml(race);
+    const { barCls, standbyHtml } = this.renderRaceStandbyStripHtml(race, mode);
     const cls = ["races-page-topbar", extraCls, barCls].filter(Boolean).join(" ");
     return `
       <div class="${cls}" data-rc-hud>
@@ -7708,6 +7822,11 @@ export class RacesView extends Component {
                 Out (${inactivePilots.length})
               </button>
             </div>
+            ${
+              mode === "pilots"
+                ? `<p class="rc-pilots-checkin-hint" data-pilots-checkin-hint><span class="rc-lbl-full">Checked-in active pilots are automatically placed into heats when you generate or add rounds in Setup.</span><span class="rc-lbl-short">Active pilots auto-seed into heats in Setup.</span></p>`
+                : ""
+            }
           </div>
           <div class="rc-pilots-results" data-rc-pilots-results>
             ${this.renderPilotsPanelResults(race, mode)}
@@ -7715,6 +7834,7 @@ export class RacesView extends Component {
         </div>`;
 
     if (isPageCard) {
+      const configured = isRaceConfigured(race);
       return `
         <section
           class="rc-canvas-panel rc-page-card is-pilots-panel ${effectiveCollapsed ? "is-collapsed" : ""}"
@@ -7729,7 +7849,17 @@ export class RacesView extends Component {
             </div>
             ${
               mode === "pilots"
-                ? ""
+                ? `<div class="rc-panel-actions">
+                    ${
+                      !configured
+                        ? `<button type="button" class="btn btn-armed btn-xs" data-race-tab="edit" data-pilots-next-setup title="Continue to Setup to pick a race format and generate heats">
+                             ${icons.settings(12)}<span class="rc-lbl-full">Next: Setup Heats →</span><span class="rc-lbl-short">Setup →</span>
+                           </button>`
+                        : `<button type="button" class="btn btn-ghost btn-xs" data-mobile-ctrl-nav="live" title="Jump to Run">
+                             ${icons.flag(12)}<span class="rc-lbl-full">Go to Run →</span><span class="rc-lbl-short">Run →</span>
+                           </button>`
+                    }
+                  </div>`
                 : `<div class="rc-panel-actions">
                     <button type="button" class="rc-panel-icon-btn rc-desktop-collapse-btn" data-rc-panel-collapse="pilots" title="${effectiveCollapsed ? "Expand section" : "Collapse section"}" aria-label="Toggle collapse">
                       ${effectiveCollapsed ? icons.plus(13) : icons.minus(13)}
@@ -9016,10 +9146,14 @@ export class RacesView extends Component {
     const cockpitNoticeHtml = this.renderCockpitStatusNotice(race, heat, curStage, stages);
 
     if (!heat) {
+      const configured = isRaceConfigured(race);
       const isOpenQualStage = curStage?.format === "open_qualifier";
       const activeCount = (race.roster ?? []).filter(
         (pt) => pt.checkedIn && pt.attendance === "active"
       ).length;
+      const trackInfo = this.store.raceNodes(race);
+      const gateCount = trackInfo.nodes.length;
+      const gateSummary = gateCount <= 1 ? "1 timer (Start / Finish)" : `${gateCount} gates`;
       const emptyBodyHtml = p.collapsed
         ? ""
         : `<div class="rc-panel-body is-cockpit-body">
@@ -9036,14 +9170,53 @@ export class RacesView extends Component {
                       </button>
                     </div>
                   </div>`
-                : `<div class="race-empty-state" style="padding:24px 16px">
-                    <p style="margin:0 0 10px">No heats scheduled yet for <strong>${esc(race.config.eventName || "this race")}</strong>. Click <strong>Setup</strong> to pick a tournament template or add rounds.</p>
-                    <div style="display:flex;gap:8px;justify-content:center">
-                      <button type="button" class="btn btn-armed btn-sm" data-race-tab="format">
-                        ${icons.settings(14)}<span>Setup</span>
-                      </button>
-                    </div>
-                  </div>`
+                : !configured
+                  ? `<div class="race-run-onboarding" data-race-setup-checklist>
+                      <div class="race-run-onboarding-head">
+                        <strong>Set up ${esc(race.config.eventName || "this race")} to start running heats</strong>
+                        <span>Complete these 3 quick steps before staging your first heat:</span>
+                      </div>
+                      <div class="race-run-onboarding-steps">
+                        <div class="race-run-step-row">
+                          <div class="race-run-step-copy">
+                            <span class="race-run-step-num">1</span>
+                            <div>
+                              <strong>Check In Pilots</strong>
+                              <span>${activeCount} active pilot${activeCount === 1 ? "" : "s"} checked in</span>
+                            </div>
+                          </div>
+                          <button type="button" class="btn btn-ghost btn-xs" data-race-tab="pilots">${icons.pilot(13)}<span>Pilots</span></button>
+                        </div>
+                        <div class="race-run-step-row">
+                          <div class="race-run-step-copy">
+                            <span class="race-run-step-num">2</span>
+                            <div>
+                              <strong>Confirm Track</strong>
+                              <span>${esc(gateSummary)}</span>
+                            </div>
+                          </div>
+                          <button type="button" class="btn btn-ghost btn-xs" data-race-tab="track">${icons.gate(13)}<span>Track</span></button>
+                        </div>
+                        <div class="race-run-step-row is-primary">
+                          <div class="race-run-step-copy">
+                            <span class="race-run-step-num">3</span>
+                            <div>
+                              <strong>Pick Format &amp; Generate Heats</strong>
+                              <span>Choose Qualifying, Mains, or Bracket in Setup</span>
+                            </div>
+                          </div>
+                          <button type="button" class="btn btn-armed btn-xs" data-race-tab="edit">${icons.settings(13)}<span>Setup →</span></button>
+                        </div>
+                      </div>
+                    </div>`
+                  : `<div class="race-empty-state" style="padding:24px 16px">
+                      <p style="margin:0 0 10px">No heats scheduled yet for <strong>${esc(race.config.eventName || "this race")}</strong>. Click <strong>Setup</strong> to pick a tournament template or add rounds.</p>
+                      <div style="display:flex;gap:8px;justify-content:center">
+                        <button type="button" class="btn btn-armed btn-sm" data-race-tab="format">
+                          ${icons.settings(14)}<span>Setup</span>
+                        </button>
+                      </div>
+                    </div>`
             }
             ${cockpitNoticeHtml}
             <div class="race-cockpit-bottom">
@@ -9239,6 +9412,9 @@ export class RacesView extends Component {
     const hasOpenPopover = Boolean(this.openMarshalMenuKey);
 
     if (!heat) {
+      if (!isRaceConfigured(race)) {
+        return "";
+      }
       return `
         <section
           class="rc-canvas-panel rc-page-card is-heatline-panel"
@@ -11034,7 +11210,7 @@ export class RacesView extends Component {
                 const actionBtnHtml = isInspectable
                   ? `<button type="button" class="btn btn-ghost btn-xs" data-select-heat="${esc(h.id)}" title="Inspect ${esc(h.shortLabel)} in Review">Inspect</button>`
                   : isCur
-                    ? `<button type="button" class="btn btn-armed btn-xs" data-select-heat="${esc(h.id)}" title="Open ${esc(h.shortLabel)} in Marshal">Active</button>`
+                    ? `<button type="button" class="btn btn-armed btn-xs" data-select-heat="${esc(h.id)}" title="Open ${esc(h.shortLabel)} in Run">Active</button>`
                     : isStageable
                       ? `<button type="button" class="btn btn-ghost btn-xs" data-select-heat="${esc(h.id)}" ${hasLiveRunningHeat ? "disabled" : ""} title="${hasLiveRunningHeat ? "Pause or finish the running heat before staging another heat" : `Stage ${esc(h.shortLabel)} on the flight line`}">Stage</button>`
                       : "";
@@ -11366,6 +11542,11 @@ export class RacesView extends Component {
       stagesList.length || race.totalStages || 1
     );
     const publishWorkspaceTopBar = (): void => {
+      const isOpenQual = hasOpenQualifierRound(race);
+      const activeMobileView =
+        this.mobileControlView === "queue" && !isOpenQual ? "live" : this.mobileControlView;
+      const inRun = this.activeTab === "control" && activeMobileView === "live";
+      const jumpHeat = this.getLiveJumpBannerHeat(race);
       setRacesTopBarContext({
         tab: this.activeTab,
         raceId: race.raceId,
@@ -11373,7 +11554,9 @@ export class RacesView extends Component {
         activeStage: curViewStage,
         totalStages: totalStagesCount,
         stageTitle: curStageObj ? curStageObj.title || `Stage ${curStageObj.index}` : "",
-        live: this.isRaceActivelyTiming(race),
+        live: this.isRaceActivelyTiming(race) || Boolean(jumpHeat),
+        inRun,
+        liveHeatLabel: jumpHeat ? jumpHeat.shortLabel || jumpHeat.title : "",
       });
     };
     if (!this.pendingRouteTarget && !this.resolvingRouteRaceId) {
