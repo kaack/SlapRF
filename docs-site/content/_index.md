@@ -12,7 +12,7 @@ SlapRF consists of two parts that you can use together or separately:
 
 | Component | Summary |
 | :--- | :--- |
-| SlapRF App | Native timing and race control app for Android, Windows, macOS, and Linux. |
+| SlapRF App | Native timing and race control app for Android, iOS, iPadOS, Windows, macOS, and Linux. |
 | SlapRF Hardware | DIY 5.8 GHz gate timers built from Seeed Studio XIAO ESP32-C5 boards with zero soldering or custom PCBs. |
 
 > [!IMPORTANT]
@@ -21,7 +21,7 @@ SlapRF consists of two parts that you can use together or separately:
 ## Documentation Guides
 
 {{< cards >}}
-  {{< card link="getting-started/installation" title="Install the App" icon="download" subtitle="Download and run SlapRF on Android, Windows, macOS, or Linux." >}}
+  {{< card link="getting-started/installation" title="Install the App" icon="download" subtitle="Download and run SlapRF on Android, iOS, iPadOS, Windows, macOS, or Linux." >}}
   {{< card link="hardware/parts-and-assembly" title="Build SlapRF Hardware" icon="chip" subtitle="Assemble battery-powered XIAO ESP32-C5 gate timers with zero soldering." >}}
   {{< card link="hardware/flashing" title="Flash Firmware" icon="lightning-bolt" subtitle="Flash Bluetooth Hub, USB Hub, Spoke, and PoE Bridge boards from your browser." >}}
   {{< card link="hardware/poe-bridge" title="PoE Ethernet Bridge" icon="server" subtitle="Run power and 100 Hz gate data up to 100 m over one Cat5e/Cat6 PoE cable." >}}

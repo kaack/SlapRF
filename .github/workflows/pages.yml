@@ -75,7 +75,7 @@ jobs:
             IPA_SIZE="$(echo "$REL_JSON" | jq -r '.assets[] | select(.name == "slaprf-ios-arm64.ipa") | .size' | head -n 1)"
             REL_TAG="$(echo "$REL_JSON" | jq -r '.tag_name // empty')"
             REL_DATE="$(echo "$REL_JSON" | jq -r '.published_at // empty')"
-            if [ -n "$IPA_URL" ] && [ -n "$REL_TAG" ]; then
+            if [ -n "$IPA_URL" ] && [ -n "$REL_TAG" ] && { [[ "${GITHUB_REF_NAME}" != v* ]] || [ "$REL_TAG" = "${GITHUB_REF_NAME}" ]; }; then
               echo "SLAPRF_ALTSTORE_VERSION=${REL_TAG}" >> "$GITHUB_ENV"
               echo "SLAPRF_ALTSTORE_DOWNLOAD_URL=${IPA_URL}" >> "$GITHUB_ENV"
               [ -n "$IPA_SIZE" ] && echo "SLAPRF_ALTSTORE_SIZE=${IPA_SIZE}" >> "$GITHUB_ENV" || true

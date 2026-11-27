@@ -46,7 +46,7 @@
 
 SlapRF combines native race control software with low-cost wireless field timers:
 
-1. **SlapRF App**: Timing and race control software for Android, Windows, macOS, and Linux. It runs as a single file with no external runtime or database, and connects to your Hub (`H1`) over Bluetooth LE, USB-C, or Power over Ethernet (PoE).
+1. **SlapRF App**: Timing and race control software for Android, iOS, iPadOS, Windows, macOS, and Linux. It runs as a single file with no external runtime or database, and connects to your Hub (`H1`) over Bluetooth LE, USB-C, or Power over Ethernet (PoE).
 2. **SlapRF DIY Timers (~$25 per field timer, recommended)**: Wireless `5.8 GHz` timers built on the Seeed Studio XIAO ESP32-C5 with no soldering. Place one Hub (`H1`) at the Start/Finish gate to time laps. Add up to 6 battery-powered Spokes (`T1`-`T6`) on the track to record `S1`, `S2`, and `S3` section splits over `2.4 GHz` ESP-NOW.
 
 ## Quick Start
