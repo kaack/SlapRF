@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 
 	"slaprf/internal/gatecam"
 	"slaprf/internal/portable"

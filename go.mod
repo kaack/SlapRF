@@ -6,7 +6,7 @@ require (
 	github.com/coder/websocket v1.8.13
 	github.com/evanw/esbuild v0.28.2
 	github.com/godbus/dbus/v5 v5.1.0
-	github.com/playwright-community/playwright-go v0.5700.1
+	github.com/mxschmitt/playwright-go v0.6401.0
 	go.bug.st/serial v1.8.0
 	go.etcd.io/bbolt v1.5.0
 	golang.org/x/sys v0.45.0
@@ -15,7 +15,6 @@ require (
 
 require (
 	github.com/deckarep/golang-set/v2 v2.8.0 // indirect
-	github.com/go-jose/go-jose/v3 v3.0.4 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/go-stack/stack v1.8.1 // indirect
 	github.com/saltosystems/winrt-go v0.0.0-20261015065339-8ef619c103a3 // indirect

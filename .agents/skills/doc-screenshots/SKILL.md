@@ -16,7 +16,7 @@ Use [capture_retina.go](./scripts/capture_retina.go) (`//go:build ignore`) so sc
 
 Ensure Playwright's Chromium binary is installed once (see `dev-setup` skill):
 ```bash
-go run github.com/playwright-community/playwright-go/cmd/playwright install chromium
+go run github.com/mxschmitt/playwright-go/cmd/playwright install chromium
 ```
 
 ## 2. Regenerate All 6 `README.md` Showcase Screenshots

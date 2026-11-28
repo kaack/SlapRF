@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 )
 
 func TestBootCleanStateAndSidebarNavigation(t *testing.T) {

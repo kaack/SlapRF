@@ -63,13 +63,13 @@ gh --version && gh auth status
 
 `e2e/` uses `playwright-go` (`v0.5700.1`, Playwright `1.57.0`) and requires a `node` binary on `PATH` plus Playwright's Chromium build:
 ```bash
-go run github.com/playwright-community/playwright-go/cmd/playwright install chromium
+go run github.com/mxschmitt/playwright-go/cmd/playwright install chromium
 # On Linux CI/servers, include OS shared libraries:
-go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
+go run github.com/mxschmitt/playwright-go/cmd/playwright install --with-deps chromium
 ```
 - **Newer Ubuntu Releases (`25.x` / `26.04+`)**: If Playwright's installer prints `Playwright does not support chromium on ubuntu26.04-x64`, prefix with `PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64`:
   ```bash
-  PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64 go run github.com/playwright-community/playwright-go/cmd/playwright install chromium
+  PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64 go run github.com/mxschmitt/playwright-go/cmd/playwright install chromium
   ```
 
 ---
