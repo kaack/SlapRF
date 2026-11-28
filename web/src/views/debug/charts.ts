@@ -2103,7 +2103,12 @@ function drawSingleSparkCanvas(
   ctx.fill();
 }
 
-export function drawHealthSparklines(root: HTMLElement, health: HealthHistory, hasServer: boolean): void {
+export function drawHealthSparklines(
+  root: HTMLElement,
+  health: HealthHistory,
+  hasServer: boolean,
+  streamTitle = "USB live stream"
+): void {
   const tokens = getThemeTokens();
   const pts = health.points;
   const last = pts.length ? pts[pts.length - 1] : null;
@@ -2124,7 +2129,7 @@ export function drawHealthSparklines(root: HTMLElement, health: HealthHistory, h
   setCardTitle("sweep", "Sweep duration");
   setCardTitle("heap", "Free heap");
   setCardTitle("udp", "Server frames rx");
-  setCardTitle("usb", "USB live stream");
+  setCardTitle("usb", streamTitle);
 
   const updateCard = (
     key: "sweep" | "heap" | "udp" | "usb",

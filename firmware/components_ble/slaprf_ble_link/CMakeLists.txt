@@ -3,7 +3,7 @@ idf_component_register(
          "../../components/slaprf_radio/slaprf_rf58.c"
     INCLUDE_DIRS "include" "../../components/slaprf_radio/include"
     REQUIRES esp_wifi esp_event esp_timer nvs_flash esp_driver_usb_serial_jtag esp_driver_gpio
-             esp_driver_ledc heap esp_phy spi_flash bt
+             esp_driver_ledc heap esp_phy spi_flash bt slaprf_board
 )
 
 # Same link wraps as the USB image: panic capture (PANIC?) and the skipped 300 us PLL spin during

@@ -5,20 +5,31 @@ Fast local build of the dedicated SlapRF Bluetooth Hub firmware (firmware\slaprf
 .DESCRIPTION
 Configures the ESP-IDF v5.5.1 toolchain paths directly (skipping the slow export.bat check),
 compiles the Bluetooth Hub firmware (firmware\slaprf_ble) with Ninja + ccache, writes the merged flasher image to
-web\firmware\slaprf-xiao-c5-ble.bin, and optionally flashes a connected board over USB while
+web\firmware\<board>-ble.bin, and optionally flashes a connected board over USB while
 preserving its existing 160-byte SLAPRF02 identity/config block.
 
 .EXAMPLE
 .\firmware\tools\build_local_ble.ps1
 .\firmware\tools\build_local_ble.ps1 -FlashPort COM3
+.\firmware\tools\build_local_ble.ps1 -Board c5-zero -FlashPort COM5
 #>
 param(
     [Parameter()]
-    [string]$FlashPort = ""
+    [string]$FlashPort = "",
+    # Board variant: "xiao-c5" (Seeed Studio XIAO ESP32-C5) or "c5-zero" (Waveshare ESP32-C5-Zero).
+    # Each board gets its own build directory; the merged image lands in web\firmware\.
+    [Parameter()]
+    [ValidateSet("xiao-c5", "c5-zero")]
+    [string]$Board = "xiao-c5"
 )
 
 $ErrorActionPreference = "Stop"
+# ESP-IDF's idf.py silently skips all work when MSYSTEM is set (git-bash / MSYS terminals).
+Remove-Item Env:MSYSTEM -ErrorAction SilentlyContinue
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$binName = if ($Board -eq "xiao-c5") { "slaprf-xiao-c5" } else { "slaprf-c5-zero" }
+# Keep the XIAO's historic "build" dir so existing incremental builds stay valid.
+$buildDirName = if ($Board -eq "xiao-c5") { "build" } else { "build-$Board" }
 
 $env:IDF_PATH = "C:/esp/esp-idf"
 $env:IDF_TOOLS_PATH = "C:\esp\tools"
@@ -47,13 +58,21 @@ if (-not (Test-Path $outDir)) {
 }
 
 $projDir = Join-Path $Root "firmware\slaprf_ble"
-$buildDir = Join-Path $projDir "build"
-Write-Host "=== Building Bluetooth Hub firmware ===" -ForegroundColor Cyan
+$buildDir = Join-Path $projDir $buildDirName
+Write-Host "=== Building Bluetooth Hub firmware ($Board) ===" -ForegroundColor Cyan
 
 if (-not (Test-Path (Join-Path $buildDir "build.ninja"))) {
     Push-Location $projDir
     try {
-        & $python "$env:IDF_PATH/tools/idf.py" reconfigure
+        $defines = @("-DSLAPRF_BOARD=$Board")
+        if ($Board -ne "xiao-c5") {
+            # Per-board sdkconfig, kept inside the board's build dir so board-specific settings
+            # never leak into the default XIAO build's shared sdkconfig. When a board needs to
+            # override sdkconfig defaults, add -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;<board
+            # overlay file>" here.
+            $defines += "-DSDKCONFIG=build-$Board/sdkconfig"
+        }
+        & $python "$env:IDF_PATH/tools/idf.py" -B $buildDirName @defines reconfigure
         if ($LASTEXITCODE -ne 0) { throw "idf.py reconfigure failed" }
     } finally {
         Pop-Location
@@ -78,7 +97,7 @@ if ($bssLine) {
 
 Push-Location $buildDir
 try {
-    $mergedOut = Join-Path $outDir "slaprf-xiao-c5-ble.bin"
+    $mergedOut = Join-Path $outDir "$binName-ble.bin"
     & $python -m esptool --chip esp32c5 merge_bin -o $mergedOut "@flash_args"
     if ($LASTEXITCODE -ne 0) { throw "esptool merge_bin failed" }
     Write-Host " -> Updated $mergedOut" -ForegroundColor Green

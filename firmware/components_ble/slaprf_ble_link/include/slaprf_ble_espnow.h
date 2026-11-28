@@ -3,7 +3,7 @@
  *
  * Replaces slaprf_radio.c inside the BLE firmware build without esp_netif or lwip overhead, and
  * uses a compact 24 x 64-byte FreeRTOS RX queue sized for SlapRF Spoke frames (<= 44 bytes) so
- * static SRAM and heap stay well inside the XIAO ESP32-C5 0x40820000 IQ capture ceiling.
+ * static SRAM and heap stay well inside the ESP32-C5 0x40820000 IQ capture ceiling.
  */
 #pragma once
 

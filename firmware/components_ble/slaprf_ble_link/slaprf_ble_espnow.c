@@ -1,6 +1,6 @@
 /**
  * slaprf_ble_espnow.c: Lean 2.4 GHz Wi-Fi STA + ESP-NOW link, sync-beacon broadcast, and timing
- * helpers for the SlapRF Bluetooth Hub image on the XIAO ESP32-C5.
+ * helpers for the SlapRF Bluetooth Hub image (boards: see components/slaprf_board).
  *
  * Provides the link/timing surface of slaprf_radio.h without esp_netif/lwip allocations and with a
  * compact 24 x 64-byte RX queue (1.5 KB) tailored for Spoke JOIN/WINDOW/SINGLE frames (<= 44 B).
@@ -48,16 +48,6 @@ static uint8_t xor8(const uint8_t *data, uint32_t len) {
         c ^= data[i];
     }
     return c;
-}
-
-/* ---- Board ---------------------------------------------------------------------------------- */
-
-void xiao_c5_select_ufl_antenna(void) {
-    // Uses the board's default RF switch path (matching slaprf_radio.c).
-}
-
-uint16_t xiao_c5_read_battery_mv(void) {
-    return 0;
 }
 
 /* ---- 2.4 GHz link diagnostics & rate/power settings ---------------------------------------- */

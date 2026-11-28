@@ -23,6 +23,7 @@
  *   REBOOT           restart
  * Every reply line except SLAPRF? and mirrored log text starts with '@'.
  */
+#include "slaprf_board.h"
 #include "slaprf_radio.h"
 
 #include <stdarg.h>
@@ -30,7 +31,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "driver/gpio.h"
 #include "driver/usb_serial_jtag.h"
 #include "hal/usb_serial_jtag_ll.h"
 #include "esp_attr.h"
@@ -62,7 +62,6 @@
 #define SCAN_MAX_MHZ     5945
 #define HIT_MARGIN_DB    10 // A "hit" is a reading this far above the channel's typical noise
 #define FLOOR_UNSET      INT16_MIN
-#define XIAO_C5_LED_GPIO 27 // Seeed Studio XIAO ESP32-C5 yellow user LED (active-low: 0 = ON, 1 = OFF)
 
 static const volatile uint8_t *s_cfg;
 static size_t s_cfg_len;
@@ -1000,15 +999,7 @@ void slaprf_diag_start(const volatile void *cfg, size_t len, uint8_t sweep_hz) {
     if (esp_flash_get_physical_size(NULL, &s_flash_bytes) != ESP_OK) {
         esp_flash_get_size(NULL, &s_flash_bytes);
     }
-    gpio_config_t led_cfg = {
-        .pin_bit_mask = 1ULL << XIAO_C5_LED_GPIO,
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&led_cfg);
-    gpio_set_level(XIAO_C5_LED_GPIO, 1);
+    slaprf_board_init(); // Status LED, antenna switch, BOOT button (board variant, see slaprf_board)
     start_led_timer();
     usb_serial_jtag_driver_config_t usb_cfg = {
         .tx_buffer_size = 4096,
@@ -1142,7 +1133,7 @@ static void led_timer_cb(void *arg) {
         const int64_t gap = 220; // Start of the Spoke's second blip
         led_on = phase < blip || (role != 1 && phase >= gap && phase < gap + blip);
     }
-    gpio_set_level(XIAO_C5_LED_GPIO, led_on ? 0 : 1); // Active-low user LED
+    slaprf_board_led_set(led_on);
 }
 
 static void start_led_timer(void) {
