@@ -1,0 +1,604 @@
+asyncapi: 3.0.0
+info:
+  title: SlapRF Real-Time WebSocket Event & Telemetry API
+  version: 1.0.0
+  description: |
+    Real-time WebSocket streams exposed by SlapRF Portable and the SlapRF Android LAN host under `/v1/ws/*`.
+    `/v1/ws/stream` delivers both JSON state/event envelopes (`crossing`, `filtered`, `lap`, `config`, `race`, `practice`) as WebSocket Text frames and 50 Hz batched 5.8 GHz RSSI telemetry as compact little-endian WebSocket Binary frames.
+  license:
+    name: MIT
+    url: https://github.com/kaack/SlapRF
+
+servers:
+  local:
+    host: localhost:8090
+    protocol: ws
+    description: Local SlapRF Portable WebSocket server
+  lan:
+    host: "{host}:{port}"
+    protocol: ws
+    description: LAN SlapRF WebSocket server (started with -lan)
+    variables:
+      host:
+        default: 192.168.1.50
+      port:
+        default: "8090"
+
+channels:
+  liveStream:
+    address: /v1/ws/stream
+    title: Real-Time Timing, Race & 50 Hz RSSI Telemetry Stream
+    description: |
+      Primary pub/sub broadcast channel for OBS overlays, LED gate controllers, custom scoreboards, and remote SlapRF UI clients.
+      - **Text frames (`application/json`)**: Wrapped in `{ "type": "<event>", "payload": { ... } }`.
+      - **Binary frames (`application/octet-stream`)**: Batched little-endian 5.8 GHz RSSI telemetry flushed every 20 ms (50 Hz) or every 8 samples.
+    messages:
+      crossingEvent:
+        $ref: "#/components/messages/CrossingEventMessage"
+      filteredEvent:
+        $ref: "#/components/messages/FilteredEventMessage"
+      lapCompletedEvent:
+        $ref: "#/components/messages/LapCompletedEventMessage"
+      configUpdatedEvent:
+        $ref: "#/components/messages/ConfigUpdatedEventMessage"
+      raceUpdatedEvent:
+        $ref: "#/components/messages/RaceUpdatedEventMessage"
+      practiceUpdatedEvent:
+        $ref: "#/components/messages/PracticeUpdatedEventMessage"
+      mlStatusUpdatedEvent:
+        $ref: "#/components/messages/MLStatusUpdatedEventMessage"
+      telemetryBinaryBatch:
+        $ref: "#/components/messages/TelemetryBinaryBatchMessage"
+
+  usbConsoleStream:
+    address: /v1/ws/slaprf/usb
+    title: SlapRF USB Serial Diagnostic & Simulated Hub Stream
+    description: |
+      Streams live SlapRF USB connection progress, Hub/Spoke status, and serial diagnostic lines.
+      - **Default (`?sim=0` or omitted)**: Emits JSON text frames (`Event`) for `pool_state`, `status`, `config`, `live`, `hub_live`, `scan`, `bootlog`, `log`, `raw_reply`, and `error`.
+      - **Simulator Hub Mode (`?sim=1`)**: Emits raw `0x1E`-framed binary `HELLO` and telemetry packets produced by simulated Hub `H1`.
+    messages:
+      usbStatusEvent:
+        $ref: "#/components/messages/UsbStatusEventMessage"
+      simHubBinaryFrame:
+        $ref: "#/components/messages/SimHubBinaryMessage"
+
+  bluetoothConsoleStream:
+    address: /v1/ws/slaprf/bluetooth
+    title: SlapRF Bluetooth LE Hub Diagnostic & Telemetry Stream
+    description: |
+      Streams live SlapRF Bluetooth LE Hub connection stages (`connecting`, `connectStatus`), paired Hub/Spoke status, synthesized zero-overhead `live` telemetry, and console lines.
+      - **Default (`?sim=0` or omitted)**: Emits JSON text frames (`Event`) isolated to the Bluetooth LE transport.
+    messages:
+      usbStatusEvent:
+        $ref: "#/components/messages/UsbStatusEventMessage"
+      simHubBinaryFrame:
+        $ref: "#/components/messages/SimHubBinaryMessage"
+
+  usbRawStream:
+    address: /v1/ws/slaprf/usb-raw
+    title: Exclusive Bidirectional Raw USB Bootloader & Serial Pipe
+    description: |
+      Bridges an exclusive physical USB serial port (`?port=<name>&baud=115200`) over bidirectional binary + JSON control frames so `esptool-js` and browser tools can flash or erase XIAO ESP32-C5 timers without WebSerial.
+      - **Server to Client (`receive`)**: Initial `open` status JSON frame, `ack` / `closed` / `error` JSON frames, and raw RX bytes (`application/octet-stream`).
+      - **Client to Server (`send`)**: `signals` (`dtr`, `rts`) and `close` JSON control frames, plus raw TX bytes (`application/octet-stream`).
+    messages:
+      usbRawOpen:
+        $ref: "#/components/messages/UsbRawOpenMessage"
+      usbRawAck:
+        $ref: "#/components/messages/UsbRawAckMessage"
+      usbRawControl:
+        $ref: "#/components/messages/UsbRawControlMessage"
+      usbRawBytes:
+        $ref: "#/components/messages/UsbRawBytesMessage"
+
+operations:
+  subscribeLiveStream:
+    action: receive
+    channel:
+      $ref: "#/channels/liveStream"
+    summary: Receive live gate crossings, completed laps, race state transitions, and 50 Hz RSSI telemetry batches.
+    messages:
+      - $ref: "#/channels/liveStream/messages/crossingEvent"
+      - $ref: "#/channels/liveStream/messages/filteredEvent"
+      - $ref: "#/channels/liveStream/messages/lapCompletedEvent"
+      - $ref: "#/channels/liveStream/messages/configUpdatedEvent"
+      - $ref: "#/channels/liveStream/messages/raceUpdatedEvent"
+      - $ref: "#/channels/liveStream/messages/practiceUpdatedEvent"
+      - $ref: "#/channels/liveStream/messages/telemetryBinaryBatch"
+
+  subscribeUsbConsole:
+    action: receive
+    channel:
+      $ref: "#/channels/usbConsoleStream"
+    summary: Receive live SlapRF USB Hub/Timer updates (or `?sim=1` simulated Hub `0x1E` binary frames).
+    messages:
+      - $ref: "#/channels/usbConsoleStream/messages/usbStatusEvent"
+      - $ref: "#/channels/usbConsoleStream/messages/simHubBinaryFrame"
+
+  subscribeBluetoothConsole:
+    action: receive
+    channel:
+      $ref: "#/channels/bluetoothConsoleStream"
+    summary: Receive live SlapRF Bluetooth Hub connection stages, status, and Spoke telemetry updates.
+    messages:
+      - $ref: "#/channels/bluetoothConsoleStream/messages/usbStatusEvent"
+      - $ref: "#/channels/bluetoothConsoleStream/messages/simHubBinaryFrame"
+
+  receiveUsbRaw:
+    action: receive
+    channel:
+      $ref: "#/channels/usbRawStream"
+    summary: Receive port open handshake, DTR/RTS signal acknowledgments, and raw serial RX bytes from the USB port.
+    messages:
+      - $ref: "#/channels/usbRawStream/messages/usbRawOpen"
+      - $ref: "#/channels/usbRawStream/messages/usbRawAck"
+      - $ref: "#/channels/usbRawStream/messages/usbRawBytes"
+
+  sendUsbRaw:
+    action: send
+    channel:
+      $ref: "#/channels/usbRawStream"
+    summary: Send DTR/RTS bootloader signal commands, port close commands, and raw serial TX bytes to the USB port.
+    messages:
+      - $ref: "#/channels/usbRawStream/messages/usbRawControl"
+      - $ref: "#/channels/usbRawStream/messages/usbRawBytes"
+
+components:
+  messages:
+    CrossingEventMessage:
+      name: crossing
+      title: Gate Crossing Detected (JSON Text Frame)
+      summary: Emitted immediately when a pilot's smoothed RSSI peak crosses a gate and exits hysteresis.
+      contentType: application/json
+      payload:
+        $ref: "#/components/schemas/CrossingEnvelope"
+      examples:
+        - name: startGateCrossing
+          payload:
+            type: crossing
+            payload:
+              eventId: 104
+              gateId: 1
+              gateName: "Start / Finish"
+              isStartFinish: true
+              startedLap: false
+              slotIndex: 1
+              callsign: "VORTEX"
+              frequencyMhz: 5658
+              timestampUs: 48219400
+              peakRssiDbm: -46.5
+              beamwidthMs: 310
+              estimatedSpeedMph: 41.2
+              passingNumber: 12
+
+    FilteredEventMessage:
+      name: filtered
+      title: Filtered / Rejected Gate Pass (JSON Text Frame)
+      summary: Emitted when an RSSI peak is rejected by minimum crossing time (`SPIKE`), minimum lap time (`MIN_LAP`), sequential track order (`OUT_OF_ORDER`), or maximum lap duration (`LAP_TOO_LONG`) rules.
+      contentType: application/json
+      payload:
+        $ref: "#/components/schemas/FilteredEnvelope"
+
+    LapCompletedEventMessage:
+      name: lap
+      title: Lap Completed & Standings Summary (JSON Text Frame)
+      summary: Emitted when a pilot completes a full lap at the Start / Finish gate, including section splits (S1, S2, S3) and updated standings.
+      contentType: application/json
+      payload:
+        $ref: "#/components/schemas/LapEnvelope"
+      examples:
+        - name: threeSectorLap
+          payload:
+            type: lap
+            payload:
+              lap:
+                lapId: 29
+                slotIndex: 1
+                callsign: "VORTEX"
+                lapNumber: 3
+                lapTimeSec: 14.284
+                deltaToBest: -0.312
+                completedAtUs: 48219400
+                isBestLap: true
+                sectors:
+                  - sectorIndex: 1
+                    fromGateId: 1
+                    toGateId: 2
+                    label: "S1"
+                    splitSeconds: 4.612
+                    deltaToBestSec: -0.104
+                    badge: "PERSONAL_BEST"
+                  - sectorIndex: 2
+                    fromGateId: 2
+                    toGateId: 3
+                    label: "S2"
+                    splitSeconds: 5.118
+                    deltaToBestSec: -0.208
+                    badge: "OVERALL_BEST"
+                  - sectorIndex: 3
+                    fromGateId: 3
+                    toGateId: 1
+                    label: "S3"
+                    splitSeconds: 4.554
+                    deltaToBestSec: 0.0
+                    badge: "NORMAL"
+              summaries: []
+
+    ConfigUpdatedEventMessage:
+      name: config
+      title: Pilots, Track Gates, or Timers Updated (JSON Text Frame)
+      summary: Emitted whenever pilot slots, track gates, thresholds, or detected timers change.
+      contentType: application/json
+      payload:
+        $ref: "#/components/schemas/ConfigEnvelope"
+
+    RaceUpdatedEventMessage:
+      name: race
+      title: Race Bracket, Scoped Track, Active Heat, or Horn Announcement Updated (JSON Text Frame)
+      summary: Emitted on heat countdown ticks, horn triggers, heat start/finish/confirmation, bracket progression, and race-scoped track or timing-rule updates (`trackInitialized`, `trackSnapshot`, `rules`).
+      contentType: application/json
+      payload:
+        $ref: "#/components/schemas/RaceEnvelope"
+
+    PracticeUpdatedEventMessage:
+      name: practice
+      title: Practice Session State Updated (JSON Text Frame)
+      summary: Emitted when a practice session starts, pauses, stops, updates its pilot roster, or modifies its session-scoped track or timing rules (`trackInitialized`, `trackSnapshot`, `rules`).
+      contentType: application/json
+      payload:
+        $ref: "#/components/schemas/PracticeEnvelope"
+
+    MLStatusUpdatedEventMessage:
+      name: ml_status
+      title: AI Detector, Live 2-Lap Tune, or Base Model Training Progress Updated (JSON Text Frame)
+      summary: Emitted on each training epoch during on-device 1D TCN base-model training, when detector mode changes, and when live 2-lap per-timer heads update.
+      contentType: application/json
+      payload:
+        $ref: "#/components/schemas/MLStatusEnvelope"
+
+    TelemetryBinaryBatchMessage:
+      name: telemetryBatch
+      title: 50 Hz Binary RSSI Telemetry Batch (Binary Frame)
+      summary: |
+        Compact little-endian binary WebSocket frame (`websocket.MessageBinary`) carrying 1..N `TimerTelemetryFrame` records:
+        - **4-Byte Header**:
+          - `byte[0]`: `version` (`uint8`, always `1`)
+          - `byte[1]`: `rssiCount` (`uint8`, number of active pilot frequency slots, typically `8`)
+          - `byte[2..3]`: `frameCount` (`uint16` little-endian, number of packed records following the header)
+        - **Per-Frame Record (`20 + 4 * rssiCount` bytes, e.g. `52` bytes when `rssiCount == 8`)**:
+          - `offset +0` (`uint8`): `timerId` (`1` = Hub `H1`, `2..7` = Spokes `T1..T6`)
+          - `offset +1` (`uint8`): `reserved` (`0`)
+          - `offset +2..3` (`uint16` LE): `batteryMv` (battery or USB supply in millivolts, e.g. `4120`)
+          - `offset +4..7` (`uint32` LE): `seqNum` (monotonic sweep sequence number)
+          - `offset +8..15` (`float64` LE): `timestampUs` (microsecond timestamp)
+          - `offset +16..19` (`float32` LE): `noiseFloorDbm` (estimated noise floor in dBm, e.g. `-94.5`)
+          - `offset +20..(20 + 4*rssiCount)` (`float32[rssiCount]` LE): `rssi` (per-slot RSSI in dBm)
+      contentType: application/octet-stream
+      payload:
+        $ref: "#/components/schemas/TelemetryBinaryBatch"
+
+    UsbStatusEventMessage:
+      name: usbEvent
+      title: USB Pool State, Spoke Health, or Diagnostic Log (JSON Text Frame)
+      summary: Emitted on initial connect (`pool_state`) and whenever USB slot state, timer readout, spectrum scan, or serial log lines arrive.
+      contentType: application/json
+      payload:
+        $ref: "#/components/schemas/USBEventEnvelope"
+      examples:
+        - name: poolStateSnapshot
+          payload:
+            type: pool_state
+            slotIndex: 0
+            pool:
+              debugSlotIndex: 0
+              slots:
+                - slotIndex: 0
+                  portName: "COM5"
+                  connected: true
+                  role: "hub"
+                  label: "H1"
+
+    SimHubBinaryMessage:
+      name: simHubPacket
+      title: Simulated Hub 0x1E Binary Frame (?sim=1)
+      summary: Raw `0x1E`-framed binary `HELLO` and telemetry bytes emitted by simulated Hub `H1` when connected to `/v1/ws/slaprf/usb?sim=1`.
+      contentType: application/octet-stream
+      payload:
+        type: string
+        format: binary
+
+    UsbRawOpenMessage:
+      name: open
+      title: Exclusive USB Port Open Handshake (Server -> Client JSON Frame)
+      summary: "Sent immediately after opening `?port=<name>&baud=115200` with USB VID/PID metadata (or `ok: false` + `error` if opening failed)."
+      contentType: application/json
+      payload:
+        $ref: "#/components/schemas/UsbRawOpenEnvelope"
+
+    UsbRawAckMessage:
+      name: ack
+      title: Signal / Close Control Acknowledgment (Server -> Client JSON Frame)
+      summary: "Acknowledges a client `signals` or `close` control frame (`type: ack`), or reports `closed` / `error`."
+      contentType: application/json
+      payload:
+        $ref: "#/components/schemas/UsbRawAckEnvelope"
+
+    UsbRawControlMessage:
+      name: control
+      title: Bootloader DTR/RTS Signals or Close Command (Client -> Server JSON Frame)
+      summary: "Sent by the client (`esptool-js` or serial flasher) to toggle atomic `dtr` / `rts` lines (`type: signals`) or release the port (`type: close`)."
+      contentType: application/json
+      payload:
+        $ref: "#/components/schemas/UsbRawControlEnvelope"
+
+    UsbRawBytesMessage:
+      name: rawSerialBytes
+      title: Bidirectional Raw Serial / SLIP Bootloader Bytes (Binary Frame)
+      summary: Raw unframed serial bytes streamed between the physical USB port and the WebSocket client (`application/octet-stream`).
+      contentType: application/octet-stream
+      payload:
+        type: string
+        format: binary
+
+  schemas:
+    CrossingEnvelope:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          const: crossing
+        payload:
+          type: object
+          required: [eventId, gateId, gateName, isStartFinish, slotIndex, callsign, frequencyMhz, timestampUs, peakRssiDbm]
+          properties:
+            eventId:
+              type: integer
+            gateId:
+              type: integer
+            gateName:
+              type: string
+            isStartFinish:
+              type: boolean
+            startedLap:
+              type: boolean
+            slotIndex:
+              type: integer
+            callsign:
+              type: string
+            frequencyMhz:
+              type: integer
+            timestampUs:
+              type: integer
+            peakRssiDbm:
+              type: number
+            beamwidthMs:
+              type: number
+            estimatedSpeedMph:
+              type: number
+            holdMs:
+              type: number
+            aboveEnterMs:
+              type: number
+            aboveEnterAreaDbSec:
+              type: number
+            passAreaDbSec:
+              type: number
+            isStepBurst:
+              type: boolean
+            passingNumber:
+              type: integer
+
+    FilteredEnvelope:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          const: filtered
+        payload:
+          type: object
+          properties:
+            timestampUs:
+              type: integer
+            gateId:
+              type: integer
+            slotIndex:
+              type: integer
+            callsign:
+              type: string
+            reason:
+              type: string
+              enum: [SPIKE, MIN_LAP, LAP_TOO_LONG, OUT_OF_ORDER]
+            detail:
+              type: string
+            peakRssiDbm:
+              type: number
+
+    LapEnvelope:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          const: lap
+        payload:
+          type: object
+          required: [lap, summaries]
+          properties:
+            lap:
+              type: object
+              additionalProperties: true
+            summaries:
+              type: array
+              items:
+                type: object
+                additionalProperties: true
+
+    ConfigEnvelope:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          const: config
+        payload:
+          type: object
+          required: [pilots, gates, timers]
+          properties:
+            pilots:
+              type: array
+              items:
+                type: object
+                additionalProperties: true
+            gates:
+              type: array
+              items:
+                type: object
+                additionalProperties: true
+            timers:
+              type: array
+              items:
+                type: object
+                additionalProperties: true
+
+    RaceEnvelope:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          const: race
+        payload:
+          type: object
+          required: [serverTimestampUs, raceState, eventState]
+          properties:
+            serverTimestampUs:
+              type: integer
+            raceState:
+              type: object
+              additionalProperties: true
+            eventState:
+              type: object
+              additionalProperties: true
+            announcement:
+              type: object
+              nullable: true
+              additionalProperties: true
+
+    PracticeEnvelope:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          const: practice
+        payload:
+          type: object
+          additionalProperties: true
+
+    MLStatusEnvelope:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          const: ml_status
+        payload:
+          type: object
+          additionalProperties: true
+
+    TelemetryBinaryBatch:
+      type: string
+      format: binary
+      description: Little-endian binary telemetry frame starting with [version=1 u8][rssiCount u8][count u16].
+
+    USBEventEnvelope:
+      type: object
+      required: [type, slotIndex]
+      properties:
+        type:
+          type: string
+          enum: [pool_state, status, config, live, hub_live, scan, bootlog, log, raw_reply, error]
+          example: pool_state
+        slotIndex:
+          type: integer
+          example: 0
+        pool:
+          type: object
+          additionalProperties: true
+        status:
+          type: object
+          additionalProperties: true
+        config:
+          type: object
+          additionalProperties: true
+        payload:
+          type: object
+          additionalProperties: true
+        line:
+          type: string
+          example: "SLAPRF HELLO ROLE=HUB LABEL=H1"
+        msgType:
+          type: string
+          example: "HELLO"
+        error:
+          type: string
+
+    UsbRawOpenEnvelope:
+      type: object
+      required: [type, ok]
+      properties:
+        type:
+          type: string
+          const: open
+        ok:
+          type: boolean
+          example: true
+        portName:
+          type: string
+          example: "COM5"
+        vid:
+          type: integer
+          example: 12346
+        pid:
+          type: integer
+          example: 4097
+        error:
+          type: string
+
+    UsbRawAckEnvelope:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [ack, closed, error]
+          example: ack
+        id:
+          type: integer
+          example: 1
+        ok:
+          type: boolean
+          example: true
+        error:
+          type: string
+
+    UsbRawControlEnvelope:
+      type: object
+      required: [type, id]
+      properties:
+        type:
+          type: string
+          enum: [signals, close]
+          example: signals
+        id:
+          type: integer
+          example: 1
+        dtr:
+          type: boolean
+          example: false
+        rts:
+          type: boolean
+          example: true
