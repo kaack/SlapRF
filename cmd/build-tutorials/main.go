@@ -1,19 +1,22 @@
-// Command build-tutorials generates narrated < 5-minute MP4 tutorial walkthroughs
+// Command build-tutorials generates natural, 1080p 60 FPS MP4 tutorial walkthroughs
 // directly from the declarative manifest in `web/src/data/tutorials.json`.
 //
-// Each video runs against an isolated SlapRF Portable server in Playwright (1440x900 dark mode),
-// synthesizes per-step neural voiceover clips with `edge-tts`, aligns step narration to exact
-// UI action timestamps with `ffmpeg`, and verifies that every output MP4 stays strictly under
-// `maxDurationSec` (300s / 5 minutes).
+// On Linux with Xvfb + headed Chrome + ffmpeg x11grab, it launches an isolated
+// 1920x1080 virtual X11 display, drives the real OS cursor along 120 Hz minimum-jerk
+// human curves via libXtst (preserving native arrow/hand/text cursor shapes and hover
+// states), records constant-60-FPS video via x11grab, and aligns phrase-level ("beat")
+// edge-tts narration to the exact cursor movements.
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"math"
+	"net"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -70,6 +73,12 @@ type StepSpec struct {
 	Badge     string       `json:"badge"`
 	Caption   string       `json:"caption"`
 	Narration string       `json:"narration"`
+	Beats     []BeatSpec   `json:"beats,omitempty"`
+	Actions   []ActionSpec `json:"actions,omitempty"`
+}
+
+type BeatSpec struct {
+	Narration string       `json:"narration"`
 	Actions   []ActionSpec `json:"actions"`
 }
 
@@ -83,16 +92,179 @@ type ActionSpec struct {
 	DX            float64 `json:"dx,omitempty"`
 	DY            float64 `json:"dy,omitempty"`
 	MS            int     `json:"ms,omitempty"`
+	GlideMS       int     `json:"glideMs,omitempty"`
+	TypeDelayMS   int     `json:"typeDelayMs,omitempty"`
 	MinElapsedMS  int     `json:"minElapsedMs,omitempty"`
 	Confirm       bool    `json:"confirm,omitempty"`
 	PauseBeforeMS int     `json:"pauseBeforeMs,omitempty"`
 	PauseAfterMS  int     `json:"pauseAfterMs,omitempty"`
 }
 
-type stepTiming struct {
-	offsetMs int64
-	mp3Path  string
-	durSec   float64
+type beatClip struct {
+	stepIdx   int
+	beatIdx   int
+	mp3Path   string
+	durSec    float64
+	startedAt time.Time
+	offsetMs  int64
+}
+
+const xtestDriverPy = `
+import ctypes, json, math, sys, time
+
+disp_name = sys.argv[1].encode()
+x11 = ctypes.cdll.LoadLibrary("libX11.so.6")
+xtst = ctypes.cdll.LoadLibrary("libXtst.so.6")
+x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+x11.XOpenDisplay.restype = ctypes.c_void_p
+x11.XFlush.argtypes = [ctypes.c_void_p]
+x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+xtst.XTestFakeMotionEvent.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_ulong]
+xtst.XTestFakeButtonEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
+
+dpy = x11.XOpenDisplay(disp_name)
+if not dpy:
+    sys.stderr.write("failed to open X display\n")
+    sys.exit(1)
+
+cur_x, cur_y = 960.0, 540.0
+xtst.XTestFakeMotionEvent(dpy, -1, int(cur_x), int(cur_y), 0)
+x11.XFlush(dpy)
+sys.stdout.write("ready\n")
+sys.stdout.flush()
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    cmd = json.loads(line)
+    op = cmd.get("op")
+    if op == "quit":
+        break
+    elif op == "warp":
+        cur_x = float(cmd["x"])
+        cur_y = float(cmd["y"])
+        xtst.XTestFakeMotionEvent(dpy, -1, int(round(cur_x)), int(round(cur_y)), 0)
+        x11.XFlush(dpy)
+    elif op == "glide":
+        tx = float(cmd["x"])
+        ty = float(cmd["y"])
+        dur_ms = float(cmd.get("durMs", 0))
+        dx = tx - cur_x
+        dy = ty - cur_y
+        dist = math.hypot(dx, dy)
+        if dist >= 1.5:
+            if dur_ms <= 0:
+                dur_ms = max(340.0, min(820.0, 290.0 + dist * 0.44))
+            arc = min(38.0, max(8.0, dist * 0.07))
+            if tx < cur_x:
+                arc = -arc
+            nx = -dy / dist
+            ny = dx / dist
+            mx = (cur_x + tx) * 0.5 + nx * arc
+            my = (cur_y + ty) * 0.5 + ny * arc
+            steps = max(12, int(round(dur_ms / 8.333)))
+            t0 = time.perf_counter()
+            dur_s = dur_ms / 1000.0
+            fx, fy = cur_x, cur_y
+            for s in range(1, steps + 1):
+                raw = s / steps
+                # Minimum-jerk human hand trajectory: 10u^3 - 15u^4 + 6u^5
+                u = raw * raw * raw * (10.0 - 15.0 * raw + 6.0 * raw * raw)
+                inv = 1.0 - u
+                px = inv * inv * fx + 2.0 * inv * u * mx + u * u * tx
+                py = inv * inv * fy + 2.0 * inv * u * my + u * u * ty
+                xtst.XTestFakeMotionEvent(dpy, -1, int(round(px)), int(round(py)), 0)
+                x11.XFlush(dpy)
+                target = t0 + (dur_s * s / steps)
+                rem = target - time.perf_counter()
+                if rem > 0:
+                    time.sleep(rem)
+        cur_x, cur_y = tx, ty
+        xtst.XTestFakeMotionEvent(dpy, -1, int(round(cur_x)), int(round(cur_y)), 0)
+        x11.XFlush(dpy)
+    elif op == "down":
+        btn = int(cmd.get("button", 1))
+        xtst.XTestFakeButtonEvent(dpy, btn, 1, 0)
+        x11.XFlush(dpy)
+    elif op == "up":
+        btn = int(cmd.get("button", 1))
+        xtst.XTestFakeButtonEvent(dpy, btn, 0, 0)
+        x11.XFlush(dpy)
+    elif op == "click":
+        btn = int(cmd.get("button", 1))
+        xtst.XTestFakeButtonEvent(dpy, btn, 1, 0)
+        x11.XFlush(dpy)
+        time.sleep(0.065)
+        xtst.XTestFakeButtonEvent(dpy, btn, 0, 0)
+        x11.XFlush(dpy)
+    sys.stdout.write("ok\n")
+    sys.stdout.flush()
+
+x11.XCloseDisplay(dpy)
+`
+
+type xtestClient struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	reader *bufio.Reader
+	offX   float64
+	offY   float64
+}
+
+func startXTestClient(display string) *xtestClient {
+	cmd := exec.Command("python3", "-u", "-c", xtestDriverPy, display)
+	cmd.Stderr = os.Stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		log.Fatalf("[build-tutorials] xtest stdin: %v", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		log.Fatalf("[build-tutorials] xtest stdout: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		log.Fatalf("[build-tutorials] start xtest helper: %v", err)
+	}
+	r := bufio.NewReader(stdout)
+	line, err := r.ReadString('\n')
+	if err != nil || strings.TrimSpace(line) != "ready" {
+		log.Fatalf("[build-tutorials] xtest helper did not report ready: %q (%v)", line, err)
+	}
+	return &xtestClient{cmd: cmd, stdin: stdin, reader: r}
+}
+
+func (x *xtestClient) send(payload map[string]any) {
+	b, _ := json.Marshal(payload)
+	b = append(b, '\n')
+	if _, err := x.stdin.Write(b); err != nil {
+		log.Fatalf("[build-tutorials] write xtest: %v", err)
+	}
+	if _, err := x.reader.ReadString('\n'); err != nil {
+		log.Fatalf("[build-tutorials] read xtest ack: %v", err)
+	}
+}
+
+func (x *xtestClient) glide(tx, ty float64, durMs int) {
+	x.send(map[string]any{"op": "glide", "x": tx + x.offX, "y": ty + x.offY, "durMs": durMs})
+}
+
+func (x *xtestClient) click() {
+	x.send(map[string]any{"op": "click", "button": 1})
+}
+
+func (x *xtestClient) down() {
+	x.send(map[string]any{"op": "down", "button": 1})
+}
+
+func (x *xtestClient) up() {
+	x.send(map[string]any{"op": "up", "button": 1})
+}
+
+func (x *xtestClient) close() {
+	_, _ = x.stdin.Write([]byte(`{"op":"quit"}` + "\n"))
+	_ = x.stdin.Close()
+	_ = x.cmd.Wait()
 }
 
 func main() {
@@ -120,7 +292,8 @@ func main() {
 	}
 
 	ttsBin, ttsBaseArgs := resolveEdgeTTS()
-	log.Printf("[build-tutorials] Using TTS runner: %s %s", ttsBin, strings.Join(ttsBaseArgs, " "))
+	chromeBin := resolveChromeBin()
+	log.Printf("[build-tutorials] TTS: %s %s | Chrome: %s", ttsBin, strings.Join(ttsBaseArgs, " "), chromeBin)
 
 	tmpSite, err := os.MkdirTemp("", "slaprf-tutorials-site-*")
 	if err != nil {
@@ -142,14 +315,6 @@ func main() {
 	}
 	defer pw.Stop()
 
-	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Headless: playwright.Bool(true),
-	})
-	if err != nil {
-		log.Fatalf("[build-tutorials] Chromium.Launch: %v", err)
-	}
-	defer browser.Close()
-
 	renderedCount := 0
 	for vi := range manifest.Videos {
 		v := &manifest.Videos[vi]
@@ -161,7 +326,7 @@ func main() {
 			outFile = v.ID + ".mp4"
 		}
 		finalMP4 := filepath.Join(*outDir, outFile)
-		durSec, stepStarts := renderTutorialVideo(browser, tmpSite, ttsBin, ttsBaseArgs, *v, finalMP4)
+		durSec, stepStarts := renderTutorialVideoXvfb(pw, chromeBin, tmpSite, ttsBin, ttsBaseArgs, *v, finalMP4)
 
 		maxSec := v.MaxDurationSec
 		if maxSec <= 0 {
@@ -208,8 +373,19 @@ func main() {
 	}
 }
 
-func renderTutorialVideo(
-	browser playwright.Browser,
+func effectiveBeats(st StepSpec) []BeatSpec {
+	if len(st.Beats) > 0 {
+		return st.Beats
+	}
+	return []BeatSpec{{
+		Narration: st.Narration,
+		Actions:   st.Actions,
+	}}
+}
+
+func renderTutorialVideoXvfb(
+	pw *playwright.Playwright,
+	chromeBin string,
 	siteDir string,
 	ttsBin string,
 	ttsBaseArgs []string,
@@ -223,9 +399,7 @@ func renderTutorialVideo(
 	defer os.RemoveAll(workDir)
 
 	audioDir := filepath.Join(workDir, "audio")
-	rawVidDir := filepath.Join(workDir, "rawvideo")
 	_ = os.MkdirAll(audioDir, 0o755)
-	_ = os.MkdirAll(rawVidDir, 0o755)
 
 	voice := v.Voice
 	if voice == "" {
@@ -233,29 +407,34 @@ func renderTutorialVideo(
 	}
 	rate := v.VoiceRate
 	if rate == "" {
-		rate = "+4%"
+		rate = "+2%"
 	}
 
-	timings := make([]stepTiming, len(v.Steps))
-	for i, st := range v.Steps {
-		mp3Path := filepath.Join(audioDir, fmt.Sprintf("step_%02d.mp3", i))
-		args := append([]string{}, ttsBaseArgs...)
-		args = append(args,
-			"--voice", voice,
-			"--rate", rate,
-			"--text", st.Narration,
-			"--write-media", mp3Path,
-		)
-		cmd := exec.Command(ttsBin, args...)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			log.Fatalf("[build-tutorials] edge-tts step %d (%s) failed: %v\n%s", i+1, st.ID, err, string(out))
+	var clips []beatClip
+	for si, st := range v.Steps {
+		beats := effectiveBeats(st)
+		for bi, bt := range beats {
+			mp3Path := filepath.Join(audioDir, fmt.Sprintf("step_%02d_beat_%02d.mp3", si, bi))
+			args := append([]string{}, ttsBaseArgs...)
+			args = append(args,
+				"--voice", voice,
+				"--rate", rate,
+				"--text", bt.Narration,
+				"--write-media", mp3Path,
+			)
+			cmd := exec.Command(ttsBin, args...)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				log.Fatalf("[build-tutorials] edge-tts step %d beat %d (%s) failed: %v\n%s", si+1, bi+1, st.ID, err, string(out))
+			}
+			dur := probeDurationSec(mp3Path)
+			clips = append(clips, beatClip{
+				stepIdx: si,
+				beatIdx: bi,
+				mp3Path: mp3Path,
+				durSec:  dur,
+			})
+			log.Printf("[build-tutorials] [%s] synthesized step %d.%d (%s): %.2fs", v.ID, si+1, bi+1, st.ID, dur)
 		}
-		dur := probeDurationSec(mp3Path)
-		timings[i] = stepTiming{
-			mp3Path: mp3Path,
-			durSec:  dur,
-		}
-		log.Printf("[build-tutorials] [%s] synthesized step %d/%d (%s): %.2fs", v.ID, i+1, len(v.Steps), st.ID, dur)
 	}
 
 	pSrv := portable.NewServer(portable.Config{
@@ -269,100 +448,260 @@ func renderTutorialVideo(
 	httpSrv := httptest.NewServer(pSrv.Handler())
 	defer httpSrv.Close()
 
+	// 1. Start isolated 1920x1080 virtual X11 display (Xvfb)
+	dispNum := pickFreeXDisplay()
+	disp := fmt.Sprintf(":%d", dispNum)
+	xvfbCmd := exec.Command("Xvfb", disp, "-screen", "0", "1920x1080x24", "-ac", "-nolisten", "tcp")
+	if err := xvfbCmd.Start(); err != nil {
+		log.Fatalf("[build-tutorials] start Xvfb %s: %v", disp, err)
+	}
+	defer func() {
+		_ = xvfbCmd.Process.Kill()
+		_ = xvfbCmd.Wait()
+	}()
+	time.Sleep(400 * time.Millisecond)
+
+	xEnv := cleanX11Env(disp)
+
+	// 2. Launch real headed Chrome in 1920x1080 kiosk mode on Xvfb with CDP port
+	cdpPort := pickFreeTCPPort()
+	chromeProfile := filepath.Join(workDir, "chrome-profile")
+	chromeCmd := exec.Command(
+		chromeBin,
+		"--ozone-platform=x11",
+		"--enable-gpu-rasterization",
+		"--ignore-gpu-blocklist",
+		"--force-color-profile=srgb",
+		"--no-first-run",
+		"--no-default-browser-check",
+		"--disable-infobars",
+		"--disable-notifications",
+		"--disable-translate",
+		"--password-store=basic",
+		"--force-dark-mode",
+		"--enable-features=WebUIDarkMode",
+		"--user-data-dir="+chromeProfile,
+		fmt.Sprintf("--remote-debugging-port=%d", cdpPort),
+		"--window-position=0,0",
+		"--window-size=1920,1080",
+		"--kiosk",
+		"about:blank",
+	)
+	chromeCmd.Env = xEnv
+	if err := chromeCmd.Start(); err != nil {
+		log.Fatalf("[build-tutorials] start Chrome: %v", err)
+	}
+	defer func() {
+		_ = chromeCmd.Process.Kill()
+		_ = chromeCmd.Wait()
+	}()
+
+	browser := connectCDPRetry(pw, cdpPort, 10*time.Second)
+	defer browser.Close()
+
+	var page playwright.Page
+	for attempt := 0; attempt < 30; attempt++ {
+		ctxs := browser.Contexts()
+		if len(ctxs) > 0 && len(ctxs[0].Pages()) > 0 {
+			page = ctxs[0].Pages()[0]
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	if page == nil {
+		log.Fatalf("[build-tutorials] failed to attach to kiosk Chrome page")
+	}
+
 	speedMult := v.SimSpeedMultiplier
 	if speedMult <= 0 {
-		speedMult = 18
+		speedMult = 8
 	}
-	seedServerForTutorial(browser, httpSrv.URL, speedMult)
-
-	ctx, err := browser.NewContext(playwright.BrowserNewContextOptions{
-		BaseURL:     playwright.String(httpSrv.URL),
-		Viewport:    &playwright.Size{Width: 1440, Height: 900},
-		ColorScheme: playwright.ColorSchemeDark,
-		RecordVideo: &playwright.RecordVideo{
-			Dir:  rawVidDir,
-			Size: &playwright.Size{Width: 1440, Height: 900},
-		},
-	})
-	if err != nil {
-		log.Fatalf("[build-tutorials] NewContext: %v", err)
-	}
-
-	_ = ctx.AddInitScript(playwright.Script{
-		Content: playwright.String(`
-			window.sessionStorage.setItem("slaprf.boot_seen", "1");
-			window.localStorage.setItem("slaprf.races.setup_view.v1", "graph");
-		`),
-	})
-
-	videoEpoch := time.Now()
-	page, err := ctx.NewPage()
-	if err != nil {
-		log.Fatalf("[build-tutorials] NewPage: %v", err)
-	}
-
 	if _, err := page.Goto(httpSrv.URL + "/#/races"); err != nil {
-		log.Fatalf("[build-tutorials] initial Goto: %v", err)
+		log.Fatalf("[build-tutorials] initial goto /#/races: %v", err)
 	}
+	_ = page.Locator(`[data-race-dir-search]`).First().WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(10000),
+	})
+	seedServerViaPage(page, httpSrv.URL, speedMult)
+	if _, err := page.Reload(); err != nil {
+		log.Fatalf("[build-tutorials] reload /#/races: %v", err)
+	}
+	_ = page.Locator(`[data-race-dir-search]`).First().WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(10000),
+	})
 	_, _ = page.Evaluate(`() => document.fonts.ready`)
-	time.Sleep(450 * time.Millisecond)
+	time.Sleep(800 * time.Millisecond)
+
+	// 3. Connect real OS mouse driver (libXtst), calibrate X11->viewport offset, and position pointer near center
+	mouse := startXTestClient(disp)
+	defer mouse.close()
+	_, _ = page.Evaluate(`() => {
+		window.__lastMouseProbe = null;
+		window.addEventListener("mousemove", (e) => {
+			window.__lastMouseProbe = { x: e.clientX, y: e.clientY };
+		}, { once: true });
+	}`)
+	mouse.send(map[string]any{"op": "warp", "x": 600, "y": 400})
+	mouse.click() // ensure X11 window has active input focus
+	mouse.send(map[string]any{"op": "warp", "x": 640, "y": 420})
+	time.Sleep(120 * time.Millisecond)
+	if probeRaw, pErr := page.Evaluate(`() => window.__lastMouseProbe`); pErr == nil && probeRaw != nil {
+		if pm, ok := probeRaw.(map[string]any); ok {
+			px, _ := pm["x"].(float64)
+			py, _ := pm["y"].(float64)
+			if px > 0 && py > 0 {
+				mouse.offX = 640.0 - px
+				mouse.offY = 420.0 - py
+				log.Printf("[build-tutorials] [%s] calibrated X11 viewport offset: dx=%.1f dy=%.1f", v.ID, mouse.offX, mouse.offY)
+			}
+		}
+	}
+	mouse.send(map[string]any{"op": "warp", "x": 960 + mouse.offX, "y": 520 + mouse.offY})
+	time.Sleep(350 * time.Millisecond)
+
+	// 4. Start constant-60-FPS ffmpeg x11grab into a live-playable .mkv inside outDir so user can watch live!
+	rawVideoMKV := filepath.Join(filepath.Dir(finalMP4), v.ID+"-recording-live.mkv")
+	defer os.Remove(rawVideoMKV)
+	ffStdin, ffDone, ffStartWall := startFFmpegX11Grab(disp, xEnv, rawVideoMKV)
+
+	time.Sleep(350 * time.Millisecond)
+
+	clipIdx := 0
+	stepFirstTime := make([]time.Time, len(v.Steps))
+
+	for si, st := range v.Steps {
+		beats := effectiveBeats(st)
+		for bi, bt := range beats {
+			clip := &clips[clipIdx]
+			clip.startedAt = time.Now()
+			if bi == 0 {
+				stepFirstTime[si] = clip.startedAt
+			}
+
+			// Brief 110ms vocal lead-in as hand begins moving toward the target control
+			time.Sleep(110 * time.Millisecond)
+			for _, act := range bt.Actions {
+				runStepAction(page, mouse, httpSrv.URL, act)
+			}
+
+			minBeatDur := time.Duration((clip.durSec + 0.28) * float64(time.Second))
+			if elapsed := time.Since(clip.startedAt); elapsed < minBeatDur {
+				time.Sleep(minBeatDur - elapsed)
+			}
+			clipIdx++
+		}
+	}
+
+	time.Sleep(600 * time.Millisecond)
+	_, _ = ffStdin.Write([]byte("q\n"))
+	_ = ffStdin.Close()
+	<-ffDone
+
+	rawDurSec := probeDurationSec(rawVideoMKV)
+	log.Printf("[build-tutorials] [%s] captured 60 FPS X11 video: %.2fs", v.ID, rawDurSec)
+
+	var prevAudioEndMs int64 = 0
+	for i := range clips {
+		off := clips[i].startedAt.Sub(ffStartWall).Milliseconds()
+		if off < 80 {
+			off = 80
+		}
+		if i > 0 && off < prevAudioEndMs+140 {
+			off = prevAudioEndMs + 140
+		}
+		clips[i].offsetMs = off
+		prevAudioEndMs = off + int64(math.Round(clips[i].durSec*1000.0))
+	}
 
 	stepStarts := make([]int, len(v.Steps))
-	for i, st := range v.Steps {
-		stepWallStart := time.Now()
-		offsetMs := stepWallStart.Sub(videoEpoch).Milliseconds()
-		if offsetMs < 0 {
-			offsetMs = 0
+	for si := range v.Steps {
+		off := stepFirstTime[si].Sub(ffStartWall).Milliseconds()
+		if off < 0 || si == 0 {
+			off = 0
 		}
-		timings[i].offsetMs = offsetMs
-		stepStarts[i] = int(math.Floor(float64(offsetMs) / 1000.0))
-
-		setOverlayCaption(page, st.Badge, st.Caption)
-		for _, act := range st.Actions {
-			runStepAction(page, httpSrv.URL, act)
-		}
-
-		minStepDur := time.Duration((timings[i].durSec + 0.45) * float64(time.Second))
-		if elapsed := time.Since(stepWallStart); elapsed < minStepDur {
-			time.Sleep(minStepDur - elapsed)
-		}
+		stepStarts[si] = int(math.Floor(float64(off) / 1000.0))
 	}
 
-	time.Sleep(550 * time.Millisecond)
-	vid := page.Video()
-	if err := page.Close(); err != nil {
-		log.Fatalf("[build-tutorials] page.Close: %v", err)
-	}
-	if err := ctx.Close(); err != nil {
-		log.Fatalf("[build-tutorials] ctx.Close: %v", err)
-	}
-	rawWebM, err := vid.Path()
-	if err != nil {
-		log.Fatalf("[build-tutorials] vid.Path: %v", err)
-	}
-
-	muxNarratedMP4(rawWebM, timings, finalMP4)
+	muxNarratedMP4(rawVideoMKV, clips, finalMP4)
 	return probeDurationSec(finalMP4), stepStarts
 }
 
-func seedServerForTutorial(browser playwright.Browser, baseURL string, speedMult float64) {
-	seedCtx, err := browser.NewContext(playwright.BrowserNewContextOptions{
-		BaseURL: playwright.String(baseURL),
-	})
+func startFFmpegX11Grab(disp string, env []string, outMP4 string) (io.WriteCloser, <-chan struct{}, time.Time) {
+	cmd := exec.Command(
+		"ffmpeg",
+		"-y",
+		"-f", "x11grab",
+		"-framerate", "60",
+		"-draw_mouse", "1",
+		"-video_size", "1920x1080",
+		"-i", disp+".0",
+		"-c:v", "libx264",
+		"-preset", "ultrafast",
+		"-crf", "10",
+		"-pix_fmt", "yuv420p",
+		outMP4,
+	)
+	cmd.Env = env
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		log.Fatalf("[build-tutorials] seed NewContext: %v", err)
+		log.Fatalf("[build-tutorials] ffmpeg stdin: %v", err)
 	}
-	defer seedCtx.Close()
-
-	seedPage, err := seedCtx.NewPage()
+	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		log.Fatalf("[build-tutorials] seed NewPage: %v", err)
+		log.Fatalf("[build-tutorials] ffmpeg stderr: %v", err)
 	}
-	if _, err := seedPage.Goto(baseURL + "/#/races"); err != nil {
-		log.Fatalf("[build-tutorials] seed Goto: %v", err)
+	if err := cmd.Start(); err != nil {
+		log.Fatalf("[build-tutorials] start ffmpeg x11grab: %v", err)
 	}
 
-	_, err = seedPage.Evaluate(`async (speed) => {
+	startedCh := make(chan time.Time, 1)
+	doneCh := make(chan struct{})
+
+	go func() {
+		sc := bufio.NewScanner(stderr)
+		sc.Split(splitCRLF)
+		reported := false
+		for sc.Scan() {
+			txt := sc.Text()
+			if !reported && (strings.Contains(txt, "Press [q]") || strings.Contains(txt, "frame=")) {
+				reported = true
+				startedCh <- time.Now()
+			}
+		}
+		if !reported {
+			startedCh <- time.Now()
+		}
+		_ = cmd.Wait()
+		close(doneCh)
+	}()
+
+	startWall := <-startedCh
+	return stdin, doneCh, startWall
+}
+
+func splitCRLF(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	for i, b := range data {
+		if b == '\n' || b == '\r' {
+			return i + 1, data[0:i], nil
+		}
+	}
+	if atEOF {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
+func seedServerViaPage(page playwright.Page, baseURL string, speedMult float64) {
+	_, err := page.Evaluate(`async (speed) => {
+		window.sessionStorage.setItem("slaprf.boot_seen", "1");
+		window.localStorage.setItem("slaprf.races.setup_view.v1", "graph");
+		window.localStorage.removeItem("slaprf.rc.setupViewIntroSeen.v1");
+
 		await fetch("/v1/practice:control", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -381,7 +720,6 @@ func seedServerForTutorial(browser playwright.Browser, baseURL string, speedMult
 				body: JSON.stringify({ poweredOn: false })
 			}).catch(() => {});
 		}
-		// Keep a Single Timer (Start / Finish on Hub H1) global default so newly created races start with 1 timer cleanly
 		const stRes = await fetch("/v1/state");
 		const st = await stRes.json();
 		const gates = Array.isArray(st.gates) ? [...st.gates].sort((a, b) => a.trackOrder - b.trackOrder) : [];
@@ -415,83 +753,36 @@ func seedServerForTutorial(browser playwright.Browser, baseURL string, speedMult
 	}
 }
 
-func setOverlayCaption(page playwright.Page, badge, caption string) {
-	_, _ = page.Evaluate(`([badge, caption]) => {
-		let el = document.getElementById("slaprf-walkthrough-caption");
-		if (!el) {
-			el = document.createElement("div");
-			el.id = "slaprf-walkthrough-caption";
-			el.style.cssText = [
-				"position:fixed",
-				"left:50%",
-				"bottom:22px",
-				"transform:translateX(-50%)",
-				"z-index:99999",
-				"display:flex",
-				"align-items:center",
-				"gap:10px",
-				"padding:10px 18px",
-				"border-radius:999px",
-				"background:rgba(15,23,42,0.94)",
-				"border:1px solid rgba(56,189,248,0.55)",
-				"box-shadow:0 12px 32px rgba(0,0,0,0.55)",
-				"color:#f8fafc",
-				"font-family:system-ui,-apple-system,sans-serif",
-				"font-size:14px",
-				"pointer-events:none",
-				"max-width:92vw",
-				"white-space:nowrap"
-			].join(";");
-			document.body.appendChild(el);
-		}
-		el.innerHTML = "";
-		const pill = document.createElement("span");
-		pill.style.cssText = "background:#0284c7;color:#fff;font-weight:700;font-size:12px;padding:3px 9px;border-radius:999px;letter-spacing:0.03em";
-		pill.textContent = badge;
-		const text = document.createElement("span");
-		text.style.cssText = "font-weight:500";
-		text.textContent = caption;
-		el.appendChild(pill);
-		el.appendChild(text);
-	}`, []string{badge, caption})
-}
-
-func moveCursorRingAndClick(page playwright.Page, loc playwright.Locator, pauseBefore, pauseAfter time.Duration) error {
+func glideAndClickOS(mouse *xtestClient, loc playwright.Locator, glideMs int, pauseBefore, pauseAfter time.Duration) error {
 	if err := loc.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
 		Timeout: playwright.Float(10000),
 	}); err != nil {
 		return err
 	}
-	if box, err := loc.BoundingBox(); err == nil && box != nil {
-		cx := box.X + box.Width/2
-		cy := box.Y + box.Height/2
-		_ = page.Mouse().Move(cx, cy, playwright.MouseMoveOptions{Steps: playwright.Int(8)})
-		_, _ = page.Evaluate(`([x, y]) => {
-			let ring = document.getElementById("slaprf-walkthrough-ring");
-			if (!ring) {
-				ring = document.createElement("div");
-				ring.id = "slaprf-walkthrough-ring";
-				ring.style.cssText = "position:fixed;width:26px;height:26px;border-radius:50%;border:2.5px solid #38bdf8;background:rgba(56,189,248,0.2);pointer-events:none;z-index:99998;transform:translate(-50%,-50%);transition:left 0.1s ease,top 0.1s ease;";
-				document.body.appendChild(ring);
-			}
-			ring.style.left = x + "px";
-			ring.style.top = y + "px";
-		}`, []float64{cx, cy})
+	_ = loc.ScrollIntoViewIfNeeded()
+	box, err := loc.BoundingBox()
+	if err != nil || box == nil {
+		return fmt.Errorf("BoundingBox nil: %v", err)
 	}
-	if pauseBefore > 0 {
-		time.Sleep(pauseBefore)
+	cx := box.X + box.Width*0.5
+	cy := box.Y + box.Height*0.5
+	mouse.glide(cx, cy, glideMs)
+
+	hoverWait := pauseBefore
+	if hoverWait < 160*time.Millisecond {
+		hoverWait = 160 * time.Millisecond
 	}
-	if err := loc.Click(); err != nil {
-		return err
-	}
+	time.Sleep(hoverWait)
+	mouse.click()
+
 	if pauseAfter > 0 {
 		time.Sleep(pauseAfter)
 	}
 	return nil
 }
 
-func runStepAction(page playwright.Page, baseURL string, act ActionSpec) {
+func runStepAction(page playwright.Page, mouse *xtestClient, baseURL string, act ActionSpec) {
 	before := time.Duration(act.PauseBeforeMS) * time.Millisecond
 	after := time.Duration(act.PauseAfterMS) * time.Millisecond
 
@@ -504,24 +795,47 @@ func runStepAction(page playwright.Page, baseURL string, act ActionSpec) {
 		if _, err := page.Goto(dest); err != nil {
 			log.Fatalf("[build-tutorials] goto %s: %v", dest, err)
 		}
-		time.Sleep(350 * time.Millisecond)
+		time.Sleep(250 * time.Millisecond)
 
-	case "fill":
+	case "hover":
 		loc := page.Locator(act.Selector).First()
 		if err := loc.WaitFor(playwright.LocatorWaitForOptions{
 			State:   playwright.WaitForSelectorStateVisible,
 			Timeout: playwright.Float(8000),
 		}); err != nil {
-			log.Fatalf("[build-tutorials] fill wait %s: %v", act.Selector, err)
+			log.Fatalf("[build-tutorials] hover wait %s: %v", act.Selector, err)
 		}
-		if err := loc.Fill(act.Value); err != nil {
-			log.Fatalf("[build-tutorials] fill %s: %v", act.Selector, err)
+		if box, err := loc.BoundingBox(); err == nil && box != nil {
+			mouse.glide(box.X+box.Width*0.5, box.Y+box.Height*0.5, act.GlideMS)
 		}
-		time.Sleep(350 * time.Millisecond)
+		if after > 0 {
+			time.Sleep(after)
+		}
+
+	case "fill":
+		loc := page.Locator(act.Selector).First()
+		if err := glideAndClickOS(mouse, loc, act.GlideMS, 140*time.Millisecond, 100*time.Millisecond); err != nil {
+			log.Fatalf("[build-tutorials] fill focus %s: %v", act.Selector, err)
+		}
+		_ = loc.Fill("")
+		delayMs := act.TypeDelayMS
+		if delayMs <= 0 {
+			delayMs = 46
+		}
+		if err := page.Keyboard().Type(act.Value, playwright.KeyboardTypeOptions{
+			Delay: playwright.Float(float64(delayMs)),
+		}); err != nil {
+			log.Fatalf("[build-tutorials] type %s: %v", act.Selector, err)
+		}
+		if after > 0 {
+			time.Sleep(after)
+		} else {
+			time.Sleep(180 * time.Millisecond)
+		}
 
 	case "click":
 		loc := page.Locator(act.Selector).First()
-		if err := moveCursorRingAndClick(page, loc, before, after); err != nil {
+		if err := glideAndClickOS(mouse, loc, act.GlideMS, before, after); err != nil {
 			log.Fatalf("[build-tutorials] click %s: %v", act.Selector, err)
 		}
 
@@ -529,9 +843,9 @@ func runStepAction(page playwright.Page, baseURL string, act ActionSpec) {
 		loc := page.Locator(act.Selector).First()
 		if err := loc.WaitFor(playwright.LocatorWaitForOptions{
 			State:   playwright.WaitForSelectorStateVisible,
-			Timeout: playwright.Float(900),
+			Timeout: playwright.Float(1500),
 		}); err == nil {
-			_ = moveCursorRingAndClick(page, loc, before, after)
+			_ = glideAndClickOS(mouse, loc, act.GlideMS, before, after)
 		}
 
 	case "openTemplates":
@@ -540,12 +854,12 @@ func runStepAction(page playwright.Page, baseURL string, act ActionSpec) {
 			openBtn := page.Locator(`button[data-rc-ui="open-templates"], button[data-dte-open-templates]`).First()
 			if oVis, _ := openBtn.IsVisible(); !oVis {
 				expandBtn := page.Locator(`button[data-rc-ui="toggle-controls-expand"]`).First()
-				if err := moveCursorRingAndClick(page, expandBtn, 200*time.Millisecond, 300*time.Millisecond); err != nil {
+				if err := glideAndClickOS(mouse, expandBtn, 460, 160*time.Millisecond, 260*time.Millisecond); err != nil {
 					log.Fatalf("[build-tutorials] openTemplates expand controls: %v", err)
 				}
 			}
 			openBtn = page.Locator(`button[data-rc-ui="open-templates"], button[data-dte-open-templates]`).First()
-			if err := moveCursorRingAndClick(page, openBtn, 200*time.Millisecond, 400*time.Millisecond); err != nil {
+			if err := glideAndClickOS(mouse, openBtn, 360, 160*time.Millisecond, 320*time.Millisecond); err != nil {
 				log.Fatalf("[build-tutorials] openTemplates click button: %v", err)
 			}
 		}
@@ -562,39 +876,42 @@ func runStepAction(page playwright.Page, baseURL string, act ActionSpec) {
 		if err != nil || box == nil {
 			log.Fatalf("[build-tutorials] wireDrop BoundingBox %s: %v", act.FromSelector, err)
 		}
-		sx := box.X + box.Width/2
-		sy := box.Y + box.Height/2
+		sx := box.X + box.Width*0.5
+		sy := box.Y + box.Height*0.5
 		dx := act.DX
 		dy := act.DY
 		if dx == 0 && dy == 0 {
-			dx = 36
-			dy = -180
+			dx = 140
+			dy = -170
 		}
 		ex := sx + dx
 		ey := sy + dy
-		_ = page.Mouse().Move(sx, sy, playwright.MouseMoveOptions{Steps: playwright.Int(6)})
-		time.Sleep(250 * time.Millisecond)
-		_ = page.Mouse().Down()
-		_ = page.Mouse().Move(sx+22, sy, playwright.MouseMoveOptions{Steps: playwright.Int(5)})
-		_ = page.Mouse().Move(ex, ey, playwright.MouseMoveOptions{Steps: playwright.Int(12)})
-		time.Sleep(200 * time.Millisecond)
-		_ = page.Mouse().Up()
-		time.Sleep(350 * time.Millisecond)
+
+		mouse.glide(sx, sy, 520)
+		time.Sleep(220 * time.Millisecond)
+		mouse.down()
+		time.Sleep(90 * time.Millisecond)
+		mouse.glide(sx+26, sy, 140)
+		mouse.glide(ex, ey, 720)
+		time.Sleep(260 * time.Millisecond)
+		mouse.up()
+		time.Sleep(320 * time.Millisecond)
 
 		optSel := fmt.Sprintf(`[data-wire-drop-menu] button[data-wire-drop-opt=%q]:not([disabled])`, act.OptionID)
 		optLoc := page.Locator(optSel).First()
-		if err := moveCursorRingAndClick(page, optLoc, 250*time.Millisecond, 550*time.Millisecond); err != nil {
+		if err := glideAndClickOS(mouse, optLoc, 400, 180*time.Millisecond, 450*time.Millisecond); err != nil {
 			log.Fatalf("[build-tutorials] wireDrop option %s: %v", optSel, err)
 		}
 
 	case "runHeatFast":
-		// Ensure short 1s countdown & 2 target laps on active race so simulated pilots finish briskly
 		_, _ = page.Evaluate(`async () => {
 			const res = await fetch("/v1/state");
 			const st = await res.json();
 			const r = st.raceState;
-			if (r && r.raceId && r.config && r.config.countdownSec > 1) {
-				await fetch("/v1/race/sessions/" + encodeURIComponent(r.raceId) + "/config", {
+			if (!r || !r.raceId) return;
+			const rid = encodeURIComponent(r.raceId);
+			if (r.config && r.config.countdownSec > 1) {
+				await fetch("/v1/race/sessions/" + rid + "/config", {
 					method: "PUT",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
@@ -604,41 +921,65 @@ func runStepAction(page playwright.Page, baseURL string, act ActionSpec) {
 					})
 				}).catch(() => {});
 			}
+			for (const rnd of (r.rounds || [])) {
+				if ((rnd.countdownSec && rnd.countdownSec > 1) || (rnd.targetLaps && rnd.targetLaps > 2)) {
+					await fetch("/v1/race/sessions/" + rid + "/bracket:edit", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							action: "update_round",
+							roundId: rnd.id,
+							countdownSec: 1,
+							targetLaps: rnd.stageFormat === "open_qualifier" ? (rnd.targetLaps || 0) : 2
+						})
+					}).catch(() => {});
+				}
+			}
 		}`)
 
 		startBtn := page.Locator(`button[data-ctrl="start"]:not([disabled])`).First()
-		if err := moveCursorRingAndClick(page, startBtn, 250*time.Millisecond, 350*time.Millisecond); err != nil {
+		if err := glideAndClickOS(mouse, startBtn, 480, 180*time.Millisecond, 260*time.Millisecond); err != nil {
 			log.Fatalf("[build-tutorials] runHeatFast start: %v", err)
 		}
 		preemptBtn := page.Locator(`.slaprf-modal-backdrop button[data-preempt-ok]`).First()
 		if err := preemptBtn.WaitFor(playwright.LocatorWaitForOptions{
 			State:   playwright.WaitForSelectorStateVisible,
-			Timeout: playwright.Float(700),
+			Timeout: playwright.Float(450),
 		}); err == nil {
-			_ = preemptBtn.Click()
+			_ = glideAndClickOS(mouse, preemptBtn, 320, 120*time.Millisecond, 200*time.Millisecond)
 		}
 
 		waitMs := act.MinElapsedMS
 		if waitMs <= 0 {
-			waitMs = 2200
+			waitMs = 2800
 		}
-		// Poll until heat reaches finished state or waitMs + 2500ms elapses
-		deadline := time.Now().Add(time.Duration(waitMs+2500) * time.Millisecond)
 		time.Sleep(time.Duration(waitMs) * time.Millisecond)
-		for time.Now().Before(deadline) {
-			confirmLoc := page.Locator(`button[data-ctrl="confirm"]:not([disabled])`).First()
-			if vis, _ := confirmLoc.IsVisible(); vis {
+
+		// Wait until countdown has transitioned into running (stop visible) or finished (confirm visible)
+		readyDeadline := time.Now().Add(7 * time.Second)
+		for time.Now().Before(readyDeadline) {
+			cVis, _ := page.Locator(`button[data-ctrl="confirm"]:not([disabled])`).First().IsVisible()
+			sVis, _ := page.Locator(`button[data-ctrl="stop"]:not([disabled])`).First().IsVisible()
+			if cVis || sVis {
 				break
 			}
-			time.Sleep(200 * time.Millisecond)
+			time.Sleep(150 * time.Millisecond)
+		}
+		// Give running lap-based heats up to 2.5s more to cross finish naturally before clicking stop
+		finDeadline := time.Now().Add(2500 * time.Millisecond)
+		for time.Now().Before(finDeadline) {
+			if vis, _ := page.Locator(`button[data-ctrl="confirm"]:not([disabled])`).First().IsVisible(); vis {
+				break
+			}
+			time.Sleep(180 * time.Millisecond)
 		}
 		stopLoc := page.Locator(`button[data-ctrl="stop"]:not([disabled])`).First()
 		if vis, _ := stopLoc.IsVisible(); vis {
-			_ = moveCursorRingAndClick(page, stopLoc, 150*time.Millisecond, 400*time.Millisecond)
+			_ = glideAndClickOS(mouse, stopLoc, 380, 140*time.Millisecond, 380*time.Millisecond)
 		}
 		if act.Confirm {
 			confirmLoc := page.Locator(`button[data-ctrl="confirm"]:not([disabled])`).First()
-			if err := moveCursorRingAndClick(page, confirmLoc, 250*time.Millisecond, 500*time.Millisecond); err != nil {
+			if err := glideAndClickOS(mouse, confirmLoc, 420, 180*time.Millisecond, 420*time.Millisecond); err != nil {
 				log.Fatalf("[build-tutorials] runHeatFast confirm: %v", err)
 			}
 		}
@@ -653,32 +994,38 @@ func runStepAction(page playwright.Page, baseURL string, act ActionSpec) {
 	}
 }
 
-func muxNarratedMP4(rawWebM string, timings []stepTiming, finalMP4 string) {
-	args := []string{"-y", "-i", rawWebM}
-	for _, t := range timings {
-		args = append(args, "-i", t.mp3Path)
+func muxNarratedMP4(rawVideoMP4 string, clips []beatClip, finalMP4 string) {
+	args := []string{"-y", "-i", rawVideoMP4}
+	for _, c := range clips {
+		args = append(args, "-i", c.mp3Path)
 	}
 
 	var filterParts []string
 	var mixInputs []string
-	for i, t := range timings {
+	for i, c := range clips {
 		inIdx := i + 1
 		lbl := fmt.Sprintf("a%d", i)
-		filterParts = append(filterParts, fmt.Sprintf("[%d:a]adelay=%d|%d[%s]", inIdx, t.offsetMs, t.offsetMs, lbl))
+		filterParts = append(filterParts, fmt.Sprintf("[%d:a]adelay=%d|%d[%s]", inIdx, c.offsetMs, c.offsetMs, lbl))
 		mixInputs = append(mixInputs, fmt.Sprintf("[%s]", lbl))
 	}
-	filterParts = append(filterParts, fmt.Sprintf("%samix=inputs=%d:normalize=0:dropout_transition=0[aout]", strings.Join(mixInputs, ""), len(timings)))
+	filterParts = append(filterParts, fmt.Sprintf("%samix=inputs=%d:normalize=0:dropout_transition=0[aout]", strings.Join(mixInputs, ""), len(clips)))
+
+	var vFilter string
+	filterParts = append(filterParts, "[0:v]gradfun=strength=1.35:radius=16,noise=c0s=1:allf=t[vout]")
+	vFilter = strings.Join(filterParts, ";")
 
 	args = append(args,
-		"-filter_complex", strings.Join(filterParts, ";"),
-		"-map", "0:v:0",
+		"-filter_complex", vFilter,
+		"-map", "[vout]",
 		"-map", "[aout]",
 		"-c:v", "libx264",
 		"-preset", "fast",
-		"-crf", "20",
+		"-crf", "17",
+		"-x264-params", "aq-mode=3:aq-strength=1.2:deblock=-1,-1",
 		"-pix_fmt", "yuv420p",
+		"-r", "60",
 		"-c:a", "aac",
-		"-b:a", "160k",
+		"-b:a", "192k",
 		"-movflags", "+faststart",
 		finalMP4,
 	)
@@ -687,6 +1034,70 @@ func muxNarratedMP4(rawWebM string, timings []stepTiming, finalMP4 string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		log.Fatalf("[build-tutorials] ffmpeg mux failed: %v\n%s", err, string(out))
 	}
+}
+
+func connectCDPRetry(pw *playwright.Playwright, port int, timeout time.Duration) playwright.Browser {
+	endpoint := fmt.Sprintf("http://127.0.0.1:%d", port)
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		br, err := pw.Chromium.ConnectOverCDP(endpoint)
+		if err == nil {
+			return br
+		}
+		lastErr = err
+		time.Sleep(180 * time.Millisecond)
+	}
+	log.Fatalf("[build-tutorials] ConnectOverCDP %s failed: %v", endpoint, lastErr)
+	return nil
+}
+
+func cleanX11Env(disp string) []string {
+	var out []string
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "WAYLAND_DISPLAY=") || strings.HasPrefix(kv, "DISPLAY=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	out = append(out,
+		"DISPLAY="+disp,
+		"XCURSOR_THEME=DMZ-White",
+		"XCURSOR_SIZE=36",
+	)
+	return out
+}
+
+func pickFreeXDisplay() int {
+	for d := 92; d < 140; d++ {
+		lockFile := fmt.Sprintf("/tmp/.X%d-lock", d)
+		sockFile := fmt.Sprintf("/tmp/.X11-unix/X%d", d)
+		if _, err1 := os.Stat(lockFile); os.IsNotExist(err1) {
+			if _, err2 := os.Stat(sockFile); os.IsNotExist(err2) {
+				return d
+			}
+		}
+	}
+	return 99
+}
+
+func pickFreeTCPPort() int {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		log.Fatalf("[build-tutorials] listen free port: %v", err)
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+func resolveChromeBin() string {
+	for _, cand := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {
+		if p, err := exec.LookPath(cand); err == nil {
+			return p
+		}
+	}
+	log.Fatalf("[build-tutorials] google-chrome or chromium not found in PATH")
+	return ""
 }
 
 func probeDurationSec(mediaPath string) float64 {

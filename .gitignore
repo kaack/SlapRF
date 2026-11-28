@@ -17,6 +17,7 @@ Thumbs.db
 *.prof
 dist/
 _site/
+_tutorials/
 .cache/
 web/wasm/*.wasm
 web/wasm/*.js

@@ -209,6 +209,14 @@ func main() {
 				bl = 15.0 + (bl-15.0)*totalFade
 			}
 
+			// Deterministic triangular-PDF interleaved gradient noise (±0.85 LSB) eliminates 8-bit dark sky banding
+			ignA := math.Mod(52.9829189*math.Mod(0.06711056*float64(x)+0.00583715*float64(y), 1.0), 1.0)
+			ignB := math.Mod(52.9829189*math.Mod(0.06711056*float64(x+17)+0.00583715*float64(y+31), 1.0), 1.0)
+			dither := (ignA - ignB) * 0.85
+			r += dither
+			g += dither
+			bl += dither
+
 			banner.SetNRGBA(x, y, color.NRGBA{
 				R: clampByte(r),
 				G: clampByte(g),
