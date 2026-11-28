@@ -1,5 +1,5 @@
 /**
- * SlapRF firmware for the Seeed XIAO ESP32-C5 (one firmware, one tuned configuration).
+ * SlapRF firmware for ESP32-C5 boards (Seeed XIAO ESP32-C5 / Waveshare ESP32-C5-Zero; one firmware, one tuned configuration).
  *
  * Every timer runs this same image; the role (Hub or Spoke), fingerprint, channel table and timer
  * name are stamped into the SLAPRF02 config block at flash time. The design: 100 Hz 8-channel
@@ -33,6 +33,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "slaprf_board.h"
 #include "slaprf_radio.h"
 
 /* ---- Tuning ------------------------------------------------------------------------------ */
@@ -223,7 +224,7 @@ static uint32_t pack_window(uint8_t *pkt, uint8_t slot) {
     w->magic1 = FRAME_MAGIC_WINDOW;
     w->slot = slot;
     w->sample_count = s_filled;
-    w->battery_mv = xiao_c5_read_battery_mv();
+    w->battery_mv = slaprf_board_read_battery_mv();
     w->noise_floor_dbm = -91;
     memcpy(w->samples, s_ring, sizeof(raw_rssi_sample_t) * s_filled);
     uint32_t len = 7 + (uint32_t)s_filled * sizeof(raw_rssi_sample_t);
@@ -557,8 +558,8 @@ void app_main(void) {
     slaprf_diag_start(&g_flash_cfg, sizeof(g_flash_cfg), SWEEP_HZ);
     slaprf_diag_set_sweep_budget(SWEEP_BUDGET_US);
 
-    // External U.FL antenna; 2.4 GHz link (the driver never uses 5 GHz); 5.8 GHz capture engine.
-    xiao_c5_select_ufl_antenna();
+    // External antenna; 2.4 GHz link (the driver never uses 5 GHz); 5.8 GHz capture engine.
+    slaprf_board_select_external_antenna();
     slaprf_init_2g4_radio(WIFI_CHANNEL, LINK_LONG_RANGE, TX_POWER_QDBM);
     // Link rate / TX power: firmware defaults, unless changed (and saved) from the serial console.
     slaprf_apply_link_settings(LINK_TX_RATE, TX_POWER_QDBM);

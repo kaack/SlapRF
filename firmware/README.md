@@ -1,6 +1,6 @@
 # SlapRF Timer Firmware
 
-ESP-IDF v5.5.1 firmware for the Seeed Studio XIAO ESP32-C5 (`esp32c5`).
+ESP-IDF v5.5.1 firmware for ESP32-C5 boards. Default board: Seeed Studio XIAO ESP32-C5 (`xiao-c5`); the Waveshare ESP32-C5-Zero (`c5-zero`) is supported as a local build/flash variant (not yet in CI or the web flasher).
 
 SlapRF builds two firmware images that share the same 5.8 GHz raw ADC capture engine and `SLAPRF02` flash configuration block:
 
@@ -23,10 +23,37 @@ firmware/
     main/main.c           sweep pacing, BLE connection phase lock, ESP-NOW Hub collector
   components/
     slaprf_radio/         shared 5.8 GHz sensing (slaprf_rf58.c), ESP-NOW link, USB console
+    slaprf_board/         board bring-up (LED, antenna switch, BOOT button) per SLAPRF_BOARD variant
   components_ble/
     slaprf_ble_link/      NimBLE GATT link, Claim-on-Pair AUTH, BLE console, ESP-NOW Hub link
   tools/                  CI and local build / flash / verification scripts
 ```
+
+## Board variants
+
+Both supported boards use the same ESP32-C5 chip, so the 5.8 GHz capture engine, 2.4 GHz link, and SLAPRF02 config block are identical. Only the board hardware differs, selected with the CMake variable `SLAPRF_BOARD` (`xiao-c5` default, or `c5-zero`):
+
+| | XIAO ESP32-C5 (`xiao-c5`) | Waveshare ESP32-C5-Zero (`c5-zero`) |
+|---|---|---|
+| Status LED | GPIO27, plain yellow, active-low | GPIO27, WS2812 RGB (on = dim green) |
+| Antenna | module default path (switch GPIO is a no-op TODO) | GPIO26: `0` = onboard ceramic, `1` = external IPEX-1 (selected at boot) |
+| BOOT button | GPIO28 | GPIO28 (same chip boot-strap pin) |
+| Flash | 4 MB | 4 MB |
+
+Build and flash the Waveshare ESP32-C5-Zero locally on Windows (each board gets its own build directory):
+
+```powershell
+firmware\tools\build_local.ps1 -Board c5-zero                   # web\firmware\slaprf-c5-zero.bin
+firmware\tools\build_local.ps1 -Board c5-zero -FlashPort COM5   # build and flash over USB
+firmware\tools\build_local_ble.ps1 -Board c5-zero -FlashPort COM5 # Bluetooth Hub image
+```
+
+Notes for the `c5-zero` board:
+
+- The single USB-C port is USB-Serial-JTAG (GPIO13/14) and carries both flashing and the USB console, like the XIAO.
+- RF routes to the onboard ceramic antenna by default (works on both bands with nothing attached). To use a 5.8 GHz antenna on the IPEX-1 connector instead, drive GPIO26 high in `slaprf_board_select_external_antenna()` in `firmware/components/slaprf_board/slaprf_board.c`.
+- Power: needs a solid 5 V / 500 mA USB source. Weak ports (front-panel, hubs) sag the 3.3 V rail once the radio transmits at +20 dBm and the board resets in a brownout loop (`E BOD` in the boot log, `reset: "brownout"` in STATUS?) — the firmware fails loudly on purpose; move the board to a stronger port.
+- `c5-zero` images are not embedded in the web flasher or CI; flash with the scripts above or `esptool write_flash 0x10000 <bin>` directly.
 
 ## Building
 

@@ -1,4 +1,4 @@
-# SlapRF firmware (Seeed XIAO ESP32-C5)
+# SlapRF firmware (ESP32-C5 boards: Seeed XIAO / Waveshare C5-Zero)
 # Build: idf.py set-target esp32c5 && idf.py build   (ESP-IDF v5.5+)
 cmake_minimum_required(VERSION 3.16)
 

@@ -1,23 +1,33 @@
 ---
 name: esp32c5-firmware-build
 description: >-
-  Compile, verify, and stage SlapRF ESP-IDF v5.5.1 firmware images locally for the Seeed Studio XIAO
-  ESP32-C5 (firmware/slaprf -> slaprf-xiao-c5.bin and firmware/slaprf_ble -> slaprf-xiao-c5-ble.bin)
-  and Waveshare ESP32-P4 PoE Bridge (firmware/slaprf_p4_poe_bridge -> slaprf-p4-poe-bridge.bin).
-  Always build and verify firmware locally before pushing to GitHub. Activate when modifying C
-  firmware under firmware/ or updating web/firmware/*.bin.
+  Compile, verify, and stage SlapRF ESP-IDF v5.5.1 firmware images locally for every supported
+  board (see Supported Boards). Always build and verify firmware locally before pushing to
+  GitHub. Activate when modifying C firmware under firmware/ or updating web/firmware/*.bin.
 ---
 
-# Building ESP32-C5 & ESP32-P4 Firmware Locally
+# Building SlapRF Firmware Locally
 
-SlapRF maintains three ESP-IDF `v5.5.1` firmware projects under `firmware/`. **Always compile and verify firmware locally before pushing to GitHub** (if `~/esp/esp-idf` is not yet installed on a machine, follow the zero-`sudo` user-space setup in `dev-setup` first):
+SlapRF maintains three ESP-IDF `v5.5.1` firmware projects under `firmware/`. **Always compile and verify firmware locally before pushing to GitHub** (if `~/esp/esp-idf` is not yet installed on a machine, follow the zero-`sudo` user-space setup in `dev-setup` first).
 
-1. **USB Hub & Spoke Image** (`firmware/slaprf/` -> `web/firmware/slaprf-xiao-c5.bin`, target `esp32c5`):
-   Runs on all Spoke timers (`T1`..`T6`) and wired USB-C Hub timers (`H1`). Uses shared components in `firmware/components/slaprf_radio/`.
-2. **Bluetooth Hub Image** (`firmware/slaprf_ble/` -> `web/firmware/slaprf-xiao-c5-ble.bin`, target `esp32c5`):
-   Dedicated wireless Hub image (`H1`) using NimBLE (`2M PHY`, `MTU 247`, phase-locked `10 ms` intervals) plus 2.4 GHz ESP-NOW Spoke collection (`firmware/components_ble/slaprf_ble_link/`).
-3. **PoE Ethernet Serial Bridge Image** (`firmware/slaprf_p4_poe_bridge/` -> `web/firmware/slaprf-p4-poe-bridge.bin`, target `esp32p4`):
-   Generic USB-Serial/JTAG Host to `TCP/UDP :5480` PoE Ethernet bridge for the Waveshare `ESP32-P4-POE-ETH` (`IP101GRI` RMII + High-Speed USB-A Host). Does **not** use a `SLAPRF02` config block (flashed raw at offset `0x0`).
+## Supported Boards
+
+| Board | `-Board` / `SLAPRF_BOARD` | Images (project → `web/firmware/`) | Notes |
+| --- | --- | --- | --- |
+| Seeed Studio XIAO ESP32-C5 (**default**) | `xiao-c5` | `slaprf-xiao-c5.bin`, `slaprf-xiao-c5-ble.bin` | Every Spoke timer (`T1`..`T6`) and USB-C Hub (`H1`). Yellow active-low LED on GPIO27. Built by CI and embedded in the web flasher / desktop / Android / iOS clients. |
+| Waveshare ESP32-C5-Zero (local build/flash variant) | `c5-zero` | `slaprf-c5-zero.bin`, `slaprf-c5-zero-ble.bin` | Not yet built by CI or embedded in the web flasher. WS2812 on GPIO27 (RMT-driven, green = on), antenna switch on GPIO26 (onboard ceramic default; IPEX-1 optional), BOOT on GPIO28. Needs a solid 5 V / 500 mA USB source. |
+| Waveshare ESP32-P4-POE-ETH | — (`esp32p4` project) | `slaprf-p4-poe-bridge.bin` | PoE Ethernet serial bridge only (USB-Serial/JTAG Host → `TCP/UDP :5480`, `IP101GRI` RMII). Does **not** use a `SLAPRF02` config block (flashed raw at offset `0x0`). |
+
+Both ESP32-C5 boards run the same chip, so the 5.8 GHz capture engine, 2.4 GHz link, USB console, and `SLAPRF02` config block are identical. The board differences live in `firmware/components/slaprf_board/`, selected with the CMake variable `SLAPRF_BOARD` (set by the build scripts' `-Board` flag); each board builds in its own build directory with its own `sdkconfig`.
+
+## Firmware Images
+
+1. **USB Hub & Spoke** (`firmware/slaprf/`, target `esp32c5`):
+   Runs on every Spoke timer and wired USB-C Hub. Uses `firmware/components/slaprf_radio/` (2.4 GHz ESP-NOW link, USB bridge, 5.8 GHz sensing) plus `firmware/components/slaprf_board/`.
+2. **Bluetooth Hub** (`firmware/slaprf_ble/`, target `esp32c5`):
+   Dedicated wireless Hub image (`H1`) using NimBLE (`2M PHY`, `MTU 247`, phase-locked `10 ms` intervals) plus 2.4 GHz ESP-NOW Spoke collection (`firmware/components_ble/slaprf_ble_link/`). Hub-only: a flashed board always identifies as a Hub.
+3. **PoE Ethernet Serial Bridge** (`firmware/slaprf_p4_poe_bridge/`, target `esp32p4`):
+   Generic USB-Serial/JTAG Host to `TCP/UDP :5480` bridge (see Supported Boards).
 
 ## Critical Hardware & Linker Constraints
 
@@ -35,13 +45,15 @@ SlapRF maintains three ESP-IDF `v5.5.1` firmware projects under `firmware/`. **A
 The PowerShell helper scripts configure Ninja, CMake, RISC-V GCC, and `ccache` directly (skipping slow `export.bat`), verify `_bss_end < 0x40820000`, and merge bootloader + partition table + app into `web/firmware/`:
 
 ```powershell
-# Build USB Hub & Spoke image -> web\firmware\slaprf-xiao-c5.bin
+# Default board (XIAO): USB Hub & Spoke + Bluetooth Hub images
 powershell -NoProfile -ExecutionPolicy Bypass -File .\firmware\tools\build_local.ps1
-
-# Build Bluetooth Hub image -> web\firmware\slaprf-xiao-c5-ble.bin
 powershell -NoProfile -ExecutionPolicy Bypass -File .\firmware\tools\build_local_ble.ps1
+
+# Waveshare ESP32-C5-Zero variants (own build dirs build-c5-zero)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\firmware\tools\build_local.ps1 -Board c5-zero
+powershell -NoProfile -ExecutionPolicy Bypass -File .\firmware\tools\build_local_ble.ps1 -Board c5-zero
 ```
-*(To also flash a connected board while preserving its existing `SLAPRF02` identity, append `-FlashPort COM3`; see the `usb-timer-debug-and-flash` skill.)*
+*(To also flash a connected board while preserving its existing `SLAPRF02` identity, append `-FlashPort COM3`, plus `-Board c5-zero` for that board; see the `usb-timer-debug-and-flash` skill.)*
 
 ---
 
@@ -59,7 +71,8 @@ python -m pip install cmake ninja pyserial
 With ESP-IDF `v5.5.1` exported (`. ~/esp/esp-idf/export.sh`):
 
 ```bash
-# 1. USB Hub & Spoke image (esp32c5)
+# 1. USB Hub & Spoke image (esp32c5; XIAO name shown — for the C5-Zero, configure with
+#    idf.py -DSLAPRF_BOARD=c5-zero -B build-c5-zero and output slaprf-c5-zero.bin)
 cd firmware/slaprf
 idf.py build
 bash ../tools/check_image.sh
@@ -94,5 +107,6 @@ gh run watch <RUN_ID> --exit-status
 gh run download <RUN_ID> -n firmware -D web/firmware
 gh run download <RUN_ID> -n firmware-ble -D web/firmware
 ```
+*(CI builds the default XIAO images only — see Supported Boards.)*
 
 Note that `web/firmware/*.bin` is ignored by `.gitignore`, while `web/firmware/slaprf-xiao-c5.bin` is force-tracked. When intentionally updating the tracked USB image in git, stage with `git add -f web/firmware/slaprf-xiao-c5.bin` and run `go test ./internal/firmware/...` to verify `SLAPRF02` patching and SHA-256 repair.

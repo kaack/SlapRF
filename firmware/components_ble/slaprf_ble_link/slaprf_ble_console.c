@@ -31,6 +31,7 @@
  *   REBOOT           restart
  * Every reply line except SLAPRF? and mirrored log text starts with '@'.
  */
+#include "slaprf_board.h"
 #include "slaprf_radio.h"
 #include "slaprf_ble_link.h"
 
@@ -39,7 +40,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "driver/gpio.h"
 #include "driver/usb_serial_jtag.h"
 #include "hal/usb_serial_jtag_ll.h"
 #include "esp_attr.h"
@@ -73,8 +73,6 @@
 #define SCAN_MAX_MHZ      5945
 #define HIT_MARGIN_DB     10 // A "hit" is a reading this far above the channel's typical noise
 #define FLOOR_UNSET       INT16_MIN
-#define XIAO_C5_LED_GPIO  27 // Seeed Studio XIAO ESP32-C5 yellow user LED (active-low: 0 = ON, 1 = OFF)
-#define XIAO_C5_BOOT_GPIO 28 // Seeed Studio XIAO ESP32-C5 BOOT tactile button (active-low: 0 = pressed)
 #define BLE_PAIR_NVS_NS   "slaprf_ble"
 #define BLE_PAIR_NVS_KEY  "host_key"
 #define BOOT_HOLD_TICKS   300 // 300 x 10 ms = 3.0 s hold on BOOT clears pairing and enters Pairing Mode
@@ -1308,25 +1306,7 @@ void slaprf_diag_start(const volatile void *cfg, size_t len, uint8_t sweep_hz) {
     if (esp_flash_get_physical_size(NULL, &s_flash_bytes) != ESP_OK) {
         esp_flash_get_size(NULL, &s_flash_bytes);
     }
-    gpio_config_t led_cfg = {
-        .pin_bit_mask = 1ULL << XIAO_C5_LED_GPIO,
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&led_cfg);
-    gpio_set_level(XIAO_C5_LED_GPIO, 1);
-
-    // BOOT button (GPIO28, active-low): hold for 3 s while powered on to clear Bluetooth pairing.
-    gpio_config_t boot_cfg = {
-        .pin_bit_mask = 1ULL << XIAO_C5_BOOT_GPIO,
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&boot_cfg);
+    slaprf_board_init(); // Status LED, antenna switch, BOOT button (board variant, see slaprf_board)
 
     start_led_timer();
     s_cmd_lock = xSemaphoreCreateMutex();
@@ -1457,10 +1437,10 @@ static void led_timer_cb(void *arg) {
     const int64_t now_us = esp_timer_get_time();
     const int64_t now_ms = now_us / 1000;
 
-    // Poll BOOT button (GPIO28, active-low) after the first second of uptime:
+    // Poll BOOT button (active-low, see slaprf_board) after the first second of uptime:
     // holding for 3.0 s clears the saved pairing token and enters Pairing Mode.
     bool boot_holding = false;
-    if (now_ms >= 1000 && gpio_get_level(XIAO_C5_BOOT_GPIO) == 0) {
+    if (now_ms >= 1000 && slaprf_board_boot_button_pressed()) {
         if (s_boot_hold_ticks < 60000) {
             s_boot_hold_ticks++;
         }
@@ -1507,7 +1487,7 @@ static void led_timer_cb(void *arg) {
         const int64_t gap = 220; // Start of the Spoke's second blip
         led_on = phase < blip || (role != 1 && phase >= gap && phase < gap + blip);
     }
-    gpio_set_level(XIAO_C5_LED_GPIO, led_on ? 0 : 1); // Active-low user LED
+    slaprf_board_led_set(led_on);
 }
 
 static void start_led_timer(void) {

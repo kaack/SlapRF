@@ -1,7 +1,7 @@
 idf_component_register(
     SRCS "slaprf_radio.c" "slaprf_rf58.c" "slaprf_diag.c"
     INCLUDE_DIRS "include"
-    REQUIRES esp_wifi esp_netif esp_event esp_timer nvs_flash lwip esp_driver_usb_serial_jtag esp_driver_gpio esp_driver_ledc heap esp_phy spi_flash
+    REQUIRES esp_wifi esp_netif esp_event esp_timer nvs_flash lwip esp_driver_usb_serial_jtag esp_driver_gpio esp_driver_ledc heap esp_phy spi_flash slaprf_board
 )
 
 # Capture panic PC/cause into RTC memory (reported by the PANIC? USB command), and skip the

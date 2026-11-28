@@ -18,11 +18,8 @@ extern "C" {
 
 /* ---- Board ---------------------------------------------------------------------------------- */
 
-/** Route the RF switch to the external U.FL antenna (XIAO ESP32-C5). */
-void xiao_c5_select_ufl_antenna(void);
-
-/** Battery voltage in mV, or 0 if unknown (the laptop then keeps its last value). */
-uint16_t xiao_c5_read_battery_mv(void);
+/* Board bring-up (antenna select, battery, LED, BOOT button) lives in the slaprf_board component
+ * (include/slaprf_board.h), selected at build time with -DSLAPRF_BOARD=c5-zero | xiao-c5. */
 
 /* ---- 2.4 GHz link --------------------------------------------------------------------------- */
 

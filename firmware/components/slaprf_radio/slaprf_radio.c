@@ -49,18 +49,6 @@ static uint8_t xor8(const uint8_t *data, uint32_t len) {
     return c;
 }
 
-/* ---- Board ---------------------------------------------------------------------------------- */
-
-void xiao_c5_select_ufl_antenna(void) {
-    // TODO(hardware): drive the XIAO ESP32-C5 RF switch GPIO to the U.FL port once confirmed
-    // against Seeed's schematic. Until then the board's default antenna path is used.
-}
-
-uint16_t xiao_c5_read_battery_mv(void) {
-    // TODO(hardware): read the battery divider via ADC oneshot. 0 = unknown to the laptop.
-    return 0;
-}
-
 /* ---- 2.4 GHz link --------------------------------------------------------------------------- */
 
 /* ---- Link diagnostics: what the last ESP-NOW frames looked like on air ---------------------- */

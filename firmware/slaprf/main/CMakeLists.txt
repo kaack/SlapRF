@@ -1,1 +1,1 @@
-idf_component_register(SRCS "main.c" REQUIRES slaprf_radio)
+idf_component_register(SRCS "main.c" REQUIRES slaprf_radio slaprf_board)

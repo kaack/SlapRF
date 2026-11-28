@@ -1,4 +1,4 @@
-# SlapRF Bluetooth Hub firmware (Seeed XIAO ESP32-C5)
+# SlapRF Bluetooth Hub firmware (Seeed XIAO ESP32-C5 / Waveshare ESP32-C5-Zero)
 CONFIG_IDF_TARGET="esp32c5"
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y

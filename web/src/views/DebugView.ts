@@ -689,6 +689,14 @@ export class DebugView extends Component {
     return this.hwMode() === "slaprf_ble";
   }
 
+  /** Health-trends label for the live sweep stream card, matching the active link (USB / BLE / Ethernet). */
+  private healthStreamTitle(): string {
+    const mode = this.hwMode();
+    if (mode === "slaprf_ble") return "BLE live stream";
+    if (mode === "slaprf_net") return "Ethernet live stream";
+    return "USB live stream";
+  }
+
   private isRotorHazardMode(): boolean {
     return isRotorHazardMode(this.hwMode());
   }
@@ -3090,7 +3098,7 @@ export class DebugView extends Component {
         if (isRH) {
           drawRHHealthSparklines(grid, this.rhHealthHistory);
         } else {
-          drawHealthSparklines(grid, this.healthHistory, this.hasServer);
+          drawHealthSparklines(grid, this.healthHistory, this.hasServer, this.healthStreamTitle());
         }
         this.dirtyHealth = false;
       }

@@ -1,1 +1,1 @@
-idf_component_register(SRCS "main.c" INCLUDE_DIRS "." REQUIRES slaprf_ble_link)
+idf_component_register(SRCS "main.c" INCLUDE_DIRS "." REQUIRES slaprf_ble_link slaprf_board)
