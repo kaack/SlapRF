@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 
 	"slaprf/internal/portable"
 )
@@ -73,7 +73,7 @@ func main() {
 
 	pw, err := playwright.Run()
 	if err != nil {
-		log.Fatalf("playwright.Run (run 'go run github.com/playwright-community/playwright-go/cmd/playwright install chromium' if missing): %v", err)
+		log.Fatalf("playwright.Run (run 'go run github.com/mxschmitt/playwright-go/cmd/playwright install chromium' if missing): %v", err)
 	}
 	defer pw.Stop()
 

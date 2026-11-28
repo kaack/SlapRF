@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 
 	"slaprf/internal/api"
 	"slaprf/internal/domain"
@@ -296,7 +296,7 @@ func NewHarnessWithOptions(t *testing.T, opts HarnessOptions) *Harness {
 		t.Fatalf("mkdir raw video dir %s: %v", rawVidDir, err)
 	}
 	videoOpt := &playwright.RecordVideo{
-		Dir:  rawVidDir,
+		Dir:  &rawVidDir,
 		Size: viewport,
 	}
 
@@ -1444,7 +1444,7 @@ func renderSuiteHTML(records []testRunRecord, totalDuration time.Duration, relPr
 		imgHref := baseDir + r.ScreenshotRel
 		traceHref := baseDir + r.TraceRel
 		traceAbs := filepath.Join(suiteRunDir, r.DirName, "trace.zip")
-		traceCmd := fmt.Sprintf("go run github.com/playwright-community/playwright-go/cmd/playwright@v0.5700.1 show-trace %q", traceAbs)
+		traceCmd := fmt.Sprintf("go run github.com/mxschmitt/playwright-go/cmd/playwright@v0.5700.1 show-trace %q", traceAbs)
 
 		var errHtml strings.Builder
 		if len(r.PageErrors) > 0 || len(r.ConsoleErrors) > 0 {
