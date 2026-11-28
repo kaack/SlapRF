@@ -985,7 +985,7 @@ describe("views/TutorialsView — General-Purpose Video Catalog & YouTube Embeds
       const allPill = host.querySelector<HTMLButtonElement>('[data-tut-cat="all"]')!;
       allPill.click();
       const searchInput = host.querySelector<HTMLInputElement>("[data-tut-search]")!;
-      searchInput.value = "Flight Queue";
+      searchInput.value = "Queue All Ready";
       searchInput.dispatchEvent(new Event("input", { bubbles: true }));
       expect(host.querySelectorAll("[data-tut-select]").length).toBe(1);
       expect(host.textContent).toContain("Open Qualifier & Finals Flow");

@@ -6037,7 +6037,57 @@ export class RacesView extends Component {
           })
           .catch(this.reportErr);
       } else if (oqAct === "complete_qualifier") {
-        this.openCloseStageModal(this.currentRace, stageIndex);
+        const oqRound = (this.currentRace.rounds ?? []).find(
+          (r) => (r.stageIndex || 1) === stageIndex && r.stageFormat === "open_qualifier"
+        );
+        const oqConns = oqRound
+          ? (this.currentRace.connections ?? []).filter(
+              (c) => !c.invalid && c.fromRoundId === oqRound.id && !c.seededEarly
+            )
+          : [];
+        if (oqRound && oqConns.length > 0 && (this.currentRace.totalStages ?? 1) < 2) {
+          const oqHeats = this.currentRace.heats.filter(
+            (h) => h.roundId === oqRound.id && h.state !== "aborted"
+          );
+          const confirmedCnt = oqHeats.filter((h) => h.state === "confirmed").length;
+          const unflownCnt = oqHeats.filter((h) => h.state !== "confirmed").length;
+          const dstTitles = oqConns
+            .map(
+              (c) =>
+                (this.currentRace.rounds ?? []).find((r) => r.id === c.toRoundId)?.title ||
+                "Finals"
+            )
+            .join(", ");
+          openConfirmModal({
+            title: `Close Open Qualifier & Seed ${dstTitles}?`,
+            messageHtml: `<p>Lock Open Qualifier standings from <strong>${confirmedCnt} confirmed heat${confirmedCnt === 1 ? "" : "s"}</strong> and seed <strong>${esc(dstTitles)}</strong> now?</p>`,
+            warningHtml:
+              unflownCnt > 0
+                ? `<strong>${unflownCnt} unflown queued heat${unflownCnt === 1 ? "" : "s"}</strong> in the Flight Queue will be discarded.`
+                : undefined,
+            confirmLabel: `Close Qualifier & Seed ${dstTitles}`,
+            danger: unflownCnt > 0,
+            onConfirm: () =>
+              this.api
+                .bracketEdit({
+                  action: "seed_connection_now",
+                  fromRoundId: oqRound.id,
+                })
+                .then((updated) => {
+                  if (this.disposed) return;
+                  const nextHeatId = updated?.nextReadyHeatId || this.currentRace.nextReadyHeatId;
+                  if (nextHeatId) {
+                    return this.api
+                      .marshalControl("select_heat", { heatId: nextHeatId })
+                      .then(() => undefined)
+                      .catch(() => undefined);
+                  }
+                })
+                .catch(this.reportErr),
+          });
+        } else {
+          this.openCloseStageModal(this.currentRace, stageIndex);
+        }
       }
       return;
     }
@@ -10720,13 +10770,26 @@ export class RacesView extends Component {
       }
     }
 
+    const oqRoundInStage = (race.rounds ?? []).find(
+      (r) => (r.stageIndex || 1) === (heat.stageIndex || 1) && r.stageFormat === "open_qualifier"
+    );
+    const oqOutgoingConns = oqRoundInStage
+      ? (race.connections ?? []).filter((c) => !c.invalid && c.fromRoundId === oqRoundInStage.id)
+      : [];
+    const oqAllOutgoingSeeded =
+      oqOutgoingConns.length > 0 && oqOutgoingConns.every((c) => c.seededEarly);
+
     if (
-      heatStageObj?.format === "open_qualifier" &&
+      (heatStageObj?.format === "open_qualifier" || heat.stageFormat === "open_qualifier") &&
+      !oqAllOutgoingSeeded &&
       !stageClosed &&
       !raceBlocked
     ) {
       const stageHeats = race.heats.filter(
-        (h) => h.stageIndex === heat.stageIndex && h.state !== "aborted"
+        (h) =>
+          (h.stageIndex || 1) === (heat.stageIndex || 1) &&
+          (heatStageObj?.format === "open_qualifier" || h.stageFormat === "open_qualifier") &&
+          h.state !== "aborted"
       );
       const confirmedStageCount = stageHeats.filter((h) => h.state === "confirmed").length;
       const hasLiveStageHeat = stageHeats.some(
